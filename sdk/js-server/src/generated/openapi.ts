@@ -641,8 +641,12 @@ export interface paths {
          *     passes on the same A/C backoff. Before exhaustion or 24 hours, identical re-POSTs are
          *     idempotent no-ops. After both, an explicit re-POST renews that candidate (or supplies another)
          *     at most once per 24 hours per attachment; never automatically. Only identical
-         *     finalized replacement receipts on both providers and the original's dual-verified sender and
+         *     finalized replacement receipts on both providers and the original's verified sender and
          *     nonce prove `transaction_dropped`; missing receipts and account nonce changes never suffice.
+         *     If providers have forgotten the original, supply `original_signed_transaction` alongside
+         *     the candidate. Its hash must equal `transaction_hash`; local signature recovery supplies the
+         *     original sender/nonce only when they were not already captured from both providers. Raw
+         *     bytes are not stored and this fallback makes no RPC calls.
          */
         readonly post: operations["mark_refund_paid"];
         readonly delete?: never;
@@ -2764,6 +2768,14 @@ export interface components {
          *     }
          */
         readonly MarkRefundPaidRequest: {
+            /**
+             * @description Optional 0x-prefixed EIP-2718 signed original transaction, with a replacement candidate.
+             *     Its keccak256 must equal transaction_hash and its signature must recover a sender. When
+             *     the original's sender/nonce were not captured from both providers before eviction, these
+             *     locally verified fields allow replacement proof with no additional RPC. Raw bytes are not
+             *     stored. Legacy, EIP-2930, EIP-1559, EIP-4844 and EIP-7702 envelopes are supported.
+             */
+            readonly original_signed_transaction?: string | null;
             /**
              * Format: int64
              * @description Position of the `Transfer` log that pays the refund among the logs of the transaction's

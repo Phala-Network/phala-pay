@@ -3564,6 +3564,12 @@ mod event_driven {
     async fn attached(
         pool: &sqlx::PgPool,
     ) -> Result<(Merchant, String, Uuid, chrono::DateTime<Utc>)> {
+        attached_transaction(pool, REFUND_TX).await
+    }
+    async fn attached_transaction(
+        pool: &sqlx::PgPool,
+        hash: &str,
+    ) -> Result<(Merchant, String, Uuid, chrono::DateTime<Utc>)> {
         seed::initialize_dual_chain(pool, 1).await?;
         let merchant = Merchant::seed(
             pool,
@@ -3573,7 +3579,7 @@ mod event_driven {
         .await?;
         let deposit = seed_rejected_deposit(pool, merchant.account.id, "cadence", 100).await?;
         let id = merchant.refund(deposit, "100").await?;
-        merchant.mark_paid(&id, REFUND_TX).await?;
+        merchant.mark_paid(&id, hash).await?;
         let uuid = topup::ids::parse(topup::ids::REFUND, &id).context("refund id")?;
         let time = chrono::DateTime::from_timestamp(Utc::now().timestamp(), 0).context("clock")?;
         sqlx::query("UPDATE refunds SET paid_at=$2,next_check_at=$2 WHERE id=$1")
@@ -3666,13 +3672,15 @@ mod event_driven {
                     0, 1, 2, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 180
                 ]));
                 ensure!(
-                    a.state.total() == 37 && b.state.total() == 23,
+                    a.state.count("eth_getTransactionReceipt") == 37
+                        && b.state.count("eth_getTransactionReceipt") == 23,
                     "read {}, verify {}",
                     a.state.total(),
                     b.state.total()
                 );
                 ensure!(
-                    a.state.count("eth_getTransactionByHash") == 0
+                    a.state.count("eth_getTransactionByHash") == 1
+                        && b.state.count("eth_getTransactionByHash") == 1
                         && a.state.count("eth_getBlockByNumber") == 0
                 );
                 let later = time + Duration::days(365);
@@ -3784,8 +3792,8 @@ mod event_driven {
                     b.state.total()
                 );
                 ensure!(
-                    a.state.count("eth_getTransactionByHash") == 1
-                        && b.state.count("eth_getTransactionByHash") == 1
+                    a.state.count("eth_getTransactionByHash") == 4
+                        && b.state.count("eth_getTransactionByHash") == 4
                 );
                 ensure!(refund_status(pool, id).await? == "pending");
                 Ok(())
@@ -3811,10 +3819,10 @@ mod event_driven {
                     ensure!(worker.check_once_at(now).await? == Verification::Waiting);
                     now = next(pool, id).await?;
                 }
-                ensure!(b.state.total() == 0);
+                ensure!(b.state.count("eth_getTransactionReceipt") == 0);
                 ensure!(worker.check_once_at(now).await? == Verification::Waiting);
                 ensure!(
-                    b.state.total() == 1,
+                    b.state.count("eth_getTransactionReceipt") == 1,
                     "verify did not discover the inclusion"
                 );
                 let count = (a.state.total(), b.state.total());
@@ -3847,6 +3855,192 @@ mod event_driven {
                         == Verification::Succeeded
                 );
                 ensure!(refund_status(pool, id).await? == "succeeded");
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn captured_pending_origin_resolves_replacement_after_both_nodes_evict_original()
+    -> Result<()> {
+        support::with_database(|database| {
+            Box::pin(async move {
+                let pool = &database.app_pool;
+                let (merchant, id, uuid, time) = attached(pool).await?;
+                let a = Endpoint::start().await?;
+                let b = Endpoint::start().await?;
+                let heads = test_heads(100);
+                let worker = worker(pool, &a, &b, &heads);
+                ensure!(worker.check_once_at(time).await? == Verification::Waiting);
+                let origin: (Option<String>, Option<String>) =
+                    sqlx::query_as("SELECT tx_from,tx_nonce::text FROM refunds WHERE id=$1")
+                        .bind(uuid)
+                        .fetch_one(pool)
+                        .await?;
+                ensure!(origin == (Some(REFUND_SENDER.to_owned()), Some("5".to_owned())));
+                for endpoint in [&a, &b] {
+                    endpoint
+                        .state
+                        .unknown_origins
+                        .lock()
+                        .expect("origins")
+                        .insert(REFUND_TX.to_owned());
+                    endpoint.state.receipt(OTHER_TX, 90, 0);
+                }
+                let (status, body) = merchant
+                    .post(
+                        &format!("/v1/refunds/{id}/mark_paid"),
+                        serde_json::to_vec(&json!({
+                            "transaction_hash": REFUND_TX, "replacement_transaction_hash": OTHER_TX,
+                        }))?,
+                    )
+                    .await?;
+                ensure!(status == StatusCode::OK, "{body}");
+                ensure!(
+                    worker.check_once_at(time + Duration::minutes(1)).await?
+                        == Verification::Failed
+                );
+                ensure!(refund_status(pool, uuid).await? == "failed");
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn signed_original_resolves_evicted_transaction_without_origin_rpc() -> Result<()> {
+        use alloy_consensus::{SignableTransaction, TxEip7702, TxEnvelope};
+        use alloy_eips::eip2718::Encodable2718;
+        use alloy_signer::SignerSync;
+        use alloy_signer_local::PrivateKeySigner;
+
+        support::with_database(|database| {
+            Box::pin(async move {
+                let pool = &database.app_pool;
+                let signer = PrivateKeySigner::from_bytes(&B256::repeat_byte(0x55))?;
+                let transaction = TxEip7702 {
+                    chain_id: 1,
+                    nonce: 5,
+                    ..Default::default()
+                };
+                let signature = signer.sign_hash_sync(&transaction.signature_hash())?;
+                let envelope: TxEnvelope = transaction.into_signed(signature).into();
+                let hash = format!("{:#x}", envelope.tx_hash());
+                let raw = format!("0x{}", hex::encode(envelope.encoded_2718()));
+                let (merchant, id, uuid, time) = attached_transaction(pool, &hash).await?;
+                let a = Endpoint::start().await?;
+                let b = Endpoint::start().await?;
+                for endpoint in [&a, &b] {
+                    endpoint
+                        .state
+                        .unknown_origins
+                        .lock()
+                        .expect("origins")
+                        .insert(hash.clone());
+                }
+                let heads = test_heads(100);
+                let worker = worker(pool, &a, &b, &heads);
+                for minute in [0, 10, 60, 120, 180] {
+                    ensure!(
+                        worker
+                            .check_once_at(time + Duration::minutes(minute))
+                            .await?
+                            == Verification::Waiting
+                    );
+                }
+                ensure!(
+                    a.state.count("eth_getTransactionByHash") == 3
+                        && b.state.count("eth_getTransactionByHash") == 3
+                );
+                let origin: Option<String> =
+                    sqlx::query_scalar("SELECT tx_from FROM refunds WHERE id=$1")
+                        .bind(uuid)
+                        .fetch_one(pool)
+                        .await?;
+                ensure!(origin.is_none());
+                let path = format!("/v1/refunds/{id}/mark_paid");
+                for bad in ["0xzz".to_owned(), format!("{raw}00")] {
+                    let (status, body) = merchant
+                        .post(
+                            &path,
+                            serde_json::to_vec(&json!({
+                                "transaction_hash": hash, "replacement_transaction_hash": OTHER_TX,
+                                "original_signed_transaction": bad,
+                            }))?,
+                        )
+                        .await?;
+                    ensure!(
+                        status == StatusCode::BAD_REQUEST
+                            && body["error"]["param"] == "original_signed_transaction",
+                        "{body}"
+                    );
+                }
+                // Raw proof alone cannot declare a drop, and cannot be supplied without a candidate.
+                let (status, _) = merchant
+                    .post(
+                        &path,
+                        serde_json::to_vec(&json!({
+                            "transaction_hash": hash, "original_signed_transaction": raw,
+                        }))?,
+                    )
+                    .await?;
+                ensure!(status == StatusCode::BAD_REQUEST);
+                let calls = (a.state.total(), b.state.total());
+                let (status, body) = merchant
+                    .post(
+                        &path,
+                        serde_json::to_vec(&json!({
+                            "transaction_hash": hash, "replacement_transaction_hash": OTHER_TX,
+                            "original_signed_transaction": raw,
+                        }))?,
+                    )
+                    .await?;
+                ensure!(
+                    status == StatusCode::OK && body["status"] == "pending",
+                    "{body}"
+                );
+                ensure!(
+                    calls == (a.state.total(), b.state.total()),
+                    "signed proof made RPC calls"
+                );
+                let origin: (Option<String>, Option<String>) =
+                    sqlx::query_as("SELECT tx_from,tx_nonce::text FROM refunds WHERE id=$1")
+                        .bind(uuid)
+                        .fetch_one(pool)
+                        .await?;
+                ensure!(
+                    origin
+                        == (
+                            Some(format!("{:#x}", signer.address())),
+                            Some("5".to_owned())
+                        )
+                );
+                for endpoint in [&a, &b] {
+                    endpoint.state.receipt(OTHER_TX, 90, 0);
+                    endpoint
+                        .state
+                        .origins
+                        .lock()
+                        .expect("origins")
+                        .insert(OTHER_TX.to_owned(), (format!("{:#x}", signer.address()), 5));
+                }
+                ensure!(
+                    worker.check_once_at(time + Duration::hours(4)).await? == Verification::Failed
+                );
+                // Only the replacement's origin was fetched: the original stays evicted on both.
+                ensure!(
+                    a.state.count("eth_getTransactionByHash") == 4
+                        && b.state.count("eth_getTransactionByHash") == 4
+                );
+                let (_, body) = merchant
+                    .call(Method::GET, &format!("/v1/refunds/{id}"), Vec::new())
+                    .await?;
+                ensure!(
+                    body["failure_reason"] == "transaction_dropped"
+                        && body["transaction_hash"] == hash,
+                    "{body}"
+                );
                 Ok(())
             })
         })

@@ -304,9 +304,12 @@ BlockPI:       86 × 20 = 1,720 production RU
 
 Refund verification uses three durable phases:
 
-- **A, inclusion:** only `eth_getTransactionReceipt` on read at 0, 1, 2, 5, 10 minutes, then
+- **A, inclusion:** `eth_getTransactionReceipt` on read at 0, 1, 2, 5, 10 minutes, then
   every ten minutes through two hours, then hourly. Verify probes hourly from hour one so a
   lagging read cannot stall inclusion. After 24 hours of absence both probe every six hours.
+  While the original receipt is absent, capture its sender/nonce on both endpoints at most
+  three times, at 0, 10 minutes and one hour, stopping when both agree. These attempts are
+  durable across restarts and preserve pending transactions before nodes can evict them.
 - **B, checkpoint:** after observing inclusion at block b, no RPC until the finality watch's
   shared `FinalizedHeads` publication reaches b. The checkpoint loop already verifies its
   stored hash and freezes conflicts; refunds do not reread the checkpoint header.
@@ -318,14 +321,19 @@ Refund verification uses three durable phases:
 
 A typical already-included refund uses seven logical calls total: one read hint plus three
 methods on each endpoint. Persistent absence on the half-open first day uses 37 read receipts
-and 23 verify receipts (60 combined); unresolved finalized evidence with a cached origin uses
+and 23 verify receipts (60 combined), plus at most three origin methods per endpoint
+(66 combined calls when all three attempts remain unknown); unresolved finalized evidence with a cached origin uses
 52 read / 51 verify calls. Allow **80 logical calls per endpoint on day one**, including
 inclusion probes followed by unresolved evidence. Ordinary verification attempts the original
-origin once; a merchant-supplied replacement proof can retry an unavailable original origin.
+origin once in phase C if still unknown, in addition to the three bounded phase A attempts;
+a merchant-supplied replacement proof can retry an unavailable original origin.
 After day one, absence uses at most four receipt calls per endpoint/day, and unresolved evidence
 uses eight receipt/header calls per endpoint/day; reserve **12 per carried attachment/day**.
 A positive replacement proof is an operator-controlled recovery operation charged separately to
-the extra-operation reserve: both origins must equal the original's dual-verified sender/nonce,
+the extra-operation reserve: both origins must equal the original's sender/nonce, captured by
+dual agreement or recovered locally from `original_signed_transaction` whose keccak256 matches
+the attached hash. The signed-original fallback uses Alloy's EIP-2718 decoder/signature recovery
+(legacy, EIP-2930/1559/4844/7702) and adds zero RPC methods. Raw bytes are not retained,
 and both replacement receipts must be identical and finalized at/below the checkpoint. Missing
 or disagreeing evidence keeps the reservation. One candidate is stored at a time, with at most
 **eight durable recovery passes**, using the attachment's A/C backoff; checkpoint waiting

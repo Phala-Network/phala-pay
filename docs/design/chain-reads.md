@@ -163,15 +163,19 @@ coverage meet the same key (`ON CONFLICT DO NOTHING`; marked rows are skipped by
   (staging-only, production-ineligible route; continuity and jump limits re-derived for 300 s).
 - **Refunds** (`refunds.rs`): persisted event-driven phases. Inclusion probes use read receipt
   only at 0, 1, 2, 5, 10 minutes, every ten minutes through two hours, then hourly, with hourly
-  verify fallback. After 24 hours of absence both probe every six hours. An observed inclusion
+  verify fallback. After 24 hours of absence both probe every six hours. While absent, at most
+  three durable dual-origin reads at 0, 10 minutes and one hour capture sender/nonce before
+  eviction, stopping on agreement. An observed inclusion
   waits without RPC for the shared `FinalizedHeads` checkpoint publication. Then each endpoint
   independently reads receipt and header(b), plus original origin once; no checkpoint header
   reread. Identical finalized receipts at/below the checkpoint are required. Reorgs return to
   inclusion/checkpoint waiting; unresolved evidence retries after ten minutes, hourly, then
   every six hours after day one. Reserve 80 logical methods/endpoint on day one, 12/carried day.
   Missing receipts and nonce changes never release the reservation. One explicit replacement
-  candidate can resolve it only with dual finalized receipts and the original's dual-verified
-  sender/nonce; recovery proof reads use the extra-operation reserve. Each explicit candidate
+  candidate can resolve it only with dual finalized receipts and the original's verified
+  sender/nonce, captured by dual agreement or recovered locally from a signed original whose
+  keccak256 matches the attachment. Signed legacy and EIP-2930/1559/4844/7702 envelopes are
+  supported with zero RPC. Recovery proof reads use the extra-operation reserve. Each explicit candidate
   has eight durable passes per epoch (at most 40 extra methods/endpoint), then stops. Only an
   explicit POST after exhaustion and 24 hours renews the epoch, at most once per 24 hours per
   attachment; the same late-finalized hash can be retried. Earlier identical POSTs are no-ops.

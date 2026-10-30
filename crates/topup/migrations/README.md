@@ -375,7 +375,8 @@ No rollback to 0.12.2 is supported; restore a verified pre-upgrade backup to run
 
 ## Event-driven refunds (`20261107000000`)
 
-Adds durable receipt inclusion hints, hourly verify probe times, original-origin attempt state,
+Adds durable receipt inclusion hints, hourly verify probe times, original-origin attempt state
+(including up to three pre-inclusion attempts),
 verification attempt counts and one optional replacement candidate with a bounded eight-pass
 counter and epoch timestamp. After exhaustion and 24 hours, only an explicit POST can renew
 that candidate or supply another, at most once per 24 hours per attachment. Earlier identical

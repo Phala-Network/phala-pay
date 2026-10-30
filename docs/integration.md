@@ -1400,7 +1400,13 @@ POST /v1/refunds/re_…/mark_paid
   replacement proof, repeat `mark_paid` with the original `transaction_hash` plus optional
   `replacement_transaction_hash`. The service stores one candidate and keeps the reservation
   until both providers finalize identical replacement receipts with the same sender and nonce
-  as the original's dual-verified origin. Then the original refund becomes `failed` with
+  as the original's verified origin. Before inclusion the service attempts to capture that
+  origin from both providers at 0, 10 minutes and one hour, stopping on agreement. If providers
+  have evicted it, include optional `original_signed_transaction` alongside the candidate: the
+  0x-prefixed signed EIP-2718 bytes must hash to the original `transaction_hash` and yield a
+  valid recovered signer/nonce. Legacy and EIP-2930/1559/4844/7702 are supported. Only recovered
+  fields are stored, with zero RPC; a previously agreed origin is preserved. Then the original
+  refund becomes `failed` with
   `transaction_dropped`; unknown origins, missing receipts, nonce changes and disagreements
   never release it. Inspect the replacement's transfers before paying a new refund: the
   replacement may already have returned the funds. Each candidate has eight automatic recovery

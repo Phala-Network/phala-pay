@@ -82,7 +82,7 @@
     "create": "(self, *, deposit, destination_address, amount_atomic=None, idempotency_key=None, metadata=None, **options)",
     "list": "(self, *, deposit=None, status=None, limit=100, starting_after=None, **options)",
     "list_page": "(self, *, deposit=None, status=None, limit=100, starting_after=None, **options)",
-    "mark_paid": "(self, refund_id, *, transaction_hash, receipt_log_index=None, replacement_transaction_hash=None, idempotency_key=None, **options)",
+    "mark_paid": "(self, refund_id, *, transaction_hash, receipt_log_index=None, replacement_transaction_hash=None, original_signed_transaction=None, idempotency_key=None, **options)",
     "retrieve": "(self, refund_id, *, expand=None, **options)",
     "update": "(self, refund_id, *, metadata=None, idempotency_key=None, **options)"
   },
@@ -141,7 +141,7 @@
     "list_treasuries_page": "(self, *, chain_id=None, status=None, limit=100, request_deadline=None, upgrade_tolerance=None, starting_after=None)",
     "list_webhook_endpoints": "(self, *, page_size=100, request_deadline=None, upgrade_tolerance=None, starting_after=None)",
     "list_webhook_endpoints_page": "(self, *, limit=100, request_deadline=None, upgrade_tolerance=None, starting_after=None)",
-    "mark_refund_paid": "(self, refund_id, transaction_hash, *, receipt_log_index=None, replacement_transaction_hash=None, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
+    "mark_refund_paid": "(self, refund_id, transaction_hash, *, receipt_log_index=None, replacement_transaction_hash=None, original_signed_transaction=None, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
     "pause_quotes": "(self, *, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
     "pause_treasury": "(self, treasury_id, *, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
     "resend_event": "(self, event_id, *, webhook_endpoint, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",

@@ -591,6 +591,7 @@ pub async fn mark_refund_paid<'c>(
     tx_hash: B256,
     receipt_log_index: Option<u64>,
     replacement_hash: Option<B256>,
+    original_origin: Option<(EvmAddress, u64)>,
     actor: &Actor,
 ) -> Result<(), ApiError> {
     let mut transaction = db.begin().await?;
@@ -605,6 +606,7 @@ pub async fn mark_refund_paid<'c>(
         tx_hash,
         receipt_log_index,
         replacement_hash,
+        original_origin,
         actor,
     )
     .await;
@@ -623,6 +625,7 @@ async fn mark_refund_paid_in(
     tx_hash: B256,
     receipt_log_index: Option<u64>,
     replacement_hash: Option<B256>,
+    original_origin: Option<(EvmAddress, u64)>,
     actor: &Actor,
 ) -> Result<(), ApiError> {
     let clear = crate::refunds::lock_refund_deposit(transaction, scope, refund_id)
@@ -655,6 +658,7 @@ async fn mark_refund_paid_in(
                     &tx_hash,
                     &status,
                     replacement,
+                    original_origin,
                     actor,
                 )
                 .await;
@@ -752,6 +756,7 @@ async fn attach_replacement(
     original: &str,
     status: &str,
     replacement: B256,
+    original_origin: Option<(EvmAddress, u64)>,
     actor: &Actor,
 ) -> Result<(), ApiError> {
     let replacement = format!("{replacement:#x}");
@@ -769,6 +774,24 @@ async fn attach_replacement(
     .bind(refund_id)
     .fetch_one(&mut **transaction)
     .await?;
+    if status == "pending"
+        && let Some((sender, nonce)) = original_origin
+    {
+        let updated = sqlx::query("UPDATE refunds SET tx_from=$2,tx_nonce=$3::text::numeric,updated_at=now() WHERE id=$1 AND tx_from IS NULL")
+            .bind(refund_id).bind(format!("{sender:#x}")).bind(nonce.to_string())
+            .execute(&mut **transaction).await?;
+        if updated.rows_affected() == 1 {
+            insert_audit_tx_with_reason(
+                transaction,
+                Some(scope.account_id()),
+                actor,
+                "refund.record_signed_origin",
+                &refund_subject(refund_id),
+                original,
+            )
+            .await?;
+        }
+    }
     if existing.as_deref() == Some(replacement.as_str()) {
         // Repeats never interrupt an active epoch or silently create another before 24 h.
         if status != "pending" || attempts < crate::refunds::MAX_REPLACEMENT_ATTEMPTS || !can_renew

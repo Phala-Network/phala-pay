@@ -16,9 +16,12 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Added
 
-- Optional `replacement_transaction_hash` on refund `mark_paid`, with matching JS/Python SDK
+- Optional `replacement_transaction_hash` and `original_signed_transaction` on refund `mark_paid`,
+  with matching JS/Python SDK
   inputs. One candidate can resolve an attachment as `transaction_dropped` only with identical
-  finalized receipts on both providers and the original's dual-verified sender and nonce.
+  finalized receipts on both providers and the original's sender and nonce, captured by dual
+  agreement before eviction or recovered locally from a hash-checked signed original transaction
+  (legacy and EIP-2930/1559/4844/7702). Raw bytes are not retained.
   Candidates get eight persisted recovery passes; exhaustion stops their RPC. Before exhaustion
   or 24 hours, identical re-POSTs are idempotent no-ops. After both, an explicit POST can renew
   the same candidate or supply another at most once per 24 hours per attachment; never automatic.
@@ -29,7 +32,9 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 - Verify refunds from receipt inclusion and published checkpoint events. Receipt probes back
   off through two hours, hourly until day one, then every six hours; observed receipts make no
-  RPC until the checkpoint reaches them. Dual verification reads receipt/header plus origin
+  RPC until the checkpoint reaches them. Up to three durable dual-origin attempts at 0, 10
+  minutes and one hour preserve missing transactions before eviction. Dual verification reads
+  receipt/header plus origin
   once, without rereading the checkpoint header. Unresolved evidence retries at ten minutes,
   hourly, then six hours. Durable cadence survives restarts; refunds retain their reservation
   while missing, reorged or disputed and cannot be canceled after attachment.

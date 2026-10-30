@@ -1805,6 +1805,12 @@ export const schemas: Record<string, Schema> = {
   "MarkRefundPaidRequest": {
     "additionalProperties": false,
     "properties": {
+      "original_signed_transaction": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "receipt_log_index": {
         "minimum": 0,
         "type": [

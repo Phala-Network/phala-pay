@@ -128,8 +128,12 @@ def sync_detailed(
     passes on the same A/C backoff. Before exhaustion or 24 hours, identical re-POSTs are
     idempotent no-ops. After both, an explicit re-POST renews that candidate (or supplies another)
     at most once per 24 hours per attachment; never automatically. Only identical
-    finalized replacement receipts on both providers and the original's dual-verified sender and
+    finalized replacement receipts on both providers and the original's verified sender and
     nonce prove `transaction_dropped`; missing receipts and account nonce changes never suffice.
+    If providers have forgotten the original, supply `original_signed_transaction` alongside
+    the candidate. Its hash must equal `transaction_hash`; local signature recovery supplies the
+    original sender/nonce only when they were not already captured from both providers. Raw
+    bytes are not stored and this fallback makes no RPC calls.
 
     Args:
         id (str):
@@ -182,8 +186,12 @@ def sync(
     passes on the same A/C backoff. Before exhaustion or 24 hours, identical re-POSTs are
     idempotent no-ops. After both, an explicit re-POST renews that candidate (or supplies another)
     at most once per 24 hours per attachment; never automatically. Only identical
-    finalized replacement receipts on both providers and the original's dual-verified sender and
+    finalized replacement receipts on both providers and the original's verified sender and
     nonce prove `transaction_dropped`; missing receipts and account nonce changes never suffice.
+    If providers have forgotten the original, supply `original_signed_transaction` alongside
+    the candidate. Its hash must equal `transaction_hash`; local signature recovery supplies the
+    original sender/nonce only when they were not already captured from both providers. Raw
+    bytes are not stored and this fallback makes no RPC calls.
 
     Args:
         id (str):
@@ -231,8 +239,12 @@ async def asyncio_detailed(
     passes on the same A/C backoff. Before exhaustion or 24 hours, identical re-POSTs are
     idempotent no-ops. After both, an explicit re-POST renews that candidate (or supplies another)
     at most once per 24 hours per attachment; never automatically. Only identical
-    finalized replacement receipts on both providers and the original's dual-verified sender and
+    finalized replacement receipts on both providers and the original's verified sender and
     nonce prove `transaction_dropped`; missing receipts and account nonce changes never suffice.
+    If providers have forgotten the original, supply `original_signed_transaction` alongside
+    the candidate. Its hash must equal `transaction_hash`; local signature recovery supplies the
+    original sender/nonce only when they were not already captured from both providers. Raw
+    bytes are not stored and this fallback makes no RPC calls.
 
     Args:
         id (str):
@@ -283,8 +295,12 @@ async def asyncio(
     passes on the same A/C backoff. Before exhaustion or 24 hours, identical re-POSTs are
     idempotent no-ops. After both, an explicit re-POST renews that candidate (or supplies another)
     at most once per 24 hours per attachment; never automatically. Only identical
-    finalized replacement receipts on both providers and the original's dual-verified sender and
+    finalized replacement receipts on both providers and the original's verified sender and
     nonce prove `transaction_dropped`; missing receipts and account nonce changes never suffice.
+    If providers have forgotten the original, supply `original_signed_transaction` alongside
+    the candidate. Its hash must equal `transaction_hash`; local signature recovery supplies the
+    original sender/nonce only when they were not already captured from both providers. Raw
+    bytes are not stored and this fallback makes no RPC calls.
 
     Args:
         id (str):

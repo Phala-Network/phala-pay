@@ -74,7 +74,14 @@ Read the refund and its `transaction_hash` with `GET /v1/refunds/{id}` through t
    finalized block number/hash, transfer assessment, verifier identity and time. Keep provider
    credentials, full keyed URLs and signed raw transactions out of logs.
 5. Through the merchant, repeat `POST /v1/refunds/{id}/mark_paid` with the original
-   `transaction_hash` and `replacement_transaction_hash`. One candidate is stored at a time;
+   `transaction_hash` and `replacement_transaction_hash`. If both providers have forgotten the
+   original and no agreed origin was captured, also supply `original_signed_transaction`: the
+   original 0x-prefixed signed EIP-2718 bytes from the merchant's signing/broadcast record. The
+   service checks keccak256 against `transaction_hash` and recovers sender/nonce locally with
+   Alloy (legacy, EIP-2930/1559/4844/7702); malformed bytes, a bad signature or a hash mismatch
+   are rejected. Raw bytes are not stored; no RPC is spent. A previously agreed origin is kept.
+   Keep the signed broadcast record for every payout; without either origin proof an evicted
+   transaction cannot be resolved safely. One candidate is stored at a time;
    repeating it is idempotent and consumes no additional attachment quota. Each candidate has
    eight persisted recovery passes per epoch on the A/C cadence (checkpoint waiting spends
    none), at most 40 additional logical methods per endpoint, or 120 transport attempts with
@@ -85,7 +92,8 @@ Read the refund and its `transaction_hash` with `GET /v1/refunds/{id}` through t
    attachment. The worker never renews it. Reserve up to 80 additional logical methods per
    endpoint in a 24-hour window crossing epochs (240 transport attempts), charged to the
    extra-operation reserve before submission. The original stays reserved and continues verification. The service requires
-   the original's sender and nonce agreed by both endpoints, plus identical finalized replacement
+   the original's sender and nonce from dual agreement or the hash-checked signed original,
+   plus identical finalized replacement
    receipts and both replacement origins matching that original. It then fails the original as
    `transaction_dropped`, audits the candidate and persists proof with `refund.updated` and
    `refund.failed`. Missing original origin, nonce/sender mismatch, provider disagreement or an
@@ -94,7 +102,8 @@ Read the refund and its `transaction_hash` with `GET /v1/refunds/{id}` through t
 
 Read receipt probes run at 0, 1, 2, 5, 10 minutes, then every ten minutes through two hours,
 then hourly; verify probes hourly from hour one. After 24 hours of absence both probe every six
-hours. Once inclusion is observed there are no RPC calls until the published checkpoint reaches
+hours. While absent, up to three durable dual-origin attempts at 0, 10 minutes and one hour
+preserve the sender/nonce before eviction, stopping on agreement. Once inclusion is observed there are no RPC calls until the published checkpoint reaches
 its block. Dual receipt/header verification then retries unresolved evidence at ten minutes,
 hourly, and every six hours after day one. Reorgs return to inclusion/checkpoint waiting. Phase,
 attempt count and due times survive restarts. The per-account attached-pending cap defaults to

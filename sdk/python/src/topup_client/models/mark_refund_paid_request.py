@@ -25,6 +25,12 @@ class MarkRefundPaidRequest:
 
     Attributes:
         transaction_hash (str): Hash of the transaction that pays the refund from the treasury of the deposit's address.
+        original_signed_transaction (None | str | Unset): Optional 0x-prefixed EIP-2718 signed original transaction,
+            with a replacement candidate.
+            Its keccak256 must equal transaction_hash and its signature must recover a sender. When
+            the original's sender/nonce were not captured from both providers before eviction, these
+            locally verified fields allow replacement proof with no additional RPC. Raw bytes are not
+            stored. Legacy, EIP-2930, EIP-1559, EIP-4844 and EIP-7702 envelopes are supported.
         receipt_log_index (int | None | Unset): Position of the `Transfer` log that pays the refund among the logs of
             the transaction's
             receipt (0 for the first), not the block-wide `logIndex`, which changes if the transaction
@@ -39,11 +45,18 @@ class MarkRefundPaidRequest:
     """
 
     transaction_hash: str
+    original_signed_transaction: None | str | Unset = UNSET
     receipt_log_index: int | None | Unset = UNSET
     replacement_transaction_hash: None | str | Unset = UNSET
 
     def to_dict(self) -> dict[str, Any]:
         transaction_hash = self.transaction_hash
+
+        original_signed_transaction: None | str | Unset
+        if isinstance(self.original_signed_transaction, Unset):
+            original_signed_transaction = UNSET
+        else:
+            original_signed_transaction = self.original_signed_transaction
 
         receipt_log_index: int | None | Unset
         if isinstance(self.receipt_log_index, Unset):
@@ -64,6 +77,8 @@ class MarkRefundPaidRequest:
                 "transaction_hash": transaction_hash,
             }
         )
+        if original_signed_transaction is not UNSET:
+            field_dict["original_signed_transaction"] = original_signed_transaction
         if receipt_log_index is not UNSET:
             field_dict["receipt_log_index"] = receipt_log_index
         if replacement_transaction_hash is not UNSET:
@@ -75,6 +90,17 @@ class MarkRefundPaidRequest:
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
         transaction_hash = d.pop("transaction_hash")
+
+        def _parse_original_signed_transaction(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        original_signed_transaction = _parse_original_signed_transaction(
+            d.pop("original_signed_transaction", UNSET)
+        )
 
         def _parse_receipt_log_index(data: object) -> int | None | Unset:
             if data is None:
@@ -98,6 +124,7 @@ class MarkRefundPaidRequest:
 
         mark_refund_paid_request = cls(
             transaction_hash=transaction_hash,
+            original_signed_transaction=original_signed_transaction,
             receipt_log_index=receipt_log_index,
             replacement_transaction_hash=replacement_transaction_hash,
         )

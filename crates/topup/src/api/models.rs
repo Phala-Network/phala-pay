@@ -773,6 +773,13 @@ pub struct MarkRefundPaidRequest {
     /// candidate (or supplies another), at most once per 24 hours per attachment; never automatic.
     #[schema(required = false)]
     pub replacement_transaction_hash: Option<String>,
+    /// Optional 0x-prefixed EIP-2718 signed original transaction, with a replacement candidate.
+    /// Its keccak256 must equal transaction_hash and its signature must recover a sender. When
+    /// the original's sender/nonce were not captured from both providers before eviction, these
+    /// locally verified fields allow replacement proof with no additional RPC. Raw bytes are not
+    /// stored. Legacy, EIP-2930, EIP-1559, EIP-4844 and EIP-7702 envelopes are supported.
+    #[schema(required = false)]
+    pub original_signed_transaction: Option<String>,
 }
 
 /// A refund of (part of) a deposit to the customer, which the merchant pays from the treasury of

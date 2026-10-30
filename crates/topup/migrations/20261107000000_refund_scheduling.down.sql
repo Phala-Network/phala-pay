@@ -7,4 +7,5 @@ ALTER TABLE refunds
     DROP COLUMN verification_attempts,
     DROP COLUMN verify_checked_at,
     DROP COLUMN observed_block,
-    DROP COLUMN origin_checked;
+    DROP COLUMN origin_checked,
+    DROP COLUMN origin_probes;

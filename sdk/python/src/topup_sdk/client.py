@@ -833,6 +833,7 @@ class TopupClient:
         *,
         receipt_log_index: int | None = None,
         replacement_transaction_hash: str | None = None,
+        original_signed_transaction: str | None = None,
         request_deadline: float | None = None,
         upgrade_tolerance: bool | None = None,
         idempotency_key: str | None = None,
@@ -843,6 +844,9 @@ class TopupClient:
         longer be canceled."""
         body = MarkRefundPaidRequest(
             transaction_hash=transaction_hash,
+            original_signed_transaction=UNSET
+            if original_signed_transaction is None
+            else original_signed_transaction,
             replacement_transaction_hash=UNSET
             if replacement_transaction_hash is None
             else replacement_transaction_hash,

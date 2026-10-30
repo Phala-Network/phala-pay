@@ -356,10 +356,13 @@ where
                 if check.poll_verify {
                     self.probe(&self.secondary, &check).await
                 } else {
-                    None
+                    (None, false)
                 }
             });
-            let block = [a, b].into_iter().flatten().min();
+            if a.1 || b.1 {
+                self.probe_origin(&mut check, now).await?;
+            }
+            let block = [a.0, b.0].into_iter().flatten().min();
             let Some(block) = block else {
                 let overdue = now.signed_duration_since(check.paid_at) >= NOT_FOUND_AFTER;
                 persist_evidence(
@@ -528,24 +531,28 @@ where
         }
     }
 
-    async fn probe(&self, reader: &dyn RefundChainReader, check: &RefundCheck) -> Option<u64> {
+    async fn probe(
+        &self,
+        reader: &dyn RefundChainReader,
+        check: &RefundCheck,
+    ) -> (Option<u64>, bool) {
         let reads = async {
             if let Ok(Some(block)) = reader.receipt_block(check.chain_id, check.tx_hash).await {
-                return Some(block);
+                return (Some(block), false);
             }
             if let Some(replacement) = check.replacement_hash {
-                return reader
+                let block = reader
                     .receipt_block(check.chain_id, replacement)
                     .await
                     .ok()
                     .flatten();
+                return (block, true);
             }
-            None
+            (None, true)
         };
         tokio::time::timeout(self.config.observe_timeout, reads)
             .await
-            .ok()
-            .flatten()
+            .unwrap_or((None, true))
     }
 
     /// A positively identified finalized replacement proves the attachment cannot be included.
@@ -630,6 +637,29 @@ where
             .bind(format!("{:#x}", check.tx_hash))
             .execute(&self.pool)
             .await?;
+        self.read_origin(check).await
+    }
+
+    /// Preserve a pending transaction before nodes can evict it. At most three durable dual
+    /// attempts, at attachment, ten minutes and one hour; stop as soon as both providers agree.
+    async fn probe_origin(
+        &self,
+        check: &mut RefundCheck,
+        now: DateTime<Utc>,
+    ) -> Result<(), sqlx::Error> {
+        if check.origin.is_some() {
+            return Ok(());
+        }
+        let updated = sqlx::query("UPDATE refunds SET origin_probes=origin_probes+1 WHERE id=$1 AND tx_hash=$2 AND tx_from IS NULL AND origin_probes<3 AND $3 >= paid_at + CASE origin_probes WHEN 0 THEN interval '0 seconds' WHEN 1 THEN interval '10 minutes' ELSE interval '1 hour' END")
+            .bind(check.refund_id).bind(format!("{:#x}",check.tx_hash)).bind(now)
+            .execute(&self.pool).await?;
+        if updated.rows_affected() == 1 {
+            self.read_origin(check).await?;
+        }
+        Ok(())
+    }
+
+    async fn read_origin(&self, check: &mut RefundCheck) -> Result<bool, sqlx::Error> {
         let reads = async {
             tokio::join!(
                 self.primary.origin(check.chain_id, check.tx_hash),

@@ -386,6 +386,7 @@ def test_refunds_are_marked_paid_and_canceled_by_id() -> None:
             "0x" + "dd" * 32,
             receipt_log_index=1,
             replacement_transaction_hash="0x" + "ee" * 32,
+            original_signed_transaction="0x02f8",
         )
         client.mark_refund_paid(REFUND_ID, "0x" + "dd" * 32)
         client.cancel_refund(REFUND_ID)
@@ -397,6 +398,7 @@ def test_refunds_are_marked_paid_and_canceled_by_id() -> None:
         "transaction_hash": "0x" + "dd" * 32,
         "receipt_log_index": 1,
         "replacement_transaction_hash": "0x" + "ee" * 32,
+        "original_signed_transaction": "0x02f8",
     }
     assert json.loads(unnamed.content) == {"transaction_hash": "0x" + "dd" * 32}
     assert canceled.method == "POST"
