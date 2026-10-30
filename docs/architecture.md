@@ -609,7 +609,10 @@ Factory events are always reverified. Only configured-factory events count.
 One transaction writes evidence, dual markers, coverage at `e`, address progress at its actual
 backfill end, and the N-1 compatibility cursor at the boundary reached by every address. The
 cursor's header is read on both endpoints when it differs from `e`. It deletes pending rows at or below `e`. Only
-caught-up addresses become `backfilled`. Issuance requires initialized dual coverage and respects
+caught-up addresses become `backfilled`. New issuance starts at agreed checkpoint `c+1`, with
+`dual_covered_through=c`, `backfilled=true` and `backfilled_through=c`; funding at or before `c`
+is outside discovery and crediting and becomes the immutable custody opening below. Historical
+restore/reissue preserves its earlier inclusive boundary. Issuance requires initialized dual coverage and respects
 the configured `rpc[].max_issued_addresses` cap (currently 1,000 on every chain). Empty chains start at the agreed checkpoint; an upgraded or restored
 chain starts at `min(min(created_block).saturating_sub(1), checkpoint)`, with its header read on
 both endpoints. Startup rebases an old cursor above dual coverage. Lowering `created_block`
@@ -1530,14 +1533,28 @@ forwarders with expected-zero balances.
 |---|---|
 | `credit_minor` ≠ recomputation from stored inputs | alert |
 | Final `credited` deposit with a `flushed` row at a later log position | sweep it (replay of indexed events) |
-| Per caught-up forwarder with settled deposits, including expected-zero balances, at block `B` = min(checkpoint, dual coverage cursor), pinned to its canonical hash: its token balance at `B` ≠ Σ deposits at or below `B` (not reversed) − Σ `flushed.amount_atomic` at or below `B` | freeze chain, alert |
+| Per caught-up forwarder with settled deposits, including expected-zero balances, at block `B` = min(checkpoint, dual coverage cursor), pinned to its canonical hash: its token balance at `B` ≠ immutable opening + Σ deposits from discovery start through `B` (not reversed) − Σ `flushed.amount_atomic` over that range | freeze chain, alert |
 | `addressOf(treasury, salt)` on chain ≠ stored address, with each address's own treasury | freeze chain, alert |
 | After a restore, in the read-only restore-check instance (§14) | the checks above, on the restored ledger alone: the service's record is authoritative for its credits, so the check asks the merchant nothing and does not depend on it being reachable; the merchant's records enter only through the operator's reconciliation (§14) |
 
 **Reconciliation per forwarder** (design §13). Every caught-up forwarder with settled deposits
 is read in the same sweep, including idle forwarders and those swept to zero. This detects
 unexpected balances even when both providers omitted a transfer log or a token balance changed
-without a `Transfer` event. Every transfer to an issued address and every
+without a `Transfer` event. Counterfactual addresses may be funded before issuance, so each
+`(address, token, created_block)` has an immutable dual-verified opening balance at
+`created_block-1`; genesis discovery has opening zero. Expected custody is opening plus deposits
+minus finalized flushes in the inclusive discovery range. A supervised worker captures openings
+outside the quote path, every minute in at most 1,000-address batches per route grouped by pin.
+Both numbered headers must agree below the checkpoint; both canonical-hash Multicall3 vectors
+must agree in full before an insert-only proof is saved. Failures back off six hours; new jobs
+precede repeated failures. Manual reconciliation retries immediately. Existing forwarders and
+later-added tokens require their original historical pin, with no current-state fallback.
+`TopupCustodyOpeningUnavailable` counts missing proofs per chain/route, leaves those forwarders
+unverified and fails the custody check; other eligible forwarders are still compared. A lowered
+discovery start needs a new proof. See the [opening runbook](../deploy/runbooks/rpc-health.md#custody-opening-unavailable).
+Unsupported-token transfers after issuance are already recorded, dual-verified and later settled;
+they count in custody even if the route was added afterwards. Route activation does not reset the
+balance. Every transfer to an issued address and every
 factory event about one is indexed at or below the scanner cursor, and only finalized events are
 indexed, so at `B` the chain and the ledger describe the same state whoever flushed. A forwarder is
 compared only once its dual address marker equals chain coverage and every deposit of it at or below `B` is settled (final or
@@ -1554,7 +1571,7 @@ scan. Custody uses `B = min(checkpoint, chain_coverage.through_block)` only for 
 forwarders, pinned to `B`'s canonical hash. Both endpoints must agree on the complete balance vector before concluding the ledger is
 clean or freezing it. At the default cadence, detection targets checkpoint ≤10 min + coverage
 ≤60 min + custody ≤360 min (about 7 h 10 min after finality), plus sweep runtime, with healthy
-endpoints and settled, caught-up forwarders. Factory events are already dual-verified at the coverage boundary.
+endpoints, verified openings and settled, caught-up forwarders. Factory events are already dual-verified at the coverage boundary.
 
 A chain block stays until the cause is investigated and signed off. The admin API's
 `POST /v1/admin/reconciliation_blocks/{block_key}/lift {reason}` first runs a fresh dual contract

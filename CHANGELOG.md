@@ -51,6 +51,14 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Fixed
 
+- Account for tokens sent to deterministic forwarders before issuance using immutable opening
+  balances verified on both RPC providers. New addresses start after the current agreed
+  checkpoint and capture the opening asynchronously in Multicall3 batches. Custody still
+  freezes on unexplained post-issuance changes; unavailable or disagreeing original-pin evidence
+  leaves the affected forwarders unverified and raises `TopupCustodyOpeningUnavailable`.
+  Later-added token routes retain already indexed unsupported-transfer history. Historical
+  restore/reissue requires a proof for its own discovery boundary; no current-balance fallback.
+
 - Custody reconciliation now checks every caught-up forwarder with settled deposits, including
   idle and swept-to-zero balances, in a full sweep on both providers. Set-based SQL replaces
   per-address coverage queries and the one-page-per-run cursor. Scheduled sweeps default to

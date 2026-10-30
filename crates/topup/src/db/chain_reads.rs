@@ -160,7 +160,12 @@ pub async fn admit_addresses(
             .bind(to_i64(chain, "chain id")?)
             .fetch_optional(&mut **tx)
             .await?;
-    if boundary.is_none() {
+    let checkpoint_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM chain_checkpoints WHERE chain_id=$1)")
+            .bind(to_i64(chain, "chain id")?)
+            .fetch_one(&mut **tx)
+            .await?;
+    if boundary.is_none() || !checkpoint_exists {
         return Ok(AddressAdmission::NotReady);
     }
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM addresses WHERE chain_id=$1")

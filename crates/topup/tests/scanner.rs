@@ -277,6 +277,87 @@ async fn compat(database: &TestDatabase) -> Result<(i64, Option<DateTime<Utc>>)>
     )
 }
 
+/// Unsupported tokens are still covered from issuance. Route activation must not erase that
+/// history or mistake a previously recorded transfer for an unexplained custody balance.
+#[tokio::test]
+async fn custody_new_token_route_includes_transfers_recorded_before_route_activation() -> Result<()>
+{
+    struct Balance;
+    #[async_trait::async_trait]
+    impl topup::reconciler::ReconciliationChain for Balance {
+        async fn token_balances_pinned(
+            &self,
+            _: Address,
+            addresses: &[Address],
+            pin: B256,
+        ) -> Result<Vec<U256>, topup::reconciler::ReconciliationError> {
+            assert_eq!(pin, hash(140));
+            Ok(vec![U256::from(1_000); addresses.len()])
+        }
+    }
+    with_database(|d| {
+        Box::pin(async move {
+            // Genesis discovery needs no opening snapshot; this regression also runs on #588 alone.
+            let address = address(d, 0).await?;
+            let mut log = transfer(&address, 110);
+            log.token = Address::repeat_byte(0x82);
+            let mut read = Reader::new(140);
+            let mut verify = Reader::new(140);
+            for reader in [&mut read, &mut verify] {
+                reader.logs = vec![log.clone()];
+                reader.receipt = Some(log.clone());
+            }
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
+            let before: (String, Option<String>, bool) = sqlx::query_as(
+                "SELECT state,route,dual_verified_at IS NOT NULL FROM deposits WHERE address_id=$1",
+            )
+            .bind(address.id)
+            .fetch_one(&d.app_pool)
+            .await?;
+            ensure!(before == ("rejected".into(), None, true));
+            let watcher = topup::finality::FinalityWatch::single(
+                d.app_pool.clone(),
+                Arc::new(routes()),
+                1,
+                read,
+                verify,
+            );
+            let settled = watcher.watch_once(1).await?;
+            ensure!(settled.finalized == 1 && settled.failed == 0, "{settled:?}");
+            let final_at: bool =
+                sqlx::query_scalar("SELECT final_at IS NOT NULL FROM deposits WHERE address_id=$1")
+                    .bind(address.id)
+                    .fetch_one(&d.app_pool)
+                    .await?;
+            ensure!(
+                final_at,
+                "unsettled exclusion would make this a false-positive regression"
+            );
+            let mut later = route();
+            later.route = "later-token".into();
+            later.asset.contract = log.token;
+            let routes = Arc::new(RouteSet::new(vec![later]).map_err(anyhow::Error::msg)?);
+            let reconciler = topup::reconciler::Reconciler::with_dependencies(
+                d.app_pool.clone(),
+                routes,
+                std::collections::BTreeMap::from([(
+                    1,
+                    Arc::new(Balance) as Arc<dyn topup::reconciler::ReconciliationChain>,
+                )]),
+            );
+            ensure!(
+                reconciler
+                    .check(topup::reconciler::CheckName::CustodyBalance)
+                    .await?
+                    .is_empty()
+            );
+            ensure!(!topup::reconciler::chain_is_blocked(&d.app_pool, 1).await?);
+            Ok(())
+        })
+    })
+    .await
+}
+
 #[tokio::test]
 async fn forward_migration_repairs_existing_dual_cursors_and_n_minus_one_reissue() -> Result<()> {
     let Some(d) = TestDatabase::create_with_migrations(false).await? else {

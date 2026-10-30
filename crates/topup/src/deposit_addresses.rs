@@ -1211,20 +1211,17 @@ pub async fn sync_networks(
                 return Err(DepositAddressError::AddressCapacityReached);
             }
         }
-        // A newly derived forwarder cannot hold earlier payments to this salt and treasury unless
-        // someone sent to the address before its network existed (on a chain added later, or
-        // before a treasury change); as for quote addresses, the scanner covers it from the
-        // chain's committed cursor.
+        // Discovery starts after the current agreed checkpoint. A background dual-provider
+        // snapshot at that checkpoint accounts for any counterfactual prefunding in custody.
         sqlx::query(
             r#"
             INSERT INTO addresses (
                 id, account_id, livemode, chain_id, deposit_address_id, salt, treasury, address,
-                created_block
+                created_block, dual_covered_through, backfilled, backfilled_through
             )
-            VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8,
-                (SELECT through_block FROM chain_coverage WHERE chain_id = $4)
-            )
+            SELECT $1, $2, $3, $4, $5, $6, $7, $8,
+                   c.block_number+1, c.block_number, true, c.block_number
+            FROM chain_checkpoints c WHERE c.chain_id=$4
             "#,
         )
         .bind(Uuid::new_v4())
@@ -1337,17 +1334,18 @@ pub(crate) async fn replace_networks(
             return Err(DepositAddressError::AddressCapacityReached);
         }
     }
-    // As in `sync_networks`, the scanner covers a new forwarder from the chain's committed cursor.
+    // As in `sync_networks`, new forwarders start after the current agreed checkpoint.
     sqlx::query(
         r#"
         INSERT INTO addresses (
             id, account_id, livemode, chain_id, deposit_address_id, salt, treasury, address,
-            created_block
+            created_block, dual_covered_through, backfilled, backfilled_through
         )
         SELECT next.id, $5, $6, $7, next.owner, next.salt, $8, next.address,
-               (SELECT through_block FROM chain_coverage WHERE chain_id = $7)
+               c.block_number+1, c.block_number, true, c.block_number
         FROM unnest($1::uuid[], $2::uuid[], $3::text[], $4::text[])
             AS next(id, owner, salt, address)
+        JOIN chain_checkpoints c ON c.chain_id=$7
         "#,
     )
     .bind(&ids)

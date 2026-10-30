@@ -61,6 +61,8 @@ the owner creates; no application table grants `TRUNCATE`. The migration narrows
 | `price_twap_observations` | `SELECT`, `INSERT` (immutable samples, isolated by safety policy) |
 | `topup_migration_compatibility` (owner-written rollback ledger) | None |
 | `transitions`, `audit`, `reconciliation_findings`, `heartbeat`, `events` | `SELECT`, `INSERT` (append-only) |
+| `custody_opening_balances` | `SELECT`, `INSERT` (immutable dual-verified state before discovery) |
+| `custody_opening_jobs` | `SELECT`, `INSERT`; `UPDATE` of `attempts`, `next_attempt_at` only |
 | `flushed`, `flush_failures` | `SELECT`, `INSERT` (finalized chain facts) |
 | `reconciliation_blocks`, `deposit_address_client_secrets` | `SELECT`, `INSERT`, `DELETE` |
 | `reconciliation_deposit_cursors`, `restores` | `SELECT`, `INSERT`, `UPDATE` |
@@ -385,3 +387,12 @@ resume inclusion probing at their existing due time; no status or reservation is
 Replacement resolution requires dual finalized receipt and sender/nonce proof. The down migration
 removes scheduling and candidate state only; terminal refund objects and evidence remain valid.
 The previous release can read the added columns but resumes its older polling cadence.
+
+## Custody opening balances
+
+`20261108000000_custody_openings` records immutable balance evidence per address, token and
+inclusive discovery start, plus durable bounded capture jobs. Only retry scheduling is mutable;
+proofs and their canonical pin cannot be updated or deleted by `topup_app`. New issuances start
+at current agreed checkpoint plus one and need no synchronous RPC. Existing and reissued rows
+use their own historical start; a missing proof fails custody incomplete with a named alert.
+The down migration preserves both tables for binary rollback and future recapture.

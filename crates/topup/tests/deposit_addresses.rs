@@ -43,7 +43,15 @@ async fn one_address_for_every_asset_and_chain_is_idempotent_per_customer_and_mo
         Box::pin(async move {
             let pool = &database.app_pool;
             let fixture = Fixture::new(pool).await?;
+            sqlx::query("UPDATE chain_checkpoints SET block_number=100 WHERE chain_id IN (1,10)")
+                .execute(pool).await?;
             let first = fixture.create(&fixture.live_key, "team-42").await?;
+            let boundaries: Vec<(i64, Option<i64>, bool, Option<i64>)> = sqlx::query_as(
+                "SELECT created_block,dual_covered_through,backfilled,backfilled_through FROM addresses ORDER BY chain_id",
+            ).fetch_all(pool).await?;
+            ensure!(boundaries == [(101, Some(100), true, Some(100)), (101, Some(100), true, Some(100))], "{boundaries:?}");
+            ensure!(sqlx::query_scalar::<_, i64>("SELECT count(*) FROM custody_opening_balances").fetch_one(pool).await? == 0,
+                "quote path must not perform synchronous opening reads");
             ensure!(first["object"] == "deposit_address" && first["status"] == "active");
             ensure!(first["livemode"] == true && first["client_reference_id"] == "team-42");
             ensure!(first["version"] == 1 && first["retired_at"].is_null());

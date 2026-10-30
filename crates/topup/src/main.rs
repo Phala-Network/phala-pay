@@ -1018,6 +1018,10 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
             live_delivery.run(cancellation).await;
         })
     });
+    let opening_reconciler = Arc::clone(&reconciler);
+    tasks.spawn("custody opening capture", |cancellation| async move {
+        opening_reconciler.run_opening_loop(cancellation).await;
+    });
     let reconcile_interval = Duration::from_secs(args.reconcile_interval_s);
     tasks.spawn("reconciler", |cancellation| async move {
         reconciler

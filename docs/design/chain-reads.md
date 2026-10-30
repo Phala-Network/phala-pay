@@ -53,6 +53,11 @@ Initialisation: when `topup run` first starts with a chain, before the API can i
 on it, `chain_coverage` is set to the agreed checkpoint (§2.5). A restored or upgraded database
 without a row starts at `min(created_block) − 1`, so the first range includes `min(created_block)`.
 
+New issuance uses the current agreed checkpoint `t`: `created_block = t+1`,
+`dual_covered_through = t`, `backfilled = true`. Earlier funding is outside discovery and crediting.
+An asynchronous opening snapshot at `t` accounts for that funding in custody (§2.6); issuance
+performs no synchronous balance RPC. Historical restore/reissue keeps its explicit earlier start.
+
 Each round, staggered per chain:
 
 1. Read the published checkpoint `t` from the independent ten-minute loop (§2.5), without
@@ -299,6 +304,20 @@ coverage-driven flow (§2.6) then expires or cancels it.
   independently read the full balance vector at B's canonical hash, including idle and
   swept-to-zero forwarders, in `ceil(N / 1000)` Multicall3 aggregates per route and endpoint
   within that sweep before accepting equality or freezing on mismatch. Selection is set-based.
+  Expected balance is an immutable opening at `created_block-1`, plus non-reversed deposits minus
+  finalized `Flushed` amounts from `created_block` through B. Genesis discovery has opening zero.
+  A supervised follow-up worker polls every minute, claims at most 1,000 missing openings per
+  route, groups by discovery start, agrees the numbered header on both endpoints below the
+  checkpoint, then reads both complete vectors with EIP-1898 `requireCanonical:true`. The
+  `(address, token, start_block)` proof is insert-only; failed reads retry after six hours and new
+  jobs take priority over repeatedly failing ones. Manual reconciliation retries immediately.
+  Legacy addresses and later-added tokens use the same original pin, never a current balance.
+  Missing/unavailable/disagreeing evidence excludes the affected forwarder, fails the custody
+  check and raises `TopupCustodyOpeningUnavailable` with chain/route tags and a count; other
+  forwarders still run. Lowering discovery start requires a new proof. The target below applies
+  once opening evidence exists. A token route added later already has post-issuance history:
+  coverage records unsupported tokens as `rejected(unsupported_asset)` with no route, and custody
+  includes those transfers after finality settles them. No route-activation balance reset occurs.
   A forwarder with a non-final, non-reversed deposit at B is deferred until settled. Each sweep
   alerts `TopupCustodyCoverageIncomplete` with the count per chain/route when an excluding
   deposit is at least 24 h old (`--custody-unsettled-alert-after-s`, default `86400`). An
@@ -498,7 +517,9 @@ GRANT SELECT, INSERT, UPDATE ON chain_checkpoints, chain_coverage, daily_budgets
 
 Cursor updates are monotonic (`WHERE … < $new`). New tables go into the privileges test and
 restore's table set; a restore without them restarts coverage at `min(created_block) − 1` with
-every `dual_covered_through` NULL.
+every `dual_covered_through` NULL. `custody_opening_balances` and `custody_opening_jobs` are
+also backed up and counted by restore checks. Opening proofs survive binary rollback; an
+N-1 issuance is captured lazily at its own `created_block-1` on upgrade.
 
 N-1 safety:
 

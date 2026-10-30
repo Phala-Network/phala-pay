@@ -1,12 +1,17 @@
 use alloy_primitives::{Address, B256, U256};
 use async_trait::async_trait;
-use topup_adapters::chain::evm::FinalizedReader;
+use topup_adapters::chain::evm::{ChainReader, FinalizedReader};
 
 use super::ReconciliationError;
 
 /// Canonically pinned state reads needed by the remaining reconciliation checks.
 #[async_trait]
 pub trait ReconciliationChain: Send + Sync {
+    /// Canonical numbered header for an opening pin already below the agreed checkpoint.
+    async fn canonical_header(&self, _number: u64) -> Result<B256, ReconciliationError> {
+        Err(ReconciliationError::Invariant("opening header unavailable"))
+    }
+
     /// Token state at one EIP-1898 canonical hash; no numeric or latest fallback.
     async fn token_balances_pinned(
         &self,
@@ -23,6 +28,10 @@ pub trait ReconciliationChain: Send + Sync {
 /// Endpoint transport retries remain inside Alloy; a failed check waits for the next round.
 #[async_trait]
 impl ReconciliationChain for FinalizedReader {
+    async fn canonical_header(&self, number: u64) -> Result<B256, ReconciliationError> {
+        Ok(ChainReader::header(self, number).await?.0)
+    }
+
     async fn token_balances_pinned(
         &self,
         token: Address,
