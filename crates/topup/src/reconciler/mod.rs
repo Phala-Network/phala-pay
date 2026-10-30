@@ -12,6 +12,7 @@
 //! balance vector of caught-up forwarders, including expected-zero balances.
 
 mod chain;
+mod opening;
 pub(crate) mod store;
 mod types;
 
@@ -149,6 +150,7 @@ pub struct Reconciler {
     verifiers: BTreeMap<u64, Arc<dyn ReconciliationChain>>,
     /// Derivations already confirmed on chain; a changed row is a new key and is read again.
     verified: Mutex<VerifiedCache>,
+    opening_capture: tokio::sync::Mutex<()>,
     custody_interval: Duration,
     custody_unsettled_alert_after: Duration,
 }
@@ -181,6 +183,7 @@ impl Reconciler {
             chains,
             verifiers,
             verified: Mutex::default(),
+            opening_capture: tokio::sync::Mutex::default(),
             custody_interval: DEFAULT_CUSTODY_INTERVAL,
             custody_unsettled_alert_after: DEFAULT_CUSTODY_UNSETTLED_ALERT_AFTER,
         })
@@ -199,6 +202,7 @@ impl Reconciler {
             verifiers: chains.clone(),
             chains,
             verified: Mutex::default(),
+            opening_capture: tokio::sync::Mutex::default(),
             custody_interval: DEFAULT_CUSTODY_INTERVAL,
             custody_unsettled_alert_after: DEFAULT_CUSTODY_UNSETTLED_ALERT_AFTER,
         }
@@ -280,13 +284,13 @@ impl Reconciler {
             .await
             .map_err(ReconciliationError::Chain)?;
         let mut findings = Vec::new();
-        self.run_check(check, &mut RoundHeads::new(), &mut findings)
+        self.run_check(check, &mut RoundHeads::new(), &mut findings, true)
             .await?;
         Ok(findings)
     }
 
     async fn run_checks(&self, post_restore: bool) -> ReconciliationReport {
-        self.run_checks_at(post_restore, RoundHeads::new(), true)
+        self.run_checks_at(post_restore, RoundHeads::new(), true, true)
             .await
     }
 
@@ -296,6 +300,7 @@ impl Reconciler {
         post_restore: bool,
         mut heads: RoundHeads,
         custody_due: bool,
+        force_openings: bool,
     ) -> ReconciliationReport {
         let mut report = ReconciliationReport::default();
         for check in REGULAR_CHECKS {
@@ -308,7 +313,8 @@ impl Reconciler {
                     self.reset_check_cursor(check).await?;
                 }
                 loop {
-                    self.run_check(check, &mut heads, &mut findings).await?;
+                    self.run_check(check, &mut heads, &mut findings, force_openings)
+                        .await?;
                     if !post_restore || !self.check_pending(check).await? {
                         break;
                     }
@@ -352,12 +358,16 @@ impl Reconciler {
         check: CheckName,
         heads: &mut RoundHeads,
         findings: &mut Vec<Finding>,
+        force_openings: bool,
     ) -> Result<(), ReconciliationError> {
         match check {
             CheckName::AddressDerivation => self.address_derivation(findings).await,
             CheckName::CreditRecomputation => self.credit_recomputation(findings).await,
             CheckName::MissingFlushLink => self.missing_flush_links(findings).await,
-            CheckName::CustodyBalance => self.custody_balances(heads, findings).await,
+            CheckName::CustodyBalance => {
+                opening::capture(self, force_openings).await?;
+                self.custody_balances(heads, findings).await
+            }
         }
     }
 
@@ -461,7 +471,7 @@ impl Reconciler {
             }
             tokio::select! {
                 () = cancellation.cancelled() => return,
-                report = self.run_checks_at(false, published.clone(), custody_due) => {
+                report = self.run_checks_at(false, published.clone(), custody_due, false) => {
                     monitor.check_in(report.succeeded());
                     if report.succeeded() {
                         reconciled = Some(published);
@@ -763,7 +773,7 @@ impl Reconciler {
         Ok(())
     }
 
-    /// Checks, per forwarder, that its finalized balance is its deposits minus its sweeps, and
+    /// Checks that each forwarder's balance is its opening plus deposits minus sweeps, and
     /// freezes the chain on any mismatch (design §13).
     async fn custody_balances(
         &self,
@@ -786,7 +796,7 @@ impl Reconciler {
     }
 
     /// Compares, at one finalized block, every active forwarder's balance of the route's token
-    /// with its deposits minus its finalized `Flushed` amounts.
+    /// with its verified opening plus deposits minus finalized `Flushed` amounts.
     ///
     /// The block is the lower of the finalized head and the scanner cursor, below which every
     /// transfer and every factory event of a watched address is indexed. Anyone can flush a
@@ -833,10 +843,15 @@ impl Reconciler {
                 "custody excludes forwarders with overdue unsettled deposits"
             );
         }
+        let missing =
+            store::missing_openings(&self.pool, chain_id, token, block, coverage.number).await?;
+        if missing > 0 {
+            opening::unavailable(chain_id, &route.route, missing, "opening_missing");
+        }
         let ledgers =
             store::forwarder_ledgers(&self.pool, chain_id, token, block, coverage.number).await?;
         if ledgers.is_empty() {
-            return Ok(());
+            return opening_complete(missing);
         }
         let physical = ledgers
             .iter()
@@ -861,14 +876,19 @@ impl Reconciler {
             ));
         }
         for (ledger, observed) in ledgers.iter().zip(balances) {
-            if ledger.deposits.checked_sub(ledger.flushed) == Some(observed) {
+            if ledger
+                .opening
+                .checked_add(ledger.deposits)
+                .and_then(|amount| amount.checked_sub(ledger.flushed))
+                == Some(observed)
+            {
                 continue;
             }
             store::block_chain(
                 &self.pool,
                 chain_id,
                 CheckName::CustodyBalance.code(),
-                "a forwarder balance disagrees with its deposits minus its sweeps",
+                "a forwarder balance disagrees with its opening plus deposits minus sweeps",
             )
             .await?;
             findings.push(Finding::new(
@@ -880,6 +900,7 @@ impl Reconciler {
                     ("block", block.to_string()),
                 ]),
                 json!({
+                    "opening_atomic": ledger.opening.to_string(),
                     "deposits_atomic": ledger.deposits.to_string(),
                     "flushed_atomic": ledger.flushed.to_string(),
                 }),
@@ -888,7 +909,7 @@ impl Reconciler {
                 false,
             )?);
         }
-        Ok(())
+        opening_complete(missing)
     }
 
     fn chain(&self, chain_id: u64) -> Result<&Arc<dyn ReconciliationChain>, ReconciliationError> {
@@ -930,6 +951,16 @@ impl Reconciler {
             }
         }
         Ok(factories)
+    }
+}
+
+fn opening_complete(missing: i64) -> Result<(), ReconciliationError> {
+    if missing > 0 {
+        Err(ReconciliationError::Invariant(
+            "custody opening balances missing",
+        ))
+    } else {
+        Ok(())
     }
 }
 

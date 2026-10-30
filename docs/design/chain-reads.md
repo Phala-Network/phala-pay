@@ -62,11 +62,21 @@ this target. R4 still requires both endpoints for every negative conclusion.
 
 State: chain cursor `c = chain_coverage.through_block`; per address
 `addresses.dual_covered_through` (NULL = nothing covered). An address is **caught up** when
-`dual_covered_through = c`.
+`dual_covered_through = c`. The forward-scan set also includes markers above `c`: a newly
+issued address may have an empty prefix through a newer checkpoint while global coverage lags.
+Each address still filters at `max(created_block, dual_covered_through+1)`.
 
 Initialisation: when `topup run` first starts with a chain, before the API can issue an address
 on it, `chain_coverage` is set to the agreed checkpoint (§2.5). A restored or upgraded database
 without a row starts at `min(created_block) − 1`, so the first range includes `min(created_block)`.
+
+New issuance uses the current agreed checkpoint `t`: `created_block = t+1`,
+`dual_covered_through = t`, `backfilled = true`. Earlier funding is outside discovery and crediting.
+An asynchronous opening snapshot at `t` accounts for that funding in custody (§2.6); issuance
+performs no synchronous balance RPC. Historical restore/reissue keeps its explicit earlier start.
+Lowering that start atomically resets `dual_covered_through=NULL, backfilled=false,
+backfilled_through=NULL`; the expanded range is rescanned and custody requires the opening at
+the lowered start minus one, never the original live-issuance checkpoint.
 
 Each round, staggered per chain:
 
@@ -74,7 +84,8 @@ Each round, staggered per chain:
    repeating its RPC checks. Range end `e = min(t, c + L)`, `L` = 3 000 blocks, or 19 200 on
    every sixth round (six-hour catch-up; §5.2 budgets it). Read the header of `e` on both
    endpoints (hash and time must agree).
-2. Snapshot address sets after step 1: caught-up set C; lagging set G = at most 1 000 addresses
+2. Snapshot address sets after step 1: forward set C with `dual_covered_through >= c`;
+   lagging set G = at most 1 000 addresses
    with `dual_covered_through IS NULL OR < c`, oldest progress first (new addresses, reissued
    addresses whose `created_block` was lowered by `deposit_addresses.rs` reissue, restored
    addresses). Addresses issued after the snapshot are paid above `t` (payments before issuance
@@ -101,7 +112,8 @@ Each round, staggered per chain:
    - existing factory-event rows in range (insert-only tables, rare) → always re-verified;
    - any disagreement → no commit, alert.
 5. One transaction: records and markers; `chain_coverage` → `(e, hash(e), time(e))`; C's
-   `dual_covered_through = e`; G's `dual_covered_through = g_end` for addresses whose start
+   `dual_covered_through = e` for addresses whose own start is ≤ `e` (an issuance prefix ahead
+   of `e` retains its marker); G's `dual_covered_through = g_end` for addresses whose start
    ≤ `g_end`; `backfilled = true, backfilled_through = e` only for addresses now caught up;
    pending-view rows ≤ `e` deleted. The N-1 compatibility cursor advances only to the common
    complete boundary across addresses. When it lags `e`, both endpoints supply an extra agreed
@@ -314,6 +326,20 @@ coverage-driven flow (§2.6) then expires or cancels it.
   independently read the full balance vector at B's canonical hash, including idle and
   swept-to-zero forwarders, in `ceil(N / 1000)` Multicall3 aggregates per route and endpoint
   within that sweep before accepting equality or freezing on mismatch. Selection is set-based.
+  Expected balance is an immutable opening at `created_block-1`, plus non-reversed deposits minus
+  finalized `Flushed` amounts from `created_block` through B. Genesis discovery has opening zero.
+  A supervised follow-up worker polls every minute, claims at most 1,000 missing openings per
+  route, groups by discovery start, agrees the numbered header on both endpoints below the
+  checkpoint, then reads both complete vectors with EIP-1898 `requireCanonical:true`. The
+  `(address, token, start_block)` proof is insert-only; failed reads retry after six hours and new
+  jobs take priority over repeatedly failing ones. Manual reconciliation retries immediately.
+  Legacy addresses and later-added tokens use the same original pin, never a current balance.
+  Missing/unavailable/disagreeing evidence excludes the affected forwarder, fails the custody
+  check and raises `TopupCustodyOpeningUnavailable` with chain/route tags and a count; other
+  forwarders still run. Lowering discovery start requires a new proof. The target below applies
+  once opening evidence exists. A token route added later already has post-issuance history:
+  coverage records unsupported tokens as `rejected(unsupported_asset)` with no route, and custody
+  includes those transfers after finality settles them. No route-activation balance reset occurs.
   A forwarder with a non-final, non-reversed deposit at B is deferred until settled. Each sweep
   alerts `TopupCustodyCoverageIncomplete` with the count per chain/route when an excluding
   deposit is at least 24 h old (`--custody-unsettled-alert-after-s`, default `86400`). An
@@ -513,7 +539,9 @@ GRANT SELECT, INSERT, UPDATE ON chain_checkpoints, chain_coverage, daily_budgets
 
 Cursor updates are monotonic (`WHERE … < $new`). New tables go into the privileges test and
 restore's table set; a restore without them restarts coverage at `min(created_block) − 1` with
-every `dual_covered_through` NULL.
+every `dual_covered_through` NULL. `custody_opening_balances` and `custody_opening_jobs` are
+also backed up and counted by restore checks. Opening proofs survive binary rollback; an
+N-1 issuance is captured lazily at its own `created_block-1` on upgrade.
 
 N-1 safety:
 

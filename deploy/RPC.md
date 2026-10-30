@@ -168,6 +168,21 @@ across both endpoints. At the default six-hour cadence, the daily cost is
 `4 × C × ceil(N / 1,000)` per endpoint; at interval T seconds, the average is
 `(86,400 / T) × C × ceil(N / 1,000)`. Budget N as all issued addresses, including expected-zero
 forwarders; forwarders with an unsettled deposit at the pin are deferred until settled.
+Custody also requires an immutable opening balance at `created_block-1` (zero for genesis
+discovery). New addresses start at current agreed checkpoint `c+1`; a background worker captures
+opening state at recent pin `c`, outside the quote request. Each successful batch of at most
+1,000 addresses sharing a chain/token/issuance pin costs four calls across both endpoints:
+one numbered header and one canonical-hash aggregate per endpoint. The worker claims up to
+1,000 jobs per route each minute. K addresses sharing a pin require `ceil(K/1,000)` batches
+when captured together; later arrivals at that pin can add batches. A single-address issuance
+costs two calls per endpoint per token (four across both); grouped addresses amortize this.
+Budget `2 × C × I` extra calls per endpoint for I newly issued addresses on a C-token chain as
+an unbatched bound, plus legacy/later-token captures and
+six-hour retries of unavailable/disagreeing pins. Charge this to the existing reserve; the
+approved capacity and daily tables do not increase. Existing addresses and later-added tokens
+require that original pin on both providers. Missing proof fails custody closed for the affected
+forwarder and alerts `TopupCustodyOpeningUnavailable`; no latest-balance fallback is allowed.
+Post-issuance unsupported-token transfers were already recorded and count when a route is added.
 The approved tables and totals below deliberately retain the prior five-batch allowance (120C at N=1,000) as a conservative bound; the saving does
 not authorize higher capacity. For each payment chain with C custody routes, that retained
 Ankr and staging-only Infura budget is:
@@ -557,7 +572,7 @@ can extend them. Time measured from inclusion also includes chain confirmation/f
 | L confirmation after heads recover | Current L interval: 60 s / ten minutes / one hour by age, then RPC and processing; no checkpoint wait |
 | Quote expiry, cancel completion and unpaid reservation release | ≤ about 70 min after finality: checkpoint ≤10 min + coverage ≤60 min + expiry worker ≤5 s |
 | Known-deposit reversal and checkpoint-conflict freeze | ≤10 min checkpoint scheduling delay, then watch/RPC processing |
-| Custody discrepancy | ≤ about 430 min (7 h 10 min) after finality, plus sweep runtime: checkpoint ≤10 min + coverage ≤60 min + custody ≤360 min at the default six-hour cadence; healthy endpoints and settled, caught-up forwarders |
+| Custody discrepancy | ≤ about 430 min (7 h 10 min) after finality, plus sweep runtime: checkpoint ≤10 min + coverage ≤60 min + custody ≤360 min at the default six-hour cadence; healthy endpoints, verified openings and settled, caught-up forwarders |
 
 Hints require ready endpoints, available hint budget and the route's confirmation requirement.
 A conflict visible only in full logs may wait for hourly coverage; the ten-minute target concerns

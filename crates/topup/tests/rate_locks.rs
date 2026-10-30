@@ -1646,7 +1646,8 @@ async fn another_chains_cursor_never_expires_a_lock() -> Result<()> {
 }
 
 #[tokio::test]
-async fn new_lock_addresses_start_scanning_at_the_chain_cursor() -> Result<()> {
+async fn new_lock_addresses_start_after_the_agreed_checkpoint_and_reused_ones_keep_their_start()
+-> Result<()> {
     let Some(database) = TestDatabase::create().await? else {
         return Ok(());
     };
@@ -1660,15 +1661,27 @@ async fn new_lock_addresses_start_scanning_at_the_chain_cursor() -> Result<()> {
             .execute(&database.app_pool)
             .await?;
         let after_cursor = create_lock(&database, &quotes, &product, &account, &route).await?;
-        for (address_id, expected) in [(before_cursor.address_id, 0), (after_cursor.address_id, 0)]
-        {
-            let (created_block, backfilled): (i64, bool) =
-                sqlx::query_as("SELECT created_block, backfilled FROM addresses WHERE id = $1")
-                    .bind(address_id)
-                    .fetch_one(&database.app_pool)
-                    .await?;
-            ensure!(created_block == expected);
-            ensure!(!backfilled);
+        ensure!(before_cursor.address_id == after_cursor.address_id);
+        sqlx::query("UPDATE chain_checkpoints SET block_number=2000 WHERE chain_id=1")
+            .execute(&database.app_pool)
+            .await?;
+        let new_customer = seed_account(&database.app_pool, product.id, "checkpoint").await?;
+        let new = create_lock(&database, &quotes, &product, &new_customer, &route).await?;
+        for (address_id, start, through) in [
+            (before_cursor.address_id, 1, 0),
+            (new.address_id, 2001, 2000),
+        ] {
+            let boundary: (i64, Option<i64>, bool, Option<i64>) = sqlx::query_as(
+                "SELECT created_block,dual_covered_through,backfilled,backfilled_through \
+                 FROM addresses WHERE id=$1",
+            )
+            .bind(address_id)
+            .fetch_one(&database.app_pool)
+            .await?;
+            ensure!(
+                boundary == (start, Some(through), true, Some(through)),
+                "{boundary:?}"
+            );
         }
         Ok(())
     }

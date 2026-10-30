@@ -201,6 +201,7 @@ fn runbook(alert: &str, tags: &BTreeMap<String, String>) -> &'static str {
         "TopupRpcUnresolvedDepositStock" | "TopupRpcUnresolvedDepositEntries" => {
             "deposit-reversed.md"
         }
+        "TopupCustodyOpeningUnavailable" => "rpc-health.md#custody-opening-unavailable",
         "TopupCustodyCoverageIncomplete" => "rpc-health.md#incomplete-custody-coverage",
         "TopupRpcDisagreement" | "TopupSanctionsHold" => "provider-disagreement.md",
         "TopupDepositReversalUnproven" => "deposit-reversed.md",
@@ -819,6 +820,7 @@ mod tests {
         };
         for (alert, pairs) in [
             ("TopupCustodyCoverageIncomplete", &[][..]),
+            ("TopupCustodyOpeningUnavailable", &[][..]),
             ("TopupDepositStateAgeExceeded", &[("state", "detected")][..]),
             ("TopupDepositStateAgeExceeded", &[("state", "confirmed")]),
             (

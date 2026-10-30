@@ -128,7 +128,9 @@ pub async fn frozen_chains(pool: &PgPool, routes: &RouteSet) -> Result<BTreeSet<
 pub(crate) struct ForwarderLedger {
     pub(crate) address_id: Uuid,
     pub(crate) address: Address,
-    /// Deposits at or below the block that are not reversed, whatever their state.
+    /// Independently verified balance immediately before discovery starts.
+    pub(crate) opening: U256,
+    /// Deposits within discovery at or below the pin that are not reversed, whatever their state.
     pub(crate) deposits: U256,
     /// Finalized `Flushed` amounts at or below the block.
     pub(crate) flushed: U256,
@@ -153,22 +155,26 @@ pub(crate) async fn forwarder_ledgers(
             SELECT d.address_id,
                    SUM(d.amount_atomic) FILTER (WHERE d.state <> 'reversed') AS total,
                    bool_or(d.final_at IS NULL AND d.state <> 'reversed') AS unsettled
-            FROM deposits d
-            WHERE d.chain_id = $1 AND d.asset_contract = $2 AND d.block_number <= $3
+            FROM deposits d JOIN addresses owner ON owner.id=d.address_id
+            WHERE d.block_number >= owner.created_block AND d.chain_id = $1 AND d.asset_contract = $2 AND d.block_number <= $3
             GROUP BY d.address_id
         ), flushed_totals AS (
             SELECT f.address_id, SUM(f.amount_atomic) AS total
-            FROM flushed f
-            WHERE f.chain_id = $1 AND f.token = $2 AND f.block_number <= $3
+            FROM flushed f JOIN addresses owner ON owner.id=f.address_id
+            WHERE f.block_number >= owner.created_block AND f.chain_id = $1 AND f.token = $2 AND f.block_number <= $3
             GROUP BY f.address_id
         )
         SELECT a.id, a.address,
+               COALESCE(b.amount_atomic, 0)::text AS opening,
                COALESCE(d.total, 0)::text AS deposits,
                COALESCE(f.total, 0)::text AS flushed
         FROM addresses a
         LEFT JOIN deposit_totals d ON d.address_id = a.id
         LEFT JOIN flushed_totals f ON f.address_id = a.id
+        LEFT JOIN custody_opening_balances b
+          ON b.address_id=a.id AND b.token=$2 AND b.start_block=a.created_block
         WHERE a.chain_id = $1 AND a.backfilled AND a.dual_covered_through = $4
+          AND a.created_block <= $3 AND (a.created_block=0 OR b.address_id IS NOT NULL)
           AND NOT COALESCE(d.unsettled, false)
         ORDER BY a.id
         "#,
@@ -189,11 +195,35 @@ pub(crate) async fn forwarder_ledgers(
                 address: address
                     .parse()
                     .map_err(|_| ReconciliationError::Invariant("stored address is invalid"))?,
+                opening: parse_u256(&row.try_get::<String, _>("opening")?)?,
                 deposits: parse_u256(&deposits)?,
                 flushed: parse_u256(&flushed)?,
             })
         })
         .collect()
+}
+
+/// Counts eligible forwarders whose opening proof for the current discovery start is absent.
+pub(crate) async fn missing_openings(
+    pool: &PgPool,
+    chain: u64,
+    token: Address,
+    block: u64,
+    coverage: u64,
+) -> Result<i64, ReconciliationError> {
+    Ok(sqlx::query_scalar(
+        "SELECT count(*) FROM addresses a \
+         WHERE a.chain_id=$1 AND a.backfilled AND a.dual_covered_through=$4 \
+         AND a.created_block>0 AND a.created_block <= $3 \
+         AND NOT EXISTS (SELECT 1 FROM custody_opening_balances b \
+             WHERE b.address_id=a.id AND b.token=$2 AND b.start_block=a.created_block)",
+    )
+    .bind(db_i64(chain)?)
+    .bind(format!("{token:#x}"))
+    .bind(db_i64(block)?)
+    .bind(db_i64(coverage)?)
+    .fetch_one(pool)
+    .await?)
 }
 
 /// Counts caught-up forwarders excluded by a deposit older than the custody alert bound.
@@ -210,6 +240,7 @@ pub(crate) async fn overdue_unsettled_forwarders(
         SELECT count(DISTINCT a.id)
         FROM addresses a JOIN deposits d ON d.address_id = a.id
         WHERE a.chain_id = $1 AND a.backfilled AND a.dual_covered_through = $4
+          AND d.block_number >= a.created_block AND a.created_block <= $3
           AND d.chain_id = $1 AND d.asset_contract = $2 AND d.block_number <= $3
           AND d.final_at IS NULL AND d.state <> 'reversed'
           AND d.created_at <= now() - $5::bigint * interval '1 second'
@@ -339,7 +370,7 @@ fn parse_u256(value: &str) -> Result<U256, ReconciliationError> {
         .parse()
         .map_err(|_| ReconciliationError::Invariant("stored atomic total is invalid"))
 }
-fn db_i64(value: u64) -> Result<i64, ReconciliationError> {
+pub(super) fn db_i64(value: u64) -> Result<i64, ReconciliationError> {
     i64::try_from(value)
         .map_err(|_| ReconciliationError::Invariant("value exceeds PostgreSQL bigint"))
 }

@@ -342,6 +342,8 @@ async fn restore_check_rejects_failed_rpc_with_current_schema_and_fresh_heartbea
             ensure!(report.wal_bytes_behind == Some(0));
             ensure!(report.expected_lsn.as_deref() == Some(heartbeat.wal_lsn.as_str()));
             ensure!(report.row_counts.get("heartbeat") == Some(&1));
+            ensure!(report.row_counts.get("custody_opening_balances") == Some(&0));
+            ensure!(report.row_counts.get("custody_opening_jobs") == Some(&0));
             ensure!(report.post_restore_reconciliation.status == "incomplete");
             ensure!(
                 report.post_restore_reconciliation.failed_checks == vec![CheckName::CustodyBalance]
@@ -767,6 +769,8 @@ const DOCUMENTED_GRANTS: &[(&str, &[&str])] = &[
     ("price_twap_observations", &["SELECT", "INSERT"]),
     ("chain_checkpoints", &["SELECT", "INSERT", "UPDATE"]),
     ("chain_coverage", &["SELECT", "INSERT", "UPDATE"]),
+    ("custody_opening_balances", &["SELECT", "INSERT"]),
+    ("custody_opening_jobs", &["SELECT", "INSERT"]),
     ("daily_budgets", &["SELECT", "INSERT", "UPDATE"]),
     ("accounts", OPERATIONAL),
     ("payment_settings_revisions", &["SELECT", "INSERT"]),
@@ -844,6 +848,7 @@ async fn application_role_privileges_match_the_documented_grants() -> Result<()>
                 }
             }
             for (table, columns) in [
+                ("custody_opening_jobs", vec![("attempts",true),("next_attempt_at",true),("start_block",false),("created_at",false)]),
                 ("rpc_member_validations", vec![("validated_at",true),("genesis_hash",false)]),
                 ("rpc_chain_state", vec![("frozen",true),("awaiting_anchor",true),("epoch",false),("recovery_pending",false)]),
                 ("rpc_window_reviews", vec![("reviewed_at",true),("reviewed_by",true),("replayed_at",true),("epoch",false),("request",false),("end_hash",false)]),

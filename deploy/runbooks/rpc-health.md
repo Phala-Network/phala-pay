@@ -121,3 +121,32 @@ crossing may take one further sweep interval to alert.
    after finality recovers, or wait for the next scheduled sweep. Confirm the alert no longer
    recurs. This event-only alert remains in the alerts API until an operator resolves it through
    the [alerts procedure](README.md#manage-alerts).
+
+## Custody opening unavailable
+
+`TopupCustodyOpeningUnavailable` means an issued forwarder lacks an independently verified
+opening balance at its inclusive discovery start minus one block. Alerts group only by chain and
+route and report `excluded_forwarders`; `reason` is a stable category, without provider URLs.
+Custody fails/incompletes for those forwarders and continues comparing eligible ones. This does
+not by itself freeze the whole chain or prove a discrepancy. A genuine post-issuance mismatch
+still freezes the chain. The normal custody detection target requires opening evidence.
+
+New issuance starts one block after the current agreed checkpoint, so the background capture
+normally reads a recent pin within a minute. Existing addresses, later-added tokens and restored
+addresses with an earlier discovery boundary may require older state. Both providers must serve
+that exact historical pin; a free endpoint returning recent state does not establish this.
+If the token or Multicall3 was not deployed at that pin, capture also remains incomplete and
+needs Engineering review; an absent or undecodable balance result is never assumed to be zero.
+
+1. Inspect the alert's chain, route, count and the reconciler's failed custody check in the daily
+   report. Restore both providers' availability and historical state support for the original
+   pin, using the [RPC health checks](#first-steps). If a pin remains unavailable, escalate to
+   Engineering for independent providers that retain that state; leave custody incomplete.
+2. Allow the durable jobs to retry (six-hour failure backoff), or run `topup reconcile --config FILE` with the
+   deployment's normal config and database environment after provider repair for an immediate retry.
+   Jobs sharing a pin are batched; repeatedly failing historical jobs do not precede new jobs.
+   Never insert or edit opening amounts, change discovery start to avoid a failure, use a
+   current balance, or treat a missing opening as zero. Binary rollback preserves the proofs.
+3. Confirm the custody check completes and the alert stops recurring. Resolve this event-only
+   alert through the [alerts procedure](README.md#manage-alerts). A later-added route includes
+   already recorded unsupported transfers; it must not establish an activation-time baseline.

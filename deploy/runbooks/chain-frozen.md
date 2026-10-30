@@ -8,7 +8,7 @@ check-ins because the frozen chain's scanner has paused.
 
 **Impact:** the service can no longer vouch for its ledger on the chain: either the factory's
 `addressOf(treasury, salt)` disagrees with a stored address (`address_derivation`), so it cannot
-prove where deposits go, or a forwarder's finalized balance is not its final deposits minus its
+prove where deposits go, or a forwarder's finalized balance is not its immutable opening plus final deposits minus its
 finalized `Flushed` amounts (`custody_balance`), so a transfer or sweep is missing from, or wrong
 in, the ledger. Until the freeze is lifted, the chain's deposits wait (nothing is credited), its
 scanner (fast discovery and dual finalized coverage) stops, and address issuance and quote creation answer `400 chain_frozen`. Other chains
@@ -19,7 +19,7 @@ keep running; credited facts are never rolled back.
 1. Read `check` and `subjects` from the Sentry event: for `address_derivation`, `chain_id`,
    `address_id`, `salt`, and `treasury`, with `expected.address` (the factory's) and
    `observed.address` (the stored one); for `custody_balance`, `address_id`, `token`, and `block`,
-   with `expected` (`deposits_atomic`, `flushed_atomic`) and `observed.balance_atomic`.
+   with `expected` (`opening_atomic`, `deposits_atomic`, `flushed_atomic`) and `observed.balance_atomic`.
 2. For `address_derivation`, ask the factory through both providers and check the contracts
    against the attested route:
 
@@ -62,7 +62,9 @@ keep running; credited facts are never rolled back.
 - Providers disagree about `addressOf` or the balance: [provider disagreement](provider-disagreement.md) first.
 - Factory or implementation differs from the route: configuration or deployment incident; engage
   Security and Finance.
-- `custody_balance`: compare the chain's `Transfer` logs to the forwarder and the factory's
+- `custody_balance`: include the immutable opening at `created_block-1`; deposits and flushes
+  contribute only from `created_block` through the finding's pin. Never refresh the opening to
+  absorb a discrepancy. Compare the chain's `Transfer` logs to the forwarder and the factory's
   `Flushed` logs for it with the deposit view (`admin GET /v1/admin/deposits/{id}`) of each of its
   deposits. Dual coverage records an omitted transfer after both sources agree; a
   fee-on-transfer or rebasing token, or a ledger row that disagrees with the chain, is an

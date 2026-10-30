@@ -36,6 +36,12 @@ const CHAIN_ID: u64 = 31_337;
 #[derive(Default)]
 struct MockChain {
     finalized: AtomicU64,
+    opening_header: Mutex<Option<B256>>,
+    fail_opening_header: AtomicBool,
+    fail_opening_balances: AtomicBool,
+    opening_balances: Mutex<BTreeMap<(u64, Address), U256>>,
+    opening_reads: Mutex<Vec<(B256, Vec<Address>)>>,
+    header_reads: Mutex<Vec<u64>>,
     balance_delay: StdDuration,
     balance_started: Notify,
     fail_balances: AtomicBool,
@@ -54,6 +60,20 @@ impl MockChain {
 
 #[async_trait]
 impl ReconciliationChain for MockChain {
+    async fn canonical_header(&self, number: u64) -> Result<B256, ReconciliationError> {
+        self.header_reads.lock().unwrap().push(number);
+        if self.fail_opening_header.load(Ordering::SeqCst) {
+            return Err(ReconciliationError::Chain(
+                "historical state unavailable".into(),
+            ));
+        }
+        Ok(self
+            .opening_header
+            .lock()
+            .unwrap()
+            .unwrap_or(B256::from(U256::from(number))))
+    }
+
     async fn token_balances_pinned(
         &self,
         _token: Address,
@@ -63,9 +83,27 @@ impl ReconciliationChain for MockChain {
         self.balance_started.notify_one();
         tokio::time::sleep(self.balance_delay).await;
         if hash != B256::repeat_byte(24) {
-            return Err(ReconciliationError::Invariant(
-                "fixture custody pin changed",
-            ));
+            self.opening_reads
+                .lock()
+                .unwrap()
+                .push((hash, addresses.to_vec()));
+            if self.fail_opening_balances.load(Ordering::SeqCst) {
+                return Err(ReconciliationError::Chain(
+                    "historical state unavailable".into(),
+                ));
+            }
+            let number = u64::try_from(U256::from_be_bytes(hash.0))
+                .map_err(|_| ReconciliationError::Invariant("fixture opening pin changed"))?;
+            let balances = self.opening_balances.lock().unwrap();
+            return Ok(addresses
+                .iter()
+                .map(|address| {
+                    balances
+                        .get(&(number, *address))
+                        .copied()
+                        .unwrap_or(U256::ZERO)
+                })
+                .collect());
         }
         let block = self.finalized.load(Ordering::SeqCst).min(140);
         self.balance_reads
@@ -245,6 +283,206 @@ async fn checks_are_independent_and_a_failed_round_recovers() -> Result<()> {
         chain.fail_balances.store(false, Ordering::SeqCst);
         let recovered = reconciler.run_once().await?;
         ensure!(recovered.succeeded());
+        Ok(())
+    })
+    .await
+}
+
+/// Pre-issuance state is an immutable opening, while later unexplained changes still freeze.
+#[tokio::test]
+async fn custody_opening_accepts_prefunding_and_detects_post_issuance_anomalies() -> Result<()> {
+    with_database(|pool| async move {
+        let route = route()?;
+        let seed = seed_identity(&pool, &route, 121).await?;
+        sqlx::query("UPDATE addresses SET created_block=101 WHERE id=$1")
+            .bind(seed.address_id).execute(&pool).await?;
+        // Earlier ledger rows may exist after restore/reissue; the opening already includes them.
+        seed_deposit(&pool, &route, &seed,
+            DepositSeed::new(120, DepositState::Credited).block(90).amount(19)).await?;
+        seed_flushed(&pool, &route, &seed, 95, 120, 2).await?;
+        seed_deposit(&pool, &route, &seed,
+            DepositSeed::new(121, DepositState::Credited).block(120).amount(5)).await?;
+        seed_flushed(&pool, &route, &seed, 130, 121, 3).await?;
+        scanned_through(&pool, 140).await?;
+        let chain = Arc::new(MockChain::at(150));
+        chain.opening_balances.lock().unwrap().insert((100, seed.address), U256::from(7));
+        chain.balances.lock().unwrap().insert(seed.address, U256::from(9));
+        let reconciler = reconciler(&pool, route.clone(), chain.clone())?;
+        ensure!(reconciler.check(CheckName::CustodyBalance).await?.is_empty());
+        ensure!(!topup::reconciler::chain_is_blocked(&pool, CHAIN_ID).await?);
+        let evidence: (i64, String, String) = sqlx::query_as(
+            "SELECT start_block,block_hash,amount_atomic::text FROM custody_opening_balances WHERE address_id=$1",
+        ).bind(seed.address_id).fetch_one(&pool).await?;
+        ensure!(evidence == (101, format!("{:#x}", B256::from(U256::from(100))), "7".into()));
+        ensure!(chain.header_reads.lock().unwrap().as_slice() == [100, 100]);
+        ensure!(chain.opening_reads.lock().unwrap().len() == 2);
+        // A later-added token captures its state at the same original pin, never at activation.
+        let mut later = route.clone();
+        later.route = "later-opening-token".into();
+        later.asset.contract = Address::repeat_byte(201);
+        chain.balances.lock().unwrap().insert(seed.address, U256::from(7));
+        let added = self::reconciler(&pool, later, chain.clone())?;
+        ensure!(added.check(CheckName::CustodyBalance).await?.is_empty());
+        ensure!(count(&pool, "SELECT count(*) FROM custody_opening_balances").await? == 2);
+        ensure!(chain.header_reads.lock().unwrap().as_slice() == [100, 100, 100, 100]);
+        // A restart never refreshes the opening to absorb a new anomaly.
+        let restarted = self::reconciler(&pool, route, chain.clone())?;
+        chain.balances.lock().unwrap().insert(seed.address, U256::from(10));
+        let findings = restarted.check(CheckName::CustodyBalance).await?;
+        ensure!(findings.len() == 1 && findings[0].expected["opening_atomic"] == "7");
+        ensure!(topup::reconciler::chain_is_blocked(&pool, CHAIN_ID).await?);
+        ensure!(chain.opening_reads.lock().unwrap().len() == 4);
+        ensure!(sqlx::query("UPDATE custody_opening_balances SET amount_atomic=8").execute(&pool).await.is_err());
+        ensure!(sqlx::query("DELETE FROM custody_opening_balances").execute(&pool).await.is_err());
+        Ok(())
+    }).await
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn custody_opening_disagreement_and_unavailability_fail_closed_without_baselining_today()
+-> Result<()> {
+    with_database(|pool| async move {
+        let route = route()?;
+        let seed = seed_identity(&pool, &route, 122).await?;
+        sqlx::query("UPDATE addresses SET created_block=101 WHERE id=$1")
+            .bind(seed.address_id)
+            .execute(&pool)
+            .await?;
+        scanned_through(&pool, 140).await?;
+        let read = Arc::new(MockChain::at(150));
+        let verify = Arc::new(MockChain::at(150));
+        let reconciler =
+            reconciler(&pool, route, read.clone())?.with_verifiers(BTreeMap::from([(
+                CHAIN_ID,
+                verify.clone() as Arc<dyn ReconciliationChain>,
+            )]));
+        read.balances
+            .lock()
+            .unwrap()
+            .insert(seed.address, U256::from(999));
+        read.opening_balances
+            .lock()
+            .unwrap()
+            .insert((100, seed.address), U256::from(7));
+        verify
+            .opening_balances
+            .lock()
+            .unwrap()
+            .insert((100, seed.address), U256::from(8));
+        for failure in [
+            "balance_disagreement",
+            "header_disagreement",
+            "header_unavailable",
+            "state_unavailable",
+        ] {
+            *verify.opening_header.lock().unwrap() =
+                (failure == "header_disagreement").then_some(B256::ZERO);
+            verify
+                .fail_opening_header
+                .store(failure == "header_unavailable", Ordering::SeqCst);
+            verify
+                .fail_opening_balances
+                .store(failure == "state_unavailable", Ordering::SeqCst);
+            ensure!(
+                reconciler.check(CheckName::CustodyBalance).await.is_err(),
+                "{failure}"
+            );
+            ensure!(count(&pool, "SELECT count(*) FROM custody_opening_balances").await? == 0);
+            ensure!(read.balance_reads.lock().unwrap().is_empty());
+            ensure!(!topup::reconciler::chain_is_blocked(&pool, CHAIN_ID).await?);
+        }
+        ensure!(logs_contain("TopupCustodyOpeningUnavailable"));
+        ensure!(logs_contain("excluded_forwarders=1"));
+        ensure!(logs_contain("tags.chain_id=31337") && logs_contain("tags.route="));
+        // Manual reconciliation retries immediately after a repair, despite the durable backoff.
+        verify.fail_opening_balances.store(false, Ordering::SeqCst);
+        verify
+            .opening_balances
+            .lock()
+            .unwrap()
+            .insert((100, seed.address), U256::from(7));
+        read.balances
+            .lock()
+            .unwrap()
+            .insert(seed.address, U256::from(7));
+        verify
+            .balances
+            .lock()
+            .unwrap()
+            .insert(seed.address, U256::from(7));
+        ensure!(
+            reconciler
+                .check(CheckName::CustodyBalance)
+                .await?
+                .is_empty()
+        );
+        ensure!(count(&pool, "SELECT count(*) FROM custody_opening_balances").await? == 1);
+        // Lowering discovery start invalidates only this address's old proof, never reuses it.
+        sqlx::query("UPDATE addresses SET created_block=91 WHERE id=$1")
+            .bind(seed.address_id)
+            .execute(&pool)
+            .await?;
+        scanned_through(&pool, 140).await?;
+        verify.fail_opening_header.store(true, Ordering::SeqCst);
+        ensure!(reconciler.check(CheckName::CustodyBalance).await.is_err());
+        ensure!(count(&pool, "SELECT count(*) FROM custody_opening_balances").await? == 1);
+        Ok(())
+    })
+    .await
+}
+
+/// The asynchronous worker groups addresses sharing an issuance checkpoint into one vector.
+#[tokio::test]
+async fn custody_opening_background_capture_batches_addresses_and_obeys_durable_backoff()
+-> Result<()> {
+    with_database(|pool| async move {
+        let route = route()?;
+        let first = seed_identity(&pool, &route, 123).await?;
+        let second = seed_identity(&pool, &route, 124).await?;
+        sqlx::query("UPDATE addresses SET created_block=101 WHERE id=ANY($1)")
+            .bind([first.address_id, second.address_id].as_slice())
+            .execute(&pool)
+            .await?;
+        scanned_through(&pool, 140).await?;
+        let chain = Arc::new(MockChain::at(150));
+        let reconciler = reconciler(&pool, route, chain.clone())?;
+        chain.fail_opening_balances.store(true, Ordering::SeqCst);
+        for _ in 0..2 {
+            let stop = CancellationToken::new();
+            let task = reconciler.run_opening_loop(stop.clone());
+            let wait = async {
+                tokio::time::timeout(StdDuration::from_secs(10), async {
+                    while count(
+                        &pool,
+                        "SELECT count(*) FROM custody_opening_jobs WHERE attempts=1",
+                    )
+                    .await?
+                        != 2
+                    {
+                        tokio::task::yield_now().await;
+                    }
+                    Ok::<_, anyhow::Error>(())
+                })
+                .await??;
+                tokio::time::sleep(StdDuration::from_millis(20)).await;
+                stop.cancel();
+                Ok::<_, anyhow::Error>(())
+            };
+            let (_, result) = tokio::join!(task, wait);
+            result?;
+        }
+        let reads = chain.opening_reads.lock().unwrap();
+        ensure!(
+            reads.len() == 1,
+            "restart ignored six-hour backoff: {reads:?}"
+        );
+        for (_, addresses) in reads.iter() {
+            ensure!(
+                addresses.iter().copied().collect::<BTreeSet<_>>()
+                    == BTreeSet::from([first.address, second.address])
+            );
+        }
         Ok(())
     })
     .await
