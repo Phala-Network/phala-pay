@@ -26,6 +26,15 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   aggregate on each endpoint at finalized and historical canonical pins and fails closed on
   provider rejection, failed subcalls or incomplete results.
 
+### Fixed
+
+- Custody reconciliation now checks every caught-up forwarder with settled deposits, including
+  idle and swept-to-zero balances, in a full sweep on both providers. Set-based SQL replaces
+  per-address coverage queries and the one-page-per-run cursor. Scheduled sweeps default to
+  every six hours (`topup run --custody-interval-s`); detection targets about 7 h 10 min after
+  finality plus sweep runtime with healthy endpoints, instead of depending on address count. `TopupCustodyCoverageIncomplete` alerts per chain/route
+  when an excluding unsettled deposit reaches the configured age (default 24 h).
+
 ## [0.13.3] - 2026-10-29
 
 ### Added

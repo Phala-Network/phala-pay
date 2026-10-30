@@ -257,8 +257,8 @@ async fn custody_is_checked_per_forwarder_at_the_indexed_finalized_block() -> Re
         let token = route.asset.contract;
         let swept = seed_identity(&pool, &route, 71).await?;
         let unsettled = seed_identity(&pool, &route, 72).await?;
-        let _idle = seed_identity(&pool, &route, 73).await?;
-        // Swept to zero by its ledger: its balance is not read.
+        let idle = seed_identity(&pool, &route, 73).await?;
+        // Swept to zero by its ledger: still checked for an unexpected balance.
         let emptied = seed_identity(&pool, &route, 74).await?;
         seed_deposit(
             &pool,
@@ -337,8 +337,8 @@ async fn custody_is_checked_per_forwarder_at_the_indexed_finalized_block() -> Re
         ensure!(chain.balance_reads.lock().unwrap().is_empty());
 
         // The scanner lags the finalized head: the check reads at the scanner's block, where every
-        // transfer and factory event is indexed, and only forwarders whose settled ledger holds
-        // unswept funds.
+        // transfer and factory event is indexed, including idle and emptied forwarders.
+        // A forwarder with an unsettled deposit is deferred until finality resolves it.
         scanned_through(&pool, 140).await?;
         // Finality advances independently beyond coverage. This distinct hash is deliberately
         // rejected by the chain fixture: custody at it would compare unindexed state.
@@ -358,10 +358,34 @@ async fn custody_is_checked_per_forwarder_at_the_indexed_finalized_block() -> Re
                 .await?
                 .is_empty()
         );
+        let expected = BTreeSet::from([swept.address, idle.address, emptied.address]);
+        ensure!(chain.balance_reads.lock().unwrap().len() == 2);
         ensure!(
-            chain.balance_reads.lock().unwrap().as_slice()
-                == [(140, vec![swept.address]), (140, vec![swept.address])]
+            chain
+                .balance_reads
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|(block, addresses)| *block == 140
+                    && addresses.iter().copied().collect::<BTreeSet<_>>() == expected)
         );
+        // The excluded forwarder joins the next sweep as soon as its deposit settles.
+        sqlx::query("UPDATE deposits SET final_at = now() WHERE id = $1")
+            .bind(pending)
+            .execute(&pool)
+            .await?;
+        chain
+            .balances
+            .lock()
+            .unwrap()
+            .insert(unsettled.address, U256::from(700));
+        ensure!(
+            reconciler
+                .check(CheckName::CustodyBalance)
+                .await?
+                .is_empty()
+        );
+        ensure!(chain.balance_reads.lock().unwrap().last().unwrap().1.len() == 4);
         ensure!(
             frozen_chains(&pool, &*route_set(route.clone())?)
                 .await?
@@ -388,6 +412,199 @@ async fn custody_is_checked_per_forwarder_at_the_indexed_finalized_block() -> Re
         .fetch_one(&pool)
         .await?;
         ensure!(block == "custody_balance");
+        // Both an address with no deposits and one swept to zero must detect missing ledger funds.
+        chain.balances.lock().unwrap().extend([
+            (swept.address, U256::from(600)),
+            (idle.address, U256::from(7)),
+            (emptied.address, U256::from(8)),
+        ]);
+        let findings = reconciler.check(CheckName::CustodyBalance).await?;
+        ensure!(findings.len() == 2);
+        for (address, deposits, flushed, balance) in [
+            (idle.address_id, "0", "0", "7"),
+            (emptied.address_id, "250", "250", "8"),
+        ] {
+            let finding = findings
+                .iter()
+                .find(|finding| finding.subjects["address_id"] == address.to_string())
+                .context("expected-zero forwarder discrepancy was skipped")?;
+            ensure!(finding.expected["deposits_atomic"] == deposits);
+            ensure!(finding.expected["flushed_atomic"] == flushed);
+            ensure!(finding.observed["balance_atomic"] == balance);
+        }
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+async fn custody_sweep_covers_all_forwarders_and_batches_each_route_on_both_providers() -> Result<()>
+{
+    use alloy::providers::bindings::IMulticall3::{Result as Call3Result, aggregate3Call};
+    use alloy::sol_types::SolCall;
+    use alloy_primitives::Bytes;
+    use axum::extract::{Path, State};
+    use axum::{Json, Router, routing::post};
+    use serde_json::Value;
+    use topup_adapters::chain::evm::{EvmClient, FinalizedReader, MULTICALL_CHUNK, MULTICALL3};
+
+    alloy::sol! {
+        function balanceOf(address owner) external view returns (uint256);
+    }
+    type Calls = Arc<Mutex<Vec<(String, Address, Vec<Address>)>>>;
+
+    async fn answer(
+        Path(provider): Path<String>,
+        State(calls): State<Calls>,
+        Json(request): Json<Value>,
+    ) -> Json<Value> {
+        assert_eq!(request["method"], "eth_call");
+        assert_eq!(request["params"][0]["to"], json!(MULTICALL3));
+        assert_eq!(
+            request["params"][1],
+            json!({
+                "blockHash": B256::repeat_byte(24), "requireCanonical": true,
+            })
+        );
+        let transaction = &request["params"][0];
+        let input: Bytes = transaction
+            .get("input")
+            .or_else(|| transaction.get("data"))
+            .and_then(Value::as_str)
+            .unwrap()
+            .parse()
+            .unwrap();
+        let aggregate = aggregate3Call::abi_decode(&input).unwrap();
+        let token = aggregate.calls[0].target;
+        assert!(
+            aggregate
+                .calls
+                .iter()
+                .all(|call| !call.allowFailure && call.target == token)
+        );
+        let addresses = aggregate
+            .calls
+            .iter()
+            .map(|call| balanceOfCall::abi_decode(&call.callData).unwrap().owner)
+            .collect();
+        calls.lock().unwrap().push((provider, token, addresses));
+        let results = aggregate
+            .calls
+            .iter()
+            .map(|_| Call3Result {
+                success: true,
+                returnData: Bytes::from(U256::ZERO.to_be_bytes::<32>()),
+            })
+            .collect::<Vec<_>>();
+        Json(json!({"jsonrpc": "2.0", "id": request["id"],
+            "result": Bytes::from(aggregate3Call::abi_encode_returns(&results))}))
+    }
+
+    with_database(|pool| async move {
+        let first = route()?;
+        let seed = seed_identity(&pool, &first, 1).await?;
+        // More than one aggregate, plus an address deliberately left behind coverage.
+        let count = MULTICALL_CHUNK + 1;
+        sqlx::query("INSERT INTO quotes SELECT copy.* FROM quotes q CROSS JOIN generate_series(1,$1::bigint) g CROSS JOIN LATERAL jsonb_populate_record(NULL::quotes,to_jsonb(q)||jsonb_build_object('id',lpad(to_hex(g),32,'0')::uuid,'idempotency_key',NULL,'client_secret_hash',NULL)) copy WHERE q.id=(SELECT quote_id FROM addresses WHERE id=$2)")
+            .bind(i64::try_from(count)?).bind(seed.address_id).execute(&pool).await?;
+        sqlx::query("INSERT INTO addresses SELECT copy.* FROM addresses a CROSS JOIN generate_series(1,$1::bigint) g CROSS JOIN LATERAL jsonb_populate_record(NULL::addresses,to_jsonb(a)||jsonb_build_object('id',lpad(to_hex(g),32,'0')::uuid,'quote_id',lpad(to_hex(g),32,'0')::uuid,'address','0x'||lpad(to_hex(g),40,'0'),'salt','0x'||lpad(to_hex(g),64,'0'))) copy WHERE a.id=$2")
+            .bind(i64::try_from(count)?).bind(seed.address_id).execute(&pool).await?;
+        scanned_through(&pool, 140).await?;
+        sqlx::query("UPDATE addresses SET dual_covered_through=NULL WHERE id=$1")
+            .bind(seed.address_id).execute(&pool).await?;
+        // A stale cursor from the old implementation must never skip the first page.
+        sqlx::query("INSERT INTO reconciliation_work_cursors(check_name,chain_id,last_id) VALUES($1,$2,$3)")
+            .bind(format!("custody:{:#x}", first.asset.contract))
+            .bind(i64::try_from(CHAIN_ID)?).bind(Uuid::from_u128(500))
+            .execute(&pool).await?;
+        let mut second = first.clone();
+        second.route = "second-custody-token".into();
+        second.asset.contract = Address::repeat_byte(201);
+        let tokens = [first.asset.contract, second.asset.contract];
+        let routes = Arc::new(topup::routes::RouteSet::new(vec![first, second]).map_err(anyhow::Error::msg)?);
+        let calls = Calls::default();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let cancellation = CancellationToken::new();
+        let node = Router::new().route("/{provider}", post(answer)).with_state(calls.clone());
+        let server = tokio::spawn(axum::serve(listener, node)
+            .with_graceful_shutdown(cancellation.clone().cancelled_owned()).into_future());
+        let read = Arc::new(FinalizedReader::new(Arc::new(EvmClient::new(&format!("http://{address}/read"))?)));
+        let verify = Arc::new(FinalizedReader::new(Arc::new(EvmClient::new(&format!("http://{address}/verify"))?)));
+        let reconciler = Reconciler::with_dependencies(pool.clone(), routes,
+            BTreeMap::from([(CHAIN_ID, read as Arc<dyn ReconciliationChain>)]))
+            .with_verifiers(BTreeMap::from([(CHAIN_ID, verify as Arc<dyn ReconciliationChain>)]));
+        let result = reconciler.check(CheckName::CustodyBalance).await;
+        cancellation.cancel();
+        server.await??;
+        ensure!(result?.is_empty());
+        let calls = calls.lock().unwrap();
+        ensure!(calls.len() == 2 * tokens.len() * count.div_ceil(MULTICALL_CHUNK));
+        let expected = (1..=count).map(|number| Address::from_word(B256::from(U256::from(number).to_be_bytes::<32>())))
+            .collect::<BTreeSet<_>>();
+        for provider in ["read", "verify"] {
+            for token in tokens {
+                let batches = calls.iter().filter(|(role, asset, _)| role == provider && *asset == token)
+                    .map(|(_, _, addresses)| addresses).collect::<Vec<_>>();
+                ensure!(batches.iter().map(|batch| batch.len()).collect::<Vec<_>>() == [MULTICALL_CHUNK, 1]);
+                ensure!(batches.iter().flat_map(|batch| batch.iter().copied()).collect::<BTreeSet<_>>() == expected);
+            }
+        }
+        Ok(())
+    }).await
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn custody_alerts_on_overdue_unsettled_exclusions_with_a_route_count() -> Result<()> {
+    with_database(|pool| async move {
+        let route = route()?;
+        let first = seed_identity(&pool, &route, 91).await?;
+        let second = seed_identity(&pool, &route, 92).await?;
+        for (address, number) in [(&first, 91), (&second, 92), (&first, 93)] {
+            let deposit = seed_deposit(
+                &pool,
+                &route,
+                address,
+                DepositSeed::new(number, DepositState::Credited).block(100),
+            )
+            .await?;
+            sqlx::query(
+                "UPDATE deposits SET final_at=NULL,created_at=now()-interval '2 hours' WHERE id=$1",
+            )
+            .bind(deposit)
+            .execute(&pool)
+            .await?;
+        }
+        scanned_through(&pool, 140).await?;
+        let chain = Arc::new(MockChain::at(150));
+        let reconciler = reconciler(&pool, route, chain.clone())?;
+        ensure!(
+            reconciler
+                .check(CheckName::CustodyBalance)
+                .await?
+                .is_empty()
+        );
+        ensure!(
+            !logs_contain("TopupCustodyCoverageIncomplete"),
+            "default 24 h bound alerted too early"
+        );
+        let reconciler =
+            reconciler.with_custody_unsettled_alert_after(StdDuration::from_secs(3_600))?;
+        ensure!(
+            reconciler
+                .check(CheckName::CustodyBalance)
+                .await?
+                .is_empty()
+        );
+        ensure!(logs_contain("TopupCustodyCoverageIncomplete"));
+        ensure!(
+            logs_contain("excluded_forwarders=2"),
+            "multiple deposits duplicated a forwarder"
+        );
+        ensure!(logs_contain("unsettled_after_s=3600"));
+        ensure!(logs_contain("tags.chain_id=31337") && logs_contain("tags.route="));
+        ensure!(chain.balance_reads.lock().unwrap().is_empty());
         Ok(())
     })
     .await
@@ -820,7 +1037,17 @@ async fn loop_respects_cancellation() -> Result<()> {
 }
 
 #[tokio::test]
-async fn stalled_checkpoint_still_runs_dual_custody_every_hour() -> Result<()> {
+async fn stalled_checkpoint_still_runs_full_custody_at_the_configured_interval() -> Result<()> {
+    for interval in [
+        topup::reconciler::DEFAULT_CUSTODY_INTERVAL,
+        StdDuration::from_secs(3_600),
+    ] {
+        custody_with_stalled_checkpoint(interval).await?;
+    }
+    Ok(())
+}
+
+async fn custody_with_stalled_checkpoint(interval: StdDuration) -> Result<()> {
     with_database(|pool| async move {
         let route = route()?;
         let seed = seed_identity(&pool, &route, 86).await?;
@@ -829,7 +1056,7 @@ async fn stalled_checkpoint_still_runs_dual_custody_every_hour() -> Result<()> {
         scanned_through(&pool, 140).await?;
         let chain = Arc::new(MockChain::at(150));
         chain.balances.lock().unwrap().insert(seed.address, U256::from(250));
-        let reconciler = Arc::new(reconciler(&pool, route, chain.clone())?);
+        let reconciler = Arc::new(reconciler(&pool, route, chain.clone())?.with_custody_interval(interval)?);
         let heads = topup::scanner::FinalizedHeads::default();
         heads.publish(CHAIN_ID, FinalizedHead { number: 140, time: Utc::now() });
         let cancellation = CancellationToken::new();
@@ -842,23 +1069,23 @@ async fn stalled_checkpoint_still_runs_dual_custody_every_hour() -> Result<()> {
         let task = tokio::spawn({
             let reconciler = reconciler.clone();
             let cancellation = cancellation.clone();
-            async move { reconciler.run_loop(StdDuration::from_secs(7_200), heads, cancellation).await; }
+            async move { reconciler.run_loop(interval * 2, heads, cancellation).await; }
         });
         tokio::time::advance(StdDuration::from_millis(1)).await;
         let result = async {
-            for hour in 0..=2 {
-                let expected = (hour + 1) * 2;
+            for sweep in 0..=2 {
+                let expected = (sweep + 1) * 2;
                 let deadline = std::time::Instant::now() + StdDuration::from_secs(5);
                 loop {
                     let reads = chain.balance_reads.lock().unwrap().len();
                     let complete: bool = sqlx::query_scalar(
-                        "SELECT EXISTS(SELECT 1 FROM reconciliation_work_cursors WHERE chain_id=$1 AND check_name LIKE 'custody:%' AND last_id IS NULL) AND NOT EXISTS(SELECT 1 FROM reconciliation_work_cursors WHERE last_id IS NOT NULL)",
-                    ).bind(i64::try_from(CHAIN_ID)?).fetch_one(&pool).await?;
+                        "SELECT NOT EXISTS(SELECT 1 FROM reconciliation_work_cursors WHERE last_id IS NOT NULL)",
+                    ).fetch_one(&pool).await?;
                     if reads == expected && complete { break; }
                     ensure!(std::time::Instant::now() < deadline,
-                        "stalled checkpoint skipped hourly dual custody at hour {hour}: {reads} reads, expected {expected}");
+                        "stalled checkpoint skipped dual custody sweep {sweep}: {reads} reads, expected {expected}");
                     // Poll Tokio's millisecond timer driver without allowing DB I/O to
-                    // auto-advance the paused clock to the next scheduled hour.
+                    // auto-advance the paused clock to the next scheduled sweep.
                     tokio::time::advance(StdDuration::from_millis(1)).await;
                     tokio::task::yield_now().await;
                 }
@@ -866,7 +1093,7 @@ async fn stalled_checkpoint_still_runs_dual_custody_every_hour() -> Result<()> {
                 tokio::task::yield_now().await;
                 ensure!(chain.balance_reads.lock().unwrap().iter().all(|(block,_)| *block == 140),
                     "custody required the checkpoint to advance");
-                if hour < 2 { tokio::time::advance(StdDuration::from_millis(3_600_001)).await; }
+                if sweep < 2 { tokio::time::advance(interval + StdDuration::from_millis(1)).await; }
             }
             Ok::<_,anyhow::Error>(())
         }.await;

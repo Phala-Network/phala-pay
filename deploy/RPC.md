@@ -83,10 +83,12 @@ RPC when both endpoints' contracts are ready and does not perform payment discov
 Candidates remain provisional until both endpoints agree on receipt, transaction, inclusion,
 log contents and position, block time, sender and nonce.
 
-Custody checks every chain/token route on the first reconciliation tick and hourly thereafter,
-at the same canonical hash on both endpoints, no later than complete coverage. A separate
-hourly wake-up keeps custody due when the checkpoint stalls. Manual `reconcile`, post-restore
-checks and restarts run custody immediately and consume the extra-operation reserve.
+Custody sweeps every chain/token route on the first reconciliation tick and every six hours
+thereafter (`topup run --custody-interval-s`, default `21600`). Each sweep reads every caught-up
+forwarder whose deposits at the pin are final or reversed, including idle and swept-to-zero
+forwarders, in 1,000-call Multicall3 aggregates on both endpoints at the same canonical hash,
+no later than complete coverage. An independent timer keeps custody due when the checkpoint
+stalls. Manual `reconcile`, post-restore checks and restarts run custody immediately and consume the extra-operation reserve.
 
 ### Pilot limits and operating modes
 
@@ -142,9 +144,13 @@ chain is caught up and the actual normal range is shorter. An Infura
 on that error. Extra requests must fit the reserve or
 be budgeted separately.
 
-Custody now uses 1,000-call chunks. With N issued addresses, its actual hourly cost is
-`24 × C × ceil(N / 1,000)` per day and endpoint. The approved tables and totals below deliberately
-retain the prior five-batch allowance (120C at N=1,000) as a conservative bound; the saving does
+Custody uses 1,000-call chunks and completes the full vector in each sweep. With N eligible
+forwarders and C chain/token routes, one sweep costs `2 × C × ceil(N / 1,000)` aggregate calls
+across both endpoints. At the default six-hour cadence, the daily cost is
+`4 × C × ceil(N / 1,000)` per endpoint; at interval T seconds, the average is
+`(86,400 / T) × C × ceil(N / 1,000)`. Budget N as all issued addresses, including expected-zero
+forwarders; forwarders with an unsettled deposit at the pin are deferred until settled.
+The approved tables and totals below deliberately retain the prior five-batch allowance (120C at N=1,000) as a conservative bound; the saving does
 not authorize higher capacity. For each payment chain with C custody routes, that retained
 Ankr and staging-only Infura budget is:
 
@@ -153,8 +159,8 @@ Fast discovery:      288 × (1 head + 1 logs) = 576 Ankr
 Checkpoint headers: 144 × 2 = 288 Ankr; 144 × 3 × 80 = 34,560 Infura
 Coverage headers:   24 × 2 = 48 calls per endpoint
 Coverage logs:      20 × 2 × 2 + 4 × 2 × 2 × ceil(19,200 / 3,000) = 192 per endpoint
-Hourly custody:     C × 24 × ceil(1,000 / 1,000) = 24C per endpoint
-Retained allowance: 96C extra calls per endpoint; approved custody budget remains 120C
+Six-hour custody:   C × 4 × ceil(1,000 / 1,000) = 4C per endpoint
+Retained allowance: 116C extra calls per endpoint; approved custody budget remains 120C
 
 Ankr:   576 + 288 + 48 + 192 + 120C = 1,104 + 120C
 Infura: (432 + 48)×80 + 192×255 + 120C×80 = 87,360 + 9,600C
@@ -499,7 +505,7 @@ can extend them. Time measured from inclusion also includes chain confirmation/f
 | L confirmation after heads recover | Current L interval: 60 s / ten minutes / one hour by age, then RPC and processing; no checkpoint wait |
 | Quote expiry, cancel completion and unpaid reservation release | ≤ about 70 min after finality: checkpoint ≤10 min + coverage ≤60 min + expiry worker ≤5 s |
 | Known-deposit reversal and checkpoint-conflict freeze | ≤10 min checkpoint scheduling delay, then watch/RPC processing |
-| Custody discrepancy | ≤ about 130 min after finality: checkpoint ≤10 min + coverage ≤60 min + hourly custody ≤60 min |
+| Custody discrepancy | ≤ about 430 min (7 h 10 min) after finality, plus sweep runtime: checkpoint ≤10 min + coverage ≤60 min + custody ≤360 min at the default six-hour cadence; healthy endpoints and settled, caught-up forwarders |
 
 Hints require ready endpoints, available hint budget and the route's confirmation requirement.
 A conflict visible only in full logs may wait for hourly coverage; the ten-minute target concerns

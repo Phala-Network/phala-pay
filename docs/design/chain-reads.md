@@ -281,10 +281,18 @@ coverage-driven flow (§2.6) then expires or cancels it.
   `cancel_requested_at = now()`, `expires_at = now()`, audit row; returns the quote still `open`.
   An in-window payment found later consumes it normally. API docs and SDK types gain
   `cancel_requested_at`.
-- **Custody balance** (reconciler): on startup and hourly, at
+- **Custody balance** (reconciler): on startup and every six hours by default
+  (`topup run --custody-interval-s`, positive seconds, default `21600`), at
   `B = min(checkpoint, chain_coverage.through_block)`, only for caught-up forwarders. Both endpoints
-  independently read the full balance vector at B's canonical hash before accepting equality or
-  freezing on mismatch. An hourly wake-up keeps custody due when checkpoint progress stalls.
+  independently read the full balance vector at B's canonical hash, including idle and
+  swept-to-zero forwarders, in `ceil(N / 1000)` Multicall3 aggregates per route and endpoint
+  within that sweep before accepting equality or freezing on mismatch. Selection is set-based.
+  A forwarder with a non-final, non-reversed deposit at B is deferred until settled. Each sweep
+  alerts `TopupCustodyCoverageIncomplete` with the count per chain/route when an excluding
+  deposit is at least 24 h old (`--custody-unsettled-alert-after-s`, default `86400`). An
+  independent timer keeps custody due when checkpoint progress stalls. The default detection
+  target is checkpoint ≤10 min + coverage ≤60 min + custody ≤360 min, plus sweep runtime
+  (about 7 h 10 min after finality with healthy endpoints and eligible forwarders).
 
 ## 3. Endpoints, retries, readiness, deploy
 
@@ -394,7 +402,7 @@ measurement record, separate from pricing-page claims.
 
 [RPC operations](../../deploy/RPC.md#worst-case-pilot-budget) is the authoritative budget:
 five-minute read discovery, ten-minute dual checkpoints, hourly dual coverage, six-hour
-19,200-block catch-up, all seven hourly custody routes, prices, deposits, hints, factory proofs,
+19,200-block catch-up, all seven six-hour custody routes, prices, deposits, hints, factory proofs,
 Safe proofs, attached refunds, unresolved finality stock and extra operations. It assumes every
 payment chain runs all day, one caught-up recipient chunk plus one lagging chunk, and all 1,000
 historical addresses.
@@ -441,7 +449,7 @@ healthy-operation SLOs and backlog exceptions:
 | L confirmation after heads recover | Current 60 s / ten-minute / hourly interval by age, then processing; no checkpoint wait |
 | Quote expiry / cancel / unpaid reservation release | ≤ about 70 min after qualifying finality |
 | Known-deposit reversal / checkpoint conflict | ≤10 min, plus watch/RPC processing |
-| Custody discrepancy | ≤ about 130 min after finality |
+| Custody discrepancy | ≤ about 430 min (7 h 10 min) after finality, plus sweep runtime at the default six-hour cadence; settled, caught-up forwarders |
 | Recovery from ≤24 h equivalent backlog | ≤12 h continuous healthy operation, within work allowances |
 
 Hint readiness, task budgets and confirmations still apply. Already unresolved deposits follow
