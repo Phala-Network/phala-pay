@@ -200,6 +200,12 @@ struct RunArgs {
     /// Least delay between reconciliation rounds; a round runs only after `finalized` advanced.
     #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(1..))]
     reconcile_interval_s: u64,
+    /// Delay between full dual custody sweeps, even when the checkpoint has not advanced.
+    #[arg(long, default_value_t = 21_600, value_parser = clap::value_parser!(u64).range(1..))]
+    custody_interval_s: u64,
+    /// Alert when an unsettled deposit older than this excludes a caught-up forwarder from custody.
+    #[arg(long, default_value_t = 86_400, value_parser = clap::value_parser!(u32).range(1..))]
+    custody_unsettled_alert_after_s: u32,
 }
 
 /// Concurrent deposit pumps in one service process.
@@ -795,7 +801,13 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     }
     let reconciler = Arc::new(
         topup::reconciler::Reconciler::from_routes(pool.clone(), Arc::clone(&routes))
-            .context("failed to configure reconciler")?,
+            .context("failed to configure reconciler")?
+            .with_custody_interval(Duration::from_secs(args.custody_interval_s))
+            .context("invalid custody interval")?
+            .with_custody_unsettled_alert_after(Duration::from_secs(u64::from(
+                args.custody_unsettled_alert_after_s,
+            )))
+            .context("invalid custody unsettled alert age")?,
     );
     let listener = tokio::net::TcpListener::bind(args.bind)
         .await
@@ -1791,6 +1803,40 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use super::{ServiceTasks, parse_nonce};
+
+    #[test]
+    fn custody_schedule_defaults_to_six_hours_and_rejects_zero_intervals() {
+        use clap::Parser;
+        let cli = super::Cli::try_parse_from(["topup", "run", "--config", "topup.yaml"]).unwrap();
+        let super::TopupCommand::Run(args) = cli.command else {
+            panic!("expected run");
+        };
+        assert_eq!(
+            std::time::Duration::from_secs(args.custody_interval_s),
+            topup::reconciler::DEFAULT_CUSTODY_INTERVAL
+        );
+        assert_eq!(
+            std::time::Duration::from_secs(u64::from(args.custody_unsettled_alert_after_s)),
+            topup::reconciler::DEFAULT_CUSTODY_UNSETTLED_ALERT_AFTER
+        );
+        for flag in ["--custody-interval-s", "--custody-unsettled-alert-after-s"] {
+            assert!(
+                super::Cli::try_parse_from(["topup", "run", "--config", "topup.yaml", flag, "0"])
+                    .is_err()
+            );
+            assert!(
+                super::Cli::try_parse_from([
+                    "topup",
+                    "run",
+                    "--config",
+                    "topup.yaml",
+                    flag,
+                    "3600"
+                ])
+                .is_ok()
+            );
+        }
+    }
 
     #[test]
     fn synthetic_alert_cli_accepts_every_business_alert_and_rejects_unknown_names() {

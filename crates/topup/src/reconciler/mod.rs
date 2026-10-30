@@ -1,14 +1,15 @@
 //! Periodic custody and credit reconciliation.
 //!
-//! Regular ledger checks run each round; scheduled dual custody runs on startup and hourly,
+//! Regular ledger checks run each round; scheduled dual custody runs on startup and every six hours
+//! by default (configurable),
 //! independently per chain and token route. Per-deposit failures are
 //! recorded as findings; a check that cannot complete is reported in
 //! [`ReconciliationReport::failed_checks`] and withholds the round heartbeat.
 //!
 //! Chain reads stay proportional to what changed: the service's rounds run only after the
 //! agreed checkpoint advances or custody is due, reuse the published head, verify each stored
-//! `(address, salt, treasury)` by local CREATE2 derivation with a bounded LRU cache, and read balances only of
-//! forwarders that hold unswept funds by the ledger.
+//! `(address, salt, treasury)` by local CREATE2 derivation with a bounded LRU cache, and sweep the full
+//! balance vector of caught-up forwarders, including expected-zero balances.
 
 mod chain;
 pub(crate) mod store;
@@ -44,6 +45,12 @@ const REGULAR_CHECKS: [CheckName; 4] = [
     CheckName::MissingFlushLink,
     CheckName::CustodyBalance,
 ];
+
+/// Default delay between full dual-provider custody sweeps.
+pub const DEFAULT_CUSTODY_INTERVAL: Duration = Duration::from_secs(21_600);
+
+/// Age of an unsettled deposit after which its forwarder's exclusion raises an alert.
+pub const DEFAULT_CUSTODY_UNSETTLED_ALERT_AFTER: Duration = Duration::from_secs(86_400);
 
 /// Reconciliation failure which prevents one check or one subject from completing.
 #[derive(Debug, thiserror::Error)]
@@ -142,6 +149,8 @@ pub struct Reconciler {
     verifiers: BTreeMap<u64, Arc<dyn ReconciliationChain>>,
     /// Derivations already confirmed on chain; a changed row is a new key and is read again.
     verified: Mutex<VerifiedCache>,
+    custody_interval: Duration,
+    custody_unsettled_alert_after: Duration,
 }
 
 impl Reconciler {
@@ -172,6 +181,8 @@ impl Reconciler {
             chains,
             verifiers,
             verified: Mutex::default(),
+            custody_interval: DEFAULT_CUSTODY_INTERVAL,
+            custody_unsettled_alert_after: DEFAULT_CUSTODY_UNSETTLED_ALERT_AFTER,
         })
     }
 
@@ -188,6 +199,8 @@ impl Reconciler {
             verifiers: chains.clone(),
             chains,
             verified: Mutex::default(),
+            custody_interval: DEFAULT_CUSTODY_INTERVAL,
+            custody_unsettled_alert_after: DEFAULT_CUSTODY_UNSETTLED_ALERT_AFTER,
         }
     }
 
@@ -198,6 +211,31 @@ impl Reconciler {
     ) -> Self {
         self.verifiers = verifiers;
         self
+    }
+
+    /// Sets the positive delay between full custody sweeps, independently of checkpoint progress.
+    pub fn with_custody_interval(mut self, every: Duration) -> Result<Self, ReconciliationError> {
+        if every.is_zero() {
+            return Err(ReconciliationError::Configuration(
+                "custody interval must be positive".into(),
+            ));
+        }
+        self.custody_interval = every;
+        Ok(self)
+    }
+
+    /// Sets the positive whole-second age bound for deposits excluding a forwarder from custody.
+    pub fn with_custody_unsettled_alert_after(
+        mut self,
+        after: Duration,
+    ) -> Result<Self, ReconciliationError> {
+        if after.as_secs() == 0 || after.as_secs() > u64::from(u32::MAX) {
+            return Err(ReconciliationError::Configuration(
+                "custody unsettled alert age must be between 1 and 4294967295 seconds".into(),
+            ));
+        }
+        self.custody_unsettled_alert_after = after;
+        Ok(self)
     }
 
     /// Runs all regular reconciliation checks once.
@@ -231,8 +269,8 @@ impl Reconciler {
         result
     }
 
-    /// Runs one bounded check page without persisting its findings. Repeated calls resume
-    /// the durable cursor; completed row passes wrap so old rows are checked again.
+    /// Runs one bounded ledger-check page or a full custody sweep without persisting findings.
+    /// Paged checks resume the durable cursor; completed row passes wrap so old rows are checked again.
     ///
     /// Safe repairs and freezes still apply: `missing_flush_link` writes the
     /// ledger, and `address_derivation` and `custody_balance` freeze a chain, exactly as a full
@@ -328,11 +366,7 @@ impl Reconciler {
             CheckName::AddressDerivation => vec!["derivation".into()],
             CheckName::CreditRecomputation => vec!["credit".into()],
             CheckName::MissingFlushLink => vec!["flush".into()],
-            CheckName::CustodyBalance => self
-                .latest_asset_routes()
-                .iter()
-                .map(|r| format!("custody:{:#x}", r.asset.contract))
-                .collect(),
+            CheckName::CustodyBalance => Vec::new(),
         }
     }
     async fn reset_check_cursor(&self, check: CheckName) -> Result<(), ReconciliationError> {
@@ -382,7 +416,7 @@ impl Reconciler {
 
     /// Runs a round every `every` in which the agreed checkpoint, as `heads` publishes it,
     /// advanced on some chain since the last complete round, until cancellation. Without an
-    /// advance or pending work, rounds are skipped unless the hourly custody check is due.
+    /// advance or pending work, rounds are skipped unless a full custody sweep is due.
     pub async fn run_loop(
         &self,
         every: Duration,
@@ -393,7 +427,7 @@ impl Reconciler {
         let mut ticks = interval(every);
         ticks.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let mut reconciled: Option<RoundHeads> = None;
-        let custody_interval = Duration::from_secs(3_600);
+        let custody_interval = self.custody_interval;
         let started = Instant::now();
         let mut last_custody_run: Option<Instant> = None;
         loop {
@@ -780,38 +814,28 @@ impl Reconciler {
         } else {
             checkpoint.hash
         };
-        let check = format!("custody:{token:#x}");
-        let chain_key = i64::try_from(chain_id)
-            .map_err(|_| ReconciliationError::Invariant("chain overflow"))?;
-        let cursor = store::work_cursor(&self.pool, &check, chain_key).await?;
-        let (page, more) = db::scan_address_page(&self.pool, chain_id, cursor).await?;
-        let last = page.last().map(|a| a.id);
-        let mut ids = Vec::new();
-        for address in &page {
-            let caught: bool = sqlx::query_scalar::<_, Option<bool>>(
-                "SELECT dual_covered_through=$2 FROM addresses WHERE id=$1",
-            )
-            .bind(address.id)
-            .bind(
-                i64::try_from(coverage.number)
-                    .map_err(|_| ReconciliationError::Invariant("coverage overflow"))?,
-            )
-            .fetch_one(&self.pool)
-            .await?
-            .unwrap_or(false);
-            if caught {
-                ids.push(address.id);
-            }
+        let excluded = store::overdue_unsettled_forwarders(
+            &self.pool,
+            chain_id,
+            token,
+            block,
+            coverage.number,
+            self.custody_unsettled_alert_after,
+        )
+        .await?;
+        if excluded > 0 {
+            tracing::warn!(
+                tags.alert = "TopupCustodyCoverageIncomplete",
+                tags.chain_id = chain_id,
+                tags.route = route.route,
+                excluded_forwarders = excluded,
+                unsettled_after_s = self.custody_unsettled_alert_after.as_secs(),
+                "custody excludes forwarders with overdue unsettled deposits"
+            );
         }
-        let ledgers = store::forwarder_ledgers(&self.pool, chain_id, token, block, &ids).await?;
+        let ledgers =
+            store::forwarder_ledgers(&self.pool, chain_id, token, block, coverage.number).await?;
         if ledgers.is_empty() {
-            store::save_work_cursor(
-                &self.pool,
-                &check,
-                chain_key,
-                if more { last } else { None },
-            )
-            .await?;
             return Ok(());
         }
         let physical = ledgers
@@ -864,13 +888,6 @@ impl Reconciler {
                 false,
             )?);
         }
-        store::save_work_cursor(
-            &self.pool,
-            &check,
-            chain_key,
-            if more { last } else { None },
-        )
-        .await?;
         Ok(())
     }
 

@@ -615,8 +615,11 @@ both endpoints. Startup rebases an old cursor above dual coverage. Lowering `cre
 atomically clears its dual marker, lowers the compatibility cursor as needed and clears its time.
 Negative decisions require both chain coverage and the address's own caught-up marker.
 
-Scheduled custody runs on the first tick and hourly thereafter using its last-run time and an
-independent timer, even when a regular checkpoint round is skipped. This is independent
+Scheduled custody runs on the first tick and every six hours thereafter by default
+(`--custody-interval-s`, positive seconds, default `21600`), using its last-run time and an
+independent timer even when a regular checkpoint round is skipped. Each sweep covers every
+eligible forwarder in `ceil(N / 1000)` Multicall3 aggregates per route and endpoint, including
+expected-zero balances. Selection and ledger aggregation use set-based SQL. This is independent
 of the reconciliation interval, per chain and token route; manual and post-restore checks run immediately. Custody reads the full balance vector on both endpoints at the same EIP-1898 canonical hash at
 `min(checkpoint, coverage)`. Errors and mismatches wait; only dual agreement can report a clean
 ledger or freeze a discrepant chain.
@@ -1487,30 +1490,38 @@ advanced on some chain since the last complete round, using the head the scanner
 published (a round with nothing newly final is skipped and checks in healthy), and stores each
 finding once; repairs are silent, every other finding raises `TopupReconciliationMismatch` (§16).
 Chain reads stay proportional to what changed: each stored `(address, salt, treasury)` is checked
-against `addressOf` once per process (a changed row is checked again), and balances are read only
-of forwarders holding unswept funds by the ledger.
+against `addressOf` once per process (a changed row is checked again), and full custody sweeps run independently on startup and every six hours by default, including
+forwarders with expected-zero balances.
 
 | Check | Action |
 |---|---|
 | `credit_minor` ≠ recomputation from stored inputs | alert |
 | Final `credited` deposit with a `flushed` row at a later log position | sweep it (replay of indexed events) |
-| Per forwarder whose ledger holds unswept funds (Σ deposits ≠ Σ flushed), at block `B` = min(checkpoint, dual coverage cursor), pinned to its canonical hash: its token balance at `B` ≠ Σ deposits at or below `B` (not reversed) − Σ `flushed.amount_atomic` at or below `B` | freeze chain, alert |
+| Per caught-up forwarder with settled deposits, including expected-zero balances, at block `B` = min(checkpoint, dual coverage cursor), pinned to its canonical hash: its token balance at `B` ≠ Σ deposits at or below `B` (not reversed) − Σ `flushed.amount_atomic` at or below `B` | freeze chain, alert |
 | `addressOf(treasury, salt)` on chain ≠ stored address, with each address's own treasury | freeze chain, alert |
 | After a restore, in the read-only restore-check instance (§14) | the checks above, on the restored ledger alone: the service's record is authoritative for its credits, so the check asks the merchant nothing and does not depend on it being reachable; the merchant's records enter only through the operator's reconciliation (§14) |
 
-**Reconciliation per forwarder** (design §13). A forwarder whose ledger is swept to zero is not
-read: a transfer its ledger lacks is a finalized transfer to an issued address, which dual coverage finds. Every transfer to an issued address and every
+**Reconciliation per forwarder** (design §13). Every caught-up forwarder with settled deposits
+is read in the same sweep, including idle forwarders and those swept to zero. This detects
+unexpected balances even when both providers omitted a transfer log or a token balance changed
+without a `Transfer` event. Every transfer to an issued address and every
 factory event about one is indexed at or below the scanner cursor, and only finalized events are
 indexed, so at `B` the chain and the ledger describe the same state whoever flushed. A forwarder is
 compared only once its dual address marker equals chain coverage and every deposit of it at or below `B` is settled (final or
-reversed); one the finality watch has not settled waits a round. Anyone can flush, so no sweep is
-"in flight" from the service's side. A mismatch means the ledger is wrong: crediting on the chain
+reversed); one the finality watch has not settled waits a round. When an excluding deposit
+is at least 24 h old (by its durable creation time), a sweep raises
+`TopupCustodyCoverageIncomplete` with a forwarder count, grouped only by chain and route.
+`--custody-unsettled-alert-after-s` configures this age bound; detection can lag the bound by
+one custody interval. See [incomplete custody coverage](../deploy/runbooks/rpc-health.md#incomplete-custody-coverage).
+Anyone can flush, so no sweep is "in flight" from the service's side. A mismatch means the ledger is wrong: crediting on the chain
 stops (§7, the freeze) until an operator lifts it.
 
 Dual coverage (§8) supplies complete log history; reconciliation has no separate missing-deposit
 scan. Custody uses `B = min(checkpoint, chain_coverage.through_block)` only for caught-up
 forwarders, pinned to `B`'s canonical hash. Both endpoints must agree on the complete balance vector before concluding the ledger is
-clean or freezing it. Factory events are already dual-verified at the coverage boundary.
+clean or freezing it. At the default cadence, detection targets checkpoint ≤10 min + coverage
+≤60 min + custody ≤360 min (about 7 h 10 min after finality), plus sweep runtime, with healthy
+endpoints and settled, caught-up forwarders. Factory events are already dual-verified at the coverage boundary.
 
 A chain block stays until the cause is investigated and signed off. The admin API's
 `POST /v1/admin/reconciliation_blocks/{block_key}/lift {reason}` first runs a fresh dual contract
@@ -1591,7 +1602,7 @@ Engineering limits that do not decide money are code constants, such as the RPC 
 over every issued address (token balances, `addressOf`) are
 aggregated through the canonical Multicall3 (`0xcA11bde05977b3631167028862bE2a173976CA11`) with
 `aggregate3` and `allowFailure = false`, one `eth_call` per 1,000 calls (a code constant bounding
-calldata and gas), at the block each read needs (`finalized` for custody reconciliation). They
+calldata and gas), at the block each read needs (the canonical hash at `min(checkpoint, coverage)` for custody reconciliation). They
 never use JSON-RPC batches, which public providers throttle far below their single-request limits
 (Tenderly's public gateway refuses a batch of more than five `eth_call`s), nor one request per
 address, which grows with every address ever issued. The price scale (8) is fixed by §8 and §11;

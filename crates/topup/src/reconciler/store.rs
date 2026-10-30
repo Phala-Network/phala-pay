@@ -134,20 +134,18 @@ pub(crate) struct ForwarderLedger {
     pub(crate) flushed: U256,
 }
 
-/// Returns the ledger of every backfilled forwarder of `chain_id` that holds unswept `token` funds
-/// by its ledger at `block` (deposits there minus finalized `Flushed` amounts is not zero) and
-/// whose deposits there are all settled: final or reversed.
+/// Returns every caught-up forwarder's `token` ledger at `block`, including expected-zero
+/// balances, whose deposits there are all settled: final or reversed.
 ///
 /// A forwarder with a deposit the finality watch has not settled yet is left for a later round,
-/// because its transfer could still move or disappear. A forwarder whose ledger is swept to zero
-/// is not read: a transfer the ledger lacks is found by the missing-deposit check, which reads
-/// every issued address's finalized transfers.
+/// because its transfer could still move or disappear. Selection and aggregation are set-based;
+/// there is no per-address coverage lookup or durable custody page cursor.
 pub(crate) async fn forwarder_ledgers(
     pool: &PgPool,
     chain_id: u64,
     token: Address,
     block: u64,
-    addresses: &[Uuid],
+    coverage: u64,
 ) -> Result<Vec<ForwarderLedger>, ReconciliationError> {
     let rows = sqlx::query(
         r#"
@@ -156,12 +154,12 @@ pub(crate) async fn forwarder_ledgers(
                    SUM(d.amount_atomic) FILTER (WHERE d.state <> 'reversed') AS total,
                    bool_or(d.final_at IS NULL AND d.state <> 'reversed') AS unsettled
             FROM deposits d
-            WHERE d.chain_id = $1 AND d.asset_contract = $2 AND d.block_number <= $3 AND d.address_id = ANY($4)
+            WHERE d.chain_id = $1 AND d.asset_contract = $2 AND d.block_number <= $3
             GROUP BY d.address_id
         ), flushed_totals AS (
             SELECT f.address_id, SUM(f.amount_atomic) AS total
             FROM flushed f
-            WHERE f.chain_id = $1 AND f.token = $2 AND f.block_number <= $3 AND f.address_id = ANY($4)
+            WHERE f.chain_id = $1 AND f.token = $2 AND f.block_number <= $3
             GROUP BY f.address_id
         )
         SELECT a.id, a.address,
@@ -170,8 +168,7 @@ pub(crate) async fn forwarder_ledgers(
         FROM addresses a
         LEFT JOIN deposit_totals d ON d.address_id = a.id
         LEFT JOIN flushed_totals f ON f.address_id = a.id
-        WHERE a.chain_id = $1 AND a.backfilled AND a.id = ANY($4)
-          AND COALESCE(d.total, 0) <> COALESCE(f.total, 0)
+        WHERE a.chain_id = $1 AND a.backfilled AND a.dual_covered_through = $4
           AND NOT COALESCE(d.unsettled, false)
         ORDER BY a.id
         "#,
@@ -179,7 +176,7 @@ pub(crate) async fn forwarder_ledgers(
     .bind(db_i64(chain_id)?)
     .bind(format!("{token:#x}"))
     .bind(db_i64(block)?)
-    .bind(addresses)
+    .bind(db_i64(coverage)?)
     .fetch_all(pool)
     .await?;
     rows.into_iter()
@@ -197,6 +194,34 @@ pub(crate) async fn forwarder_ledgers(
             })
         })
         .collect()
+}
+
+/// Counts caught-up forwarders excluded by a deposit older than the custody alert bound.
+pub(crate) async fn overdue_unsettled_forwarders(
+    pool: &PgPool,
+    chain_id: u64,
+    token: Address,
+    block: u64,
+    coverage: u64,
+    after: Duration,
+) -> Result<i64, ReconciliationError> {
+    Ok(sqlx::query_scalar(
+        r#"
+        SELECT count(DISTINCT a.id)
+        FROM addresses a JOIN deposits d ON d.address_id = a.id
+        WHERE a.chain_id = $1 AND a.backfilled AND a.dual_covered_through = $4
+          AND d.chain_id = $1 AND d.asset_contract = $2 AND d.block_number <= $3
+          AND d.final_at IS NULL AND d.state <> 'reversed'
+          AND d.created_at <= now() - $5::bigint * interval '1 second'
+        "#,
+    )
+    .bind(db_i64(chain_id)?)
+    .bind(format!("{token:#x}"))
+    .bind(db_i64(block)?)
+    .bind(db_i64(coverage)?)
+    .bind(db_i64(after.as_secs())?)
+    .fetch_one(pool)
+    .await?)
 }
 
 /// Session advisory lock key which separates lease-holding processes from the post-restore gate.

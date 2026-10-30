@@ -100,3 +100,24 @@ after `first_unresolved_at`, matching `(to, token, from, amount, tx_from, tx_non
 follows S or reversal. Price retries may reuse only the complete versioned proof linked to the
 current final marker by `confirmation_terminal_transition_id`, never a pre-S proof. They never
 restart normal confirmation quotas. See the [proof recovery rules](deposit-reversed.md#confirmation-delay-and-slow-lane-l).
+
+## Incomplete custody coverage
+
+`TopupCustodyCoverageIncomplete` means a custody sweep excluded caught-up forwarders because
+one or more deposits at the canonical pin remain non-final and non-reversed. The event reports
+`excluded_forwarders` once per chain and route, without per-forwarder alert groups. The default
+age bound is 24 h (`topup run --custody-unsettled-alert-after-s`, default `86400`), measured from
+the unsettled deposit's durable creation time. An already-old deposit alerts on the first sweep
+that excludes it. Sweeps run every six hours by default (`--custody-interval-s`), so an age-bound
+crossing may take one further sweep interval to alert.
+
+1. Inspect the alerts API or Sentry event's chain, route and count. Check the authenticated daily
+   report and RPC readiness/coverage metrics for that chain, then follow
+   [provider disagreement](provider-disagreement.md) or [deposit finality](deposit-reversed.md).
+2. Restore both endpoints' availability and independent evidence, and let the finality watcher
+   settle or reverse the deposits. Do not set final markers manually, omit forwarders, or infer
+   that a partial custody sweep proved a clean ledger. Eligible forwarders continue to be read.
+3. Run the existing manual reconciliation procedure from [reconciliation mismatch](reconciliation-mismatch.md)
+   after finality recovers, or wait for the next scheduled sweep. Confirm the alert no longer
+   recurs. This event-only alert remains in the alerts API until an operator resolves it through
+   the [alerts procedure](README.md#manage-alerts).

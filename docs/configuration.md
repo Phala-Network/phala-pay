@@ -211,7 +211,9 @@ The files it refuses include:
 | `--public-origin URL` | the file's | Replaces `public_origin`: the restore instance's own origin, or a local stack's. The attested service compose never sets it. |
 | `--public-origin-host-env NAME` | none | When the file leaves `public_origin` out: the environment variable holding the origin's host, a lowercase DNS name served as `https://HOST` (the template's `DSTACK_APP_DOMAIN`). |
 | `--admin-public-key-env NAME` | none | When the file leaves `admin_key.public_key` out: the environment variable holding the admin public key, standard base64 ed25519 (the template's `TOPUP_ADMIN_PUBLIC_KEY`). |
-| `--reconcile-interval-s` | 600 | Least delay between reconciliation rounds; a round runs only after `finalized` advanced. |
+| `--reconcile-interval-s` | 600 | Least delay between regular reconciliation rounds; pending pages and due custody also wake the loop. |
+| `--custody-interval-s` | 21600 | Positive delay between full dual custody sweeps of every eligible forwarder, including expected-zero balances; independent of checkpoint progress. Startup, manual `reconcile`, and post-restore checks sweep immediately. |
+| `--custody-unsettled-alert-after-s` | 86400 | Positive unsettled-deposit age in seconds after which a caught-up forwarder's exclusion raises `TopupCustodyCoverageIncomplete`, grouped by chain and route. Evaluated during each custody sweep. |
 | `--wait-interval-s` | 60 | Delay before retrying an expected wait outcome. |
 
 [Architecture §8](architecture.md#8-chain-valuation-screening) has the cadences, and
