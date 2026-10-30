@@ -59,6 +59,9 @@ New issuance uses the current agreed checkpoint `t`: `created_block = t+1`,
 `dual_covered_through = t`, `backfilled = true`. Earlier funding is outside discovery and crediting.
 An asynchronous opening snapshot at `t` accounts for that funding in custody (§2.6); issuance
 performs no synchronous balance RPC. Historical restore/reissue keeps its explicit earlier start.
+Lowering that start atomically resets `dual_covered_through=NULL, backfilled=false,
+backfilled_through=NULL`; the expanded range is rescanned and custody requires the opening at
+the lowered start minus one, never the original live-issuance checkpoint.
 
 Each round, staggered per chain:
 

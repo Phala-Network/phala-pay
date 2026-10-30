@@ -672,8 +672,9 @@ pub async fn reissue(
     .await?;
     for (chain_id, block) in backfill_from {
         sqlx::query(
-            "UPDATE addresses SET created_block = LEAST(created_block, $3) \
-             WHERE deposit_address_id = ANY($1) AND chain_id = $2",
+            "UPDATE addresses SET created_block = $3, dual_covered_through = NULL, \
+             backfilled = false, backfilled_through = NULL \
+             WHERE deposit_address_id = ANY($1) AND chain_id = $2 AND created_block > $3",
         )
         .bind(&issued)
         .bind(i64::try_from(*chain_id).map_err(|_| DepositAddressError::InvalidInput("chain_id"))?)

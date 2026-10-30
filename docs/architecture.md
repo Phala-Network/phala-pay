@@ -619,6 +619,8 @@ the configured `rpc[].max_issued_addresses` cap (currently 1,000 on every chain)
 chain starts at `min(min(created_block).saturating_sub(1), checkpoint)`, with its header read on
 both endpoints. Startup rebases an old cursor above dual coverage. Lowering `created_block`
 atomically clears its dual marker, lowers the compatibility cursor as needed and clears its time.
+Restore reissue also resets `backfilled=false, backfilled_through=NULL` in that same update;
+its expanded range must be rescanned before custody compares the new opening at start minus one.
 Negative decisions require both chain coverage and the address's own caught-up marker.
 
 Scheduled custody runs on the first tick and every six hours thereafter by default

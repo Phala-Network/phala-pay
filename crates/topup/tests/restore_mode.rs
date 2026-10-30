@@ -1553,6 +1553,87 @@ async fn a_deposit_address_given_out_after_the_restore_point_is_reissued_identic
     .await
 }
 
+/// New versions use the live issuance checkpoint first, then restore reissue expands discovery
+/// back to R. That expansion must invalidate all caught-up markers before scanning [R, c].
+#[tokio::test]
+async fn reissued_new_version_backfills_credits_and_reconciles_from_the_restore_boundary()
+-> Result<()> {
+    struct Custody {
+        forwarder: Address,
+        amount: U256,
+    }
+    #[async_trait]
+    impl topup::reconciler::ReconciliationChain for Custody {
+        async fn canonical_header(
+            &self,
+            number: u64,
+        ) -> Result<B256, topup::reconciler::ReconciliationError> {
+            Ok(B256::from(U256::from(number.saturating_add(1))))
+        }
+        async fn token_balances_pinned(
+            &self,
+            _: Address,
+            addresses: &[Address],
+            hash: B256,
+        ) -> Result<Vec<U256>, topup::reconciler::ReconciliationError> {
+            Ok(addresses
+                .iter()
+                .map(|address| {
+                    if hash == B256::ZERO && *address == self.forwarder {
+                        self.amount
+                    } else {
+                        U256::ZERO
+                    }
+                })
+                .collect())
+        }
+    }
+    support::with_database(|database| Box::pin(async move {
+        let harness = Harness::new(database).await?;
+        harness.deposit_address("restore-prefunding").await?;
+        harness.scan_to(250, Utc::now()).await?;
+        let (reissued, created) = topup::deposit_addresses::reissue(
+            &harness.pool, &harness.account, true, "restore-prefunding",
+            &[topup::deposit_addresses::ChainContracts::of(&harness.route, 1_000)],
+            topup::deposit_addresses::ReissueTarget { version: Some(2), address: None },
+            None, None, Some(Utc::now()-TimeDelta::minutes(1)),
+            &std::collections::BTreeMap::from([(1, 100)]),
+            &topup::audit::Actor::system("custody-regression"), "recover issued version",
+        ).await?;
+        ensure!(created && reissued.version == 2);
+        let row: (Uuid, String, i64, Option<i64>, bool, Option<i64>) = sqlx::query_as(
+            "SELECT id,address,created_block,dual_covered_through,backfilled,backfilled_through \
+             FROM addresses WHERE deposit_address_id=$1 AND chain_id=1",
+        ).bind(reissued.id).fetch_one(&harness.pool).await?;
+        ensure!((row.2,row.3,row.4,row.5) == (100,None,false,None), "stale issuance markers: {row:?}");
+        let forwarder: Address = row.1.parse()?;
+        let pipeline = Pipeline::new(&harness)?;
+        let transfer = router_transfer(harness.route.asset.contract, forwarder, 150, 0x96, 100);
+        pipeline.chain.set(250, 250, Some(transfer.clone()));
+        ensure!(pipeline.finalized_scan(&harness).await? == 1, "restored payment was not discovered");
+        pipeline.settle().await?;
+        pipeline.watch_once(&harness).await?;
+        let recovered: (String, bool, i64) = sqlx::query_as(
+            "SELECT state,final_at IS NOT NULL,block_number FROM deposits WHERE address_id=$1",
+        ).bind(row.0).fetch_one(&harness.pool).await?;
+        ensure!(recovered == ("credited".into(),true,150), "{recovered:?}");
+        let custody = topup::reconciler::Reconciler::with_dependencies(
+            harness.pool.clone(), Arc::clone(&pipeline.routes),
+            std::collections::BTreeMap::from([(1, Arc::new(Custody {
+                forwarder, amount: transfer.amount.value(),
+            }) as Arc<dyn topup::reconciler::ReconciliationChain>)]),
+        );
+        ensure!(custody.check(topup::reconciler::CheckName::CustodyBalance).await?.is_empty());
+        ensure!(!topup::reconciler::chain_is_blocked(&harness.pool, 1).await?);
+        let proof: (i64, String, String) = sqlx::query_as(
+            "SELECT start_block,block_hash,amount_atomic::text FROM custody_opening_balances WHERE address_id=$1",
+        ).bind(row.0).fetch_one(&harness.pool).await?;
+        ensure!(proof == (100,format!("{:#x}",B256::from(U256::from(100))),"0".into()),
+            "opening did not use restored R-1: {proof:?}");
+        Ok(())
+    })).await
+}
+
 #[tokio::test]
 async fn a_version_far_past_the_latest_is_refused_and_reissued_in_steps() -> Result<()> {
     support::with_database(|database| {
