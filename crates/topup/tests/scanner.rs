@@ -1307,7 +1307,13 @@ async fn changed_address_snapshot_retries_once_immediately_with_fresh_logs() -> 
                     for attempt in 0..2 {
                         started.notified().await;
                         let changed = if attempt < changes {
-                            address(d, 100).await.map(|_| ())
+                            sqlx::query("UPDATE addresses SET created_block=$2 WHERE id=$1")
+                                .bind(original.id)
+                                .bind(99 - i64::from(attempt))
+                                .execute(&d.app_pool)
+                                .await
+                                .map(|_| ())
+                                .map_err(anyhow::Error::from)
                         } else {
                             Ok(())
                         };
@@ -2476,4 +2482,107 @@ async fn identical_dual_factory_logs_skip_receipts_and_disagreement_falls_back()
         })
     })
     .await
+}
+
+#[tokio::test]
+async fn issuance_during_rpc_preserves_covered_evidence_and_defers_negative_evidence() -> Result<()>
+{
+    with_database(|d| Box::pin(async move {
+        let original = address(d, 100).await?;
+        let started = Arc::new(Notify::new());
+        let resume = Arc::new(Notify::new());
+        let mut read = Reader::new(200);
+        let verify = Reader::new(200);
+        scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+        read.logs_gate = Some((started.clone(), resume.clone()));
+        let chain = chain();
+        let coverage = scanner::coverage_round(&d.app_pool, &read, &verify, &chain, 1);
+        let issuance = async {
+            started.notified().await;
+            let inserted = address(d, 100).await;
+            resume.notify_one();
+            let inserted = inserted?;
+            sqlx::query("UPDATE quotes SET status='open',closed_at=NULL,exposure_reserved=true,expires_at=to_timestamp(150) WHERE id=(SELECT quote_id FROM addresses WHERE id=$1)")
+                .bind(inserted.id).execute(&d.app_pool).await?;
+            Ok::<_, anyhow::Error>(inserted)
+        };
+        let (coverage, inserted) = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            tokio::join!(coverage, issuance)
+        }).await.context("issuance discarded the covered round")?;
+        coverage?;
+        let inserted = inserted?;
+        ensure!(marker(d, original.id).await? == Some(200));
+        ensure!(marker(d, inserted.id).await?.is_none());
+        ensure!(compat(d).await? == (99, None));
+        ensure!(topup::locks::expire_once(&d.app_pool, &routes()).await? == 0);
+        ensure!(read.requests.lock().unwrap().iter().filter(|(addresses,_,_)| !addresses.is_empty()).count() == 1,
+            "uncovered issuance repeated covered RPC evidence");
+        read.logs_gate = None;
+        scanner::coverage_once(&d.app_pool, &read, &verify, &chain, 2).await?;
+        ensure!(marker(d, inserted.id).await? == Some(200));
+        ensure!(compat(d).await? == (200, Some(time(200))));
+        ensure!(topup::locks::expire_once(&d.app_pool, &routes()).await? == 1);
+        Ok(())
+    })).await
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn coverage_of_fifty_thousand_addresses_has_bounded_statement_count_and_duration()
+-> Result<()> {
+    let mut counts = Vec::new();
+    for count in [1_000, 50_000] {
+        let Some((queries, elapsed)) = with_database_counted(count).await? else {
+            return Ok(());
+        };
+        counts.push(queries);
+        eprintln!(
+            "coverage addresses={count} statements={queries} elapsed_ms={}",
+            elapsed.as_millis()
+        );
+    }
+    ensure!(
+        counts[0] > 0 && counts[1] <= counts[0] + 4 && counts[1] <= 40,
+        "coverage query count scaled with addresses: {counts:?}"
+    );
+    Ok(())
+}
+
+async fn with_database_counted(count: usize) -> Result<Option<(usize, std::time::Duration)>> {
+    use tracing::instrument::WithSubscriber as _;
+    let output = Arc::new(Mutex::new(None));
+    let measured = output.clone();
+    with_database(|d| {
+        Box::pin(async move {
+            let template = address(d, 100).await?;
+            seed::clone_addresses(&d.app_pool, template.id, count - 1).await?;
+            let read = Reader::new(200);
+            let verify = Reader::new(200);
+            scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+            sqlx::query("UPDATE addresses SET dual_covered_through=99")
+                .execute(&d.app_pool)
+                .await?;
+            let queries = support::queries::Queries::default();
+            let start = std::time::Instant::now();
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1)
+                    .with_subscriber(queries.subscriber()),
+            )
+            .await
+            .context("50k coverage exceeded 30 seconds")??;
+            let elapsed = start.elapsed();
+            ensure!(usize::try_from(result.backfilled_addresses)? == count);
+            let marked: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM addresses WHERE dual_covered_through=200")
+                    .fetch_one(&d.app_pool)
+                    .await?;
+            ensure!(usize::try_from(marked)? == count);
+            *measured.lock().unwrap() = Some((queries.count(), elapsed));
+            Ok(())
+        })
+    })
+    .await?;
+    let result = output.lock().unwrap().take();
+    Ok(result)
 }

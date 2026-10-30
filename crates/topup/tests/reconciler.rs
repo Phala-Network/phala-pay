@@ -1729,3 +1729,64 @@ async fn post_restore_ignores_a_completed_sweeps_stale_page_cursor() -> Result<(
         Ok(())
     }).await
 }
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn custody_at_fifty_thousand_addresses_keeps_set_based_sql_and_round_duration() -> Result<()>
+{
+    use tracing::instrument::WithSubscriber as _;
+    let counts = Arc::new(Mutex::new(Vec::new()));
+    for count in [1_000, 50_000] {
+        let counts = counts.clone();
+        support::with_database(|d| {
+            Box::pin(async move {
+                let pool = &d.app_pool;
+                seed::initialize_dual_chain(pool, CHAIN_ID).await?;
+                let route = route()?;
+                let template = seed_identity(pool, &route, 1).await?;
+                seed::clone_addresses(pool, template.address_id, count - 1).await?;
+                scanned_through(pool, 140).await?;
+                let read = Arc::new(MockChain::at(150));
+                let verify = Arc::new(MockChain::at(150));
+                let reconciler = reconciler(pool, route, read.clone())?.with_verifiers(
+                    BTreeMap::from([(CHAIN_ID, verify.clone() as Arc<dyn ReconciliationChain>)]),
+                );
+                let queries = support::queries::Queries::default();
+                let start = std::time::Instant::now();
+                let findings = tokio::time::timeout(
+                    StdDuration::from_secs(30),
+                    reconciler
+                        .check(CheckName::CustodyBalance)
+                        .with_subscriber(queries.subscriber()),
+                )
+                .await
+                .context("50k custody exceeded 30 seconds")??;
+                ensure!(findings.is_empty());
+                for chain in [&read, &verify] {
+                    let reads = chain.balance_reads.lock().unwrap();
+                    ensure!(
+                        reads.len() == 1 && reads[0].1.len() == count,
+                        "custody did not inspect the complete vector"
+                    );
+                }
+                eprintln!(
+                    "custody addresses={count} statements={} elapsed_ms={}",
+                    queries.count(),
+                    start.elapsed().as_millis()
+                );
+                counts.lock().unwrap().push(queries.count());
+                Ok(())
+            })
+        })
+        .await?;
+    }
+    let counts = counts.lock().unwrap();
+    if counts.is_empty() {
+        return Ok(());
+    }
+    ensure!(
+        counts.len() == 2 && counts[0] > 0 && counts[1] <= counts[0] + 2 && counts[1] <= 20,
+        "custody query count scaled with addresses: {counts:?}"
+    );
+    Ok(())
+}
