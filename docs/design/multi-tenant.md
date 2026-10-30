@@ -521,9 +521,10 @@ and per-forwarder reconciliation (§13). A token without a route on that chain i
 reads `addresses` covers it. Its deposit has `quote` set only if it consumes a quote, `deposit_address: "da_…"`, and the
 chain and address it arrived on (`chain_id`, `address`), and `deposit.credited` carries that
 object. The set of issued addresses of a chain includes every customer's address on that chain,
-active, retired, and superseded: fast discovery and dual finalized coverage read every issued
-address (architecture §8), so a deposit address is credited at the route's confirmation like any
-other. Dual coverage also records unsupported tokens, after complete independent receipt agreement.
+active, retired, and superseded: dual finalized coverage reads every issued address
+(architecture §8). Fast discovery reads only recent quote/deposit recipients; transaction hints
+work for every address. Cold unhinted payments can take about 70 minutes with healthy, caught-up
+coverage before they enter the same credit pipeline. Dual coverage also records unsupported tokens, after complete independent receipt agreement.
 
 **Unsupported or unlisted chain.** Funds sent to the address on a chain without a route are not
 seen or credited. They stay at that deterministic address and become sweepable once the factory

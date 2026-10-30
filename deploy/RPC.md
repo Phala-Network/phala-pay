@@ -76,7 +76,13 @@ answer. Restore the endpoint and let bounded loops retry with fresh canonical pi
 Alloy's single retry layer retries HTTP 429/503 and JSON-RPC throughput errors; Infura HTTP 402
 halts that endpoint until UTC midnight (5:00 PM PDT, 4:00 PM PST).
 
-Read-only discovery runs every five minutes on every payment chain. Independent dual checkpoint
+Read-only discovery runs every five minutes over each payment chain's hot addresses: any quote
+created in the last 24 hours, or any deposit with chain block time in the last seven days.
+Configure those defaults through `discovery.quote_window_hours` and
+`discovery.deposit_window_days`. All quote/deposit states qualify; no activity cache is used.
+Cold addresses still receive hourly dual coverage, and hints work for every address. An unhinted
+cold payment can take about 70 minutes with healthy, caught-up coverage.
+Independent dual checkpoint
 checks run every ten minutes and publish agreed advances for finality, reversal and refunds.
 Full dual log coverage runs hourly: at most 3,000 blocks normally and 19,200 every sixth round,
 now every six hours. Address history is backfilled separately in chunks of at most 1,000 addresses.
@@ -132,7 +138,7 @@ Stop lines are **25,000 Ankr calls/day** (75% of 1,000,000 monthly calls divided
 **1,250,000 production-only BlockPI RU/day** (75% of 50M monthly RU divided by 30).
 Charge one Ankr call per method, 80 Infura credits per non-log method and 255 per `eth_getLogs`.
 BlockPI weights are below. Assume every payment chain runs all day, one caught-up recipient chunk plus one lagging chunk, and full custody vectors on all
-1,000 historical addresses. No idle savings are used.
+1,000 historical addresses. Budget the entire issued set as hot; no idle savings are used.
 
 An hour adds about 300 blocks on Ethereum/Sepolia or 1,800 on Base/Base Sepolia, within the
 configured 3,000-block log window. Coverage uses one address-less Transfer query per
@@ -146,6 +152,16 @@ chain is caught up and the actual normal range is shorter. An Infura
 on that error. Extra requests must fit the reserve or
 be budgeted separately.
 
+For `N` historical addresses and `N_hot` active addresses on a chain, let
+`k = ceil(N / 1,000)` and `k_hot = ceil(N_hot / 1,000)` (zero when the hot set is empty).
+Under the approved normal five-minute log window, fast discovery costs
+`288 × (1 + k_hot)` read calls/day: one head per tick plus one recipient query per hot chunk.
+Provider block-window splitting multiplies the log term during backlog; those extra calls use
+the recovery reserve. Cold addresses do not add fast queries. Hourly coverage still scales with
+all historical chunks: `48 × (k + 3)` log calls/day on 3,000-block endpoints and
+`140 × (k + 3)` on BlockPI's 1,000-block endpoint, including the lagging chunk and factory reads.
+The tables below retain `k_hot = k = 1`, so this PR authorizes no increase in capacity.
+
 Custody uses 1,000-call chunks and completes the full vector in each sweep. With N eligible
 forwarders and C chain/token routes, one sweep costs `2 × C × ceil(N / 1,000)` aggregate calls
 across both endpoints. At the default six-hour cadence, the daily cost is
@@ -157,7 +173,7 @@ not authorize higher capacity. For each payment chain with C custody routes, tha
 Ankr and staging-only Infura budget is:
 
 ```text
-Fast discovery:      288 × (1 head + 1 logs) = 576 Ankr
+Fast discovery:      288 × (1 head + k_hot logs) ≤ 576 Ankr at the configured cap
 Checkpoint headers: 144 × 2 = 288 Ankr; 144 × 3 × 80 = 34,560 Infura
 Coverage headers:   24 × 2 = 48 calls per endpoint
 Coverage logs:      20 × 2 × 2 + 4 × 2 × 2 × ceil(19,200 / 3,000) = 192 per endpoint

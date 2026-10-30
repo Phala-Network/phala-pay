@@ -285,12 +285,12 @@ import { DepositAddress } from "@phala/pay-react";
 
 With `clientSecret` and `apiBase` it reads the address's public view about every three seconds and
 lists its payments of the last 24 hours: "1.5 PHA received on Sepolia, 1 confirmation" once the
-service sees the transfer (within about a block for a hinted payment, at the next discovery scan
-otherwise), then "credited" (or rejected or reversed). Display only. It also states when a payment on the
-chosen network is usually credited: `<DepositAddress>` submits no transaction-hash hint (the
-payer's wallet or exchange gives it no hash), so the service's 5-minute discovery scan plus the
-view's `typical_credit_seconds` ("usually within about 6 minutes"); until the view is loaded it
-names no time.
+service sees the transfer, then "credited" (or rejected or reversed). Display only.
+`<DepositAddress>` says "Credited at the market rate after confirmation." The public view does not
+identify hot-set membership: recent quote/deposit recipients are discovered every five minutes,
+while cold unhinted payments use hourly dual coverage and may take about 70 minutes with healthy
+endpoints and caught-up coverage. Transaction-hash hints work for every address, but this
+component submits none because the payer's wallet or exchange gives it no hash.
 
 After ten minutes without a change in the public view, `<DepositAddress>` uses a base interval
 of `max(pollInterval, 15000)` milliseconds, with the same jitter and failure backoff, so a longer

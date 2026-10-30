@@ -3,6 +3,9 @@
 environment: production                   # the Sentry environment
 max_attached_pending_refunds: 2
 max_refund_attachments_per_day: 1
+discovery:
+  quote_window_hours: 24
+  deposit_window_days: 7
 public_origin: https://pay-api.example.com # the API's one public origin: dstack-ingress's DOMAIN
 admin_key:                                # from `topup-sdk keygen`; the seed never leaves its machine
   id: admin/production-v1

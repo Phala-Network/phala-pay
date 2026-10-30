@@ -40,7 +40,7 @@ pub use pending::{
 pub(crate) use scanner::find_scan_address;
 pub use scanner::{
     ADDRESS_PAGE_SIZE, CoveredAddress, ScanAddress, ScanCommit, commit_confirmed_scan,
-    coverage_addresses, get_confirmed_cursor, get_cursor, initialize_cursor,
+    coverage_addresses, get_confirmed_cursor, get_cursor, hot_address_page, initialize_cursor,
     insert_scanned_deposit_in, list_scan_addresses, scan_address_page,
 };
 pub(crate) use sweeps::mark_swept;

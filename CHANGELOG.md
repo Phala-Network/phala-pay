@@ -39,6 +39,13 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   hourly, then six hours. Durable cadence survives restarts; refunds retain their reservation
   while missing, reorged or disputed and cannot be canceled after attachment.
 
+- Narrow five-minute read discovery to addresses with a quote created in the last 24 hours
+  (any state) or a deposit whose chain timestamp is within seven days. Optional `discovery`
+  configuration sets both windows. Indexed queries page at 1,000 addresses; hourly dual
+  coverage still includes cold addresses, hints still work for every address, and negative
+  conclusions still require both providers. Cold unhinted payments may take about 70 minutes
+  with healthy endpoints and caught-up coverage. Additive indexes retain supported binary rollback.
+
 - Require reviewed `rpc[].max_issued_addresses` and top-level
   `max_refund_attachments_per_day` configuration. Shipped values stay at 1,000 historical
   addresses per chain and one new refund attachment per rolling 24 hours. Address admission,
@@ -57,6 +64,14 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   every six hours (`topup run --custody-interval-s`); detection targets about 7 h 10 min after
   finality plus sweep runtime with healthy endpoints, instead of depending on address count. `TopupCustodyCoverageIncomplete` alerts per chain/route
   when an excluding unsettled deposit reaches the configured age (default 24 h).
+
+### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
+
+#### Fixed
+
+- `<DepositAddress>` says "Credited at the market rate after confirmation." without promising
+  a five-minute credit: cold unhinted addresses use hourly dual coverage, and the public view
+  does not identify hot-set membership.
 
 ## [0.13.3] - 2026-10-29
 

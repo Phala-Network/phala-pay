@@ -84,6 +84,9 @@ max_attached_pending_refunds: 1             # required positive deployment cap; 
 max_refund_attachments_per_day: 1           # required rolling 24-hour deployment cap
 # hints_per_day: 80                       # optional; environment-wide per UTC day
 # quote_snapshots_per_day: 60             # optional; per price chain per UTC day
+discovery:                                # optional; defaults shown
+  quote_window_hours: 24
+  deposit_window_days: 7
 public_origin: https://pay-api-staging.phala.com
 admin_key:
   id: admin/staging-v1                     # the key id admin requests sign with
@@ -145,6 +148,16 @@ release's budget; a rollback never clears rolling attachment history.
   with that release's verified configuration and operating allocation, never the newer
   production file or `config show` output. Keep the release's compose-update path and the
   [PROXY rollback requirements](../deploy/README.md#custom-domain).
+- **`discovery`** optionally sets fast-discovery activity windows. `quote_window_hours` accepts
+  integers 1–8,760 (default 24), and `deposit_window_days` accepts 1–365 (default 7). Either field
+  may be omitted. Every quote state qualifies by creation time; every deposit state qualifies
+  by chain `block_time`, including the exact cutoff. No activity cache needs refreshing.
+  The five-minute read path covers that hot set; hourly dual coverage still covers every
+  historical address, and transaction hints work for cold addresses too. Without a hint, a cold
+  payment can take about 70 minutes with healthy endpoints and caught-up coverage. Increasing
+  windows can increase RPC load and needs a reviewed budget. `topup config show` includes resolved
+  defaults. Older rollback targets use their retained config/kit without `discovery` and their
+  original full-address discovery budget.
 - **`public_origin`** is the public scheme and authority clients call (no path). The admin API's
   RFC 9421 signatures are verified against it plus the request path and query, and treasury
   challenges (EIP-4361) name it. Behind an ingress it must be the public URL (in a CVM, the

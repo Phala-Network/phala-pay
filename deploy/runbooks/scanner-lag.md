@@ -4,7 +4,9 @@
 `topup-coverage-scanner-<chain_id>` Sentry Crons,
 `RpcCoverageLag` (>2 hours), or persistent `RpcAddressBackfillLag`.
 
-**Impact:** fast discovery runs every 300 seconds on read. A separate dual checkpoint check
+**Impact:** fast discovery runs every 300 seconds on read over recent quote/deposit recipients
+(the configured hot set). Cold addresses remain in hourly dual coverage and may normally take
+about 70 minutes without hints; this alone is not fast-scanner lag. A separate dual checkpoint check
 runs every 600 seconds; full dual log coverage runs every 3,600 seconds, with 19,200-block
 catch-up every sixth round (six hours). Admitted checkout hints use their independent instant
 processing path. Missing fast discovery delays unhinted credits until coverage discovers the

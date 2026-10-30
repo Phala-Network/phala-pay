@@ -373,9 +373,13 @@ verbatim:
 Fresh quote snapshots have a configured daily cap per price chain and environment
 (default 60, production 150). Exhaustion returns retryable `503 price_unavailable`; the
 service never substitutes a stale price. Manual
-transfers are discovered every 300 seconds; admitted checkout hints use the independent instant
+transfers to hot addresses are discovered every 300 seconds; admitted checkout hints use the independent instant
 processing path at route confirmation. Separate dual checkpoints run every 600 seconds, and
-full dual coverage runs every 3,600 seconds with six-hour catch-up. With healthy endpoints,
+full dual coverage runs every 3,600 seconds with six-hour catch-up. By default, an address is hot
+when a quote was created in the last 24 hours (any state), or a deposit's chain timestamp is within
+the last seven days. Payments without a recent quote or deposit and without a transaction hint
+may take about 70 minutes to be discovered by dual coverage. Hints work for every address.
+With healthy endpoints,
 caught-up addresses and work within pilot allowances, expiry/cancellation and unpaid reservation
 release target about 70 minutes after qualifying finality. Backlog and outages can extend this;
 closure still requires complete dual coverage past the window and no pending in-window payment.
@@ -592,8 +596,10 @@ and like the one deposit address an exchange gives a user for every token and ev
 It never expires: the customer chooses an amount **within the accepted token’s per-transfer
 token bounds and meeting its minimum credit value, at any time, on any listed network**.
 Eligible transfers are credited at the market (spot) rate after confirmation,
-within about 5 minutes plus the chain's confirmation (a transfer sent without a
-[transaction-hash hint](#transaction-hash-hints) waits for the 5-minute discovery scan), through
+within about 5 minutes plus the chain's confirmation for hot addresses (a quote in the last
+24 hours or a deposit in the last seven days by default). A cold payment without a
+[transaction-hash hint](#transaction-hash-hints) may take about 70 minutes with healthy endpoints
+and caught-up hourly dual coverage. Hints work for cold addresses too. All credits use
 the same `deposit.credited` webhook as a quote payment.
 **Send only listed tokens**: a token that is not listed is not credited.
 
@@ -702,19 +708,18 @@ customer pick the network and the token; show that network, the token contract, 
 with a copy button, and a QR of that token's `payment_uri` (it carries the token, chain, and address
 and no amount). State the USD credit minimum and selected token’s maximum on its network, for
 example: "Send at least $5.00 and up to 10,100 USDC per transfer on Base. Other tokens and
-networks aren’t credited. Credited at the market rate, usually within about 5 minutes." If the atomic minimum is positive, state both independent floors: "Send at least $5.00
+networks aren’t credited. Credited at the market rate after confirmation." If the atomic minimum is positive, state both independent floors: "Send at least $5.00
 and 10 USDC, up to 10,100 USDC per transfer on Base." Omit the atomic minimum when it is zero;
 the stricter floor at payment time binds. Group token amounts in English without losing precision.
 Read all limits from the latest public view when available. When any limit is missing or malformed,
 use "Send USDC on Base" without a range; never promise credit for any amount.
-A payer sending from their own wallet or exchange gives the page no transaction hash,
-so unless your page submits one ([transaction-hash hints](#transaction-hash-hints)), the chosen
-network's time is the 5-minute discovery scan plus its `typical_credit_seconds` in the address's public view
-(above), the time from paying to credit at the confirmation your account's payments on that chain
-wait for, as `GET /v1/config` reports it. Do not promise `typical_credit_seconds` alone, which is
-the time of a hinted payment: even a page that submits the hash can exhaust the daily hint budget
-and fall back to the scan. Until the view is loaded the page names no time: "Credited at the market rate after
-confirmation."
+A payer sending from their own wallet or exchange gives the page no transaction hash.
+Without an admitted [transaction-hash hint](#transaction-hash-hints), hot addresses wait for
+five-minute discovery plus the network's `typical_credit_seconds` in the public view. Cold
+addresses wait for hourly dual coverage, up to about 70 minutes with healthy endpoints and
+caught-up coverage. Do not promise `typical_credit_seconds` alone: even a page that submits the
+hash can exhaust the daily hint budget and fall back to scanning. The public view does not
+identify hot-set membership, so promise only "Credited at the market rate after confirmation."
 `<DepositAddress depositAddress={…} clientSecret={…} apiBase={…}>` from `@phala/pay-react`
 renders exactly that from `address` and `networks` (pass only those and the `client_secret` to the
 browser) and, with the secret, shows each payment as it arrives: "1.5 PHA received on Sepolia, 1

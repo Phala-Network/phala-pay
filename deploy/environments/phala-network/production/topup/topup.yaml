@@ -4,6 +4,9 @@
 environment: production
 max_attached_pending_refunds: 2
 max_refund_attachments_per_day: 1
+discovery:
+  quote_window_hours: 24
+  deposit_window_days: 7
 hints_per_day: 200
 quote_snapshots_per_day: 150
 public_origin: https://pay-api.phala.com
