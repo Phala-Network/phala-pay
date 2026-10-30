@@ -1357,7 +1357,8 @@ Idempotency-Key: "…"
 
 Coordinate payout capacity with your operator first. The deployment-configured
 `max_attached_pending_refunds` limit allows at most two attached-pending refunds in production
-and one in staging. Each environment allows one new attachment per rolling 24 hours, across
+and one in staging. `max_refund_attachments_per_day` sets the rolling 24-hour allowance
+(currently one in every shipped config), across
 all merchants and modes. A refused attachment returns non-retryable
 `422 refund_attachment_limit_exceeded` and keeps the reservation; contact the operator and do
 not send another payout. Repeating the same attachment consumes no quota, and already attached

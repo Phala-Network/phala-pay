@@ -120,8 +120,8 @@ def sync_detailed(
     transaction returns the refund. From here on the refund cannot be canceled: it is `failed`
     only when its transaction is proven not to pay it.
     Each environment has a configured attached-pending refund limit (production 2, staging 1),
-    and permits one new attachment per
-    rolling 24 hours across all accounts and modes. Repeating the same attachment consumes no
+    and a configured rolling 24-hour attachment limit (currently 1), across all accounts and modes.
+    Repeating the same attachment consumes no
     quota. A limit refusal preserves the reservation; contact the operator before another payout.
 
     Args:
@@ -167,8 +167,8 @@ def sync(
     transaction returns the refund. From here on the refund cannot be canceled: it is `failed`
     only when its transaction is proven not to pay it.
     Each environment has a configured attached-pending refund limit (production 2, staging 1),
-    and permits one new attachment per
-    rolling 24 hours across all accounts and modes. Repeating the same attachment consumes no
+    and a configured rolling 24-hour attachment limit (currently 1), across all accounts and modes.
+    Repeating the same attachment consumes no
     quota. A limit refusal preserves the reservation; contact the operator before another payout.
 
     Args:
@@ -209,8 +209,8 @@ async def asyncio_detailed(
     transaction returns the refund. From here on the refund cannot be canceled: it is `failed`
     only when its transaction is proven not to pay it.
     Each environment has a configured attached-pending refund limit (production 2, staging 1),
-    and permits one new attachment per
-    rolling 24 hours across all accounts and modes. Repeating the same attachment consumes no
+    and a configured rolling 24-hour attachment limit (currently 1), across all accounts and modes.
+    Repeating the same attachment consumes no
     quota. A limit refusal preserves the reservation; contact the operator before another payout.
 
     Args:
@@ -254,8 +254,8 @@ async def asyncio(
     transaction returns the refund. From here on the refund cannot be canceled: it is `failed`
     only when its transaction is proven not to pay it.
     Each environment has a configured attached-pending refund limit (production 2, staging 1),
-    and permits one new attachment per
-    rolling 24 hours across all accounts and modes. Repeating the same attachment consumes no
+    and a configured rolling 24-hour attachment limit (currently 1), across all accounts and modes.
+    Repeating the same attachment consumes no
     quota. A limit refusal preserves the reservation; contact the operator before another payout.
 
     Args:

@@ -89,7 +89,7 @@ calls/month ≈ 30 × calls/day
 The method mix is about 11% `eth_getLogs`, 15% `eth_call` and `eth_blockNumber`, and 74% header,
 receipt and transaction reads. Weighted billing below is blended with this mix. At Scale, the
 1,000 issued-address cap and the hint and quote caps must also rise; custody then adds about
-120 calls/day per route per 1,000 addresses on each endpoint.
+24 calls/day per route per 1,000 addresses on each endpoint (1,000-call custody chunks).
 
 ## From pricing pages: fee models
 
