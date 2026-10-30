@@ -184,6 +184,7 @@ async fn harness_with_hint_budget(
             BTreeMap::from([(
                 CHAIN,
                 ChainRpc {
+                    max_issued_addresses: 1000,
                     read: read.clone(),
                     verify: verify.clone(),
                 },
@@ -246,6 +247,7 @@ async fn harness_with_hint_budget(
     let state = AppState {
         pool: pool.clone(),
         max_attached_pending_refunds: std::num::NonZeroU32::new(2).expect("positive refund limit"),
+        max_refund_attachments_per_day: 1,
         routes: routes.clone(),
         admin_key: topup::api::VerificationKey::from_base64(
             "hint/admin".into(),

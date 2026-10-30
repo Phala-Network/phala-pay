@@ -31,9 +31,6 @@ use super::models::{
     ReconciliationBlockReport, RouteDailyReport,
 };
 
-/// New attachments in a rolling 24-hour window, including refunds already resolved.
-pub const MAX_REFUND_ATTACHMENTS_PER_DAY: i64 = 1;
-
 /// Records a verified request signature exactly once within the acceptance window.
 pub async fn record_signature(
     pool: &PgPool,
@@ -585,6 +582,7 @@ pub async fn mark_refund_paid<'c>(
     db: impl Acquire<'c, Database = Postgres>,
     routes: &RouteSet,
     max_attached_pending_refunds: std::num::NonZeroU32,
+    max_refund_attachments_per_day: u32,
     scope: Scope,
     refund_id: Uuid,
     tx_hash: B256,
@@ -596,6 +594,7 @@ pub async fn mark_refund_paid<'c>(
         &mut transaction,
         routes,
         max_attached_pending_refunds,
+        max_refund_attachments_per_day,
         scope,
         refund_id,
         tx_hash,
@@ -611,6 +610,7 @@ async fn mark_refund_paid_in(
     transaction: &mut sqlx::Transaction<'_, Postgres>,
     routes: &RouteSet,
     max_attached_pending_refunds: std::num::NonZeroU32,
+    max_refund_attachments_per_day: u32,
     scope: Scope,
     refund_id: Uuid,
     tx_hash: B256,
@@ -665,7 +665,7 @@ async fn mark_refund_paid_in(
             "the environment's attached-pending refund limit is reached; contact the operator",
         ));
     }
-    if recent >= MAX_REFUND_ATTACHMENTS_PER_DAY {
+    if recent >= i64::from(max_refund_attachments_per_day) {
         return Err(ApiError::refund_attachment_limit_exceeded(
             "the environment's rolling 24-hour refund attachment limit is reached; contact the operator",
         ));

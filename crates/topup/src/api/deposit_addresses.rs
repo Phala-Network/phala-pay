@@ -444,7 +444,10 @@ async fn issuable_chains(
             }
         }
         if let Some(route) = open {
-            issuable.chains.push(ChainContracts::of(route));
+            issuable.chains.push(ChainContracts::of(
+                route,
+                state.routes.max_issued_addresses(chain_id),
+            ));
         }
     }
     Ok(issuable)

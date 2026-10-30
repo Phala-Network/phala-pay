@@ -81,6 +81,7 @@ One YAML file, parsed with unknown fields refused, holds every public setting of
 ```yaml
 environment: staging                       # the Sentry environment: also gates staging-only price licensing opt-in
 max_attached_pending_refunds: 1             # required positive deployment cap; production uses 2
+max_refund_attachments_per_day: 1           # required rolling 24-hour deployment cap
 # hints_per_day: 80                       # optional; environment-wide per UTC day
 # quote_snapshots_per_day: 60             # optional; per price chain per UTC day
 public_origin: https://pay-api-staging.phala.com
@@ -89,6 +90,7 @@ admin_key:
   public_key: 23Y9wEJMOTySGV3UXmcTFnQsbigA9/cYTvmqdQxzmdo=   # standard base64 ed25519
 rpc:
   - chain_id: 11155111
+    max_issued_addresses: 1000              # required historical address cap on this chain
     read:
       id: ankr-sepolia
       url: "https://rpc.ankr.com/eth_sepolia/{key}"
@@ -107,10 +109,26 @@ routes:                                    # every enabled route version, as rou
 
 `max_attached_pending_refunds` is required and must be a positive integer. The shipped production
 configuration sets it to 2 and staging to 1. It applies atomically across all accounts and modes
-in the deployment; one new refund attachment per rolling 24 hours remains a fixed limit.
+in the deployment. Required `max_refund_attachments_per_day` limits new attachments over a
+rolling 24 hours, including already resolved refunds. It accepts integers from 1 to 1,000,000;
+all shipped configurations explicitly use 1.
 Exhaustion returns non-retryable `422 refund_attachment_limit_exceeded`, preserving the refund
 reservation. Idempotent attachment retries do not consume quota; attached refunds keep being
-verified. Restore N-1 with its verified release configuration, which predates this required field.
+verified. Lowering either refund cap does not cancel attached refunds or reset their timestamps.
+
+Every `rpc` entry requires `max_issued_addresses`, an integer from 1 to 1,000,000, counting all
+historical addresses on that chain across accounts and modes. All shipped configurations use
+1,000. Retirement and expiry do not free capacity. Lowering the cap below historical usage blocks
+new issuance; existing networks remain watched and reusable. Warnings and critical alerts fire at
+70% and 90% of that chain's configured cap (rounded up). `topup config show` includes both new
+required limits. Missing, zero, negative, fractional or out-of-range values fail validation.
+
+**Rollback:** older releases reject these keys as unknown fields. Use the target release's retained
+verified configuration and kit, as required by the
+[rollback policy](../deploy/README.md#rollback-compatibility). Check historical address counts
+against that target's limits first. If usage has exceeded 1,000, releases with the old fixed cap
+cannot issue new addresses; do not roll back to them. Refund allowances must also fit the target
+release's budget; a rollback never clears rolling attachment history.
 
 - **`hints_per_day`** and **`quote_snapshots_per_day`** are optional integers from 1 to
   1,000,000, defaulting to 80 and 60 respectively. The former limits hint tasks across all

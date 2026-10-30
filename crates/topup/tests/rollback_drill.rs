@@ -301,8 +301,8 @@ async fn merchant(origin: &str, key: &str, path: &str, body: Value) -> Result<Va
     Ok(value)
 }
 fn new_config(route: &RouteFile, tls: &support::tls::RpcTlsProxy) -> Result<Value> {
-    let raw = json!({"environment":"local","public_origin":"http://topup:8080","max_attached_pending_refunds":2,"admin_key":{"id":"drill/admin","public_key":support::public_key_base64(&ed25519_dalek::SigningKey::from_bytes(&[41;32]))},
-        "rpc":[{"chain_id":1,"read":{"id":"ankr-drill","url":format!("{}/{{key}}",tls.read_url),"sealed_key":"TOPUP_RPC_ANKR_KEY","max_log_blocks":3000},"verify":{"id":"infura-drill","url":format!("{}/{{key}}",tls.verify_url),"sealed_key":"TOPUP_RPC_INFURA_KEY","max_log_blocks":3000}}],"routes":[route]});
+    let raw = json!({"environment":"local","public_origin":"http://topup:8080","max_attached_pending_refunds":2,"max_refund_attachments_per_day":1,"admin_key":{"id":"drill/admin","public_key":support::public_key_base64(&ed25519_dalek::SigningKey::from_bytes(&[41;32]))},
+        "rpc":[{"chain_id":1,"max_issued_addresses":1000,"read":{"id":"ankr-drill","url":format!("{}/{{key}}",tls.read_url),"sealed_key":"TOPUP_RPC_ANKR_KEY","max_log_blocks":3000},"verify":{"id":"infura-drill","url":format!("{}/{{key}}",tls.verify_url),"sealed_key":"TOPUP_RPC_INFURA_KEY","max_log_blocks":3000}}],"routes":[route]});
     let config = topup::config::Config::parse(&raw.to_string()).map_err(anyhow::Error::msg)?;
     Ok(serde_json::from_str(
         &config.resolved_json().map_err(anyhow::Error::msg)?,
@@ -526,13 +526,28 @@ async fn published_image_round_trip() -> Result<()> {
         route.pricing.sources=vec![topup_core::price::Source::Chainlink {feed:"USDC_USD".into(),chain_id:1,observation_chain_id:None}];
         route.merchant.min_amount=Bounded::at(1);route.merchant.min_deposit_atomic=Bounded::at(AtomicAmount::new(alloy_primitives::U256::ZERO));
         route.validate()?;
-        // The compatible published release understands the same resolved configuration.
+        // N-1 uses its own parseable configuration, retaining the same approved capacities.
         let current_config=new_config(&route,&tls)?;
-        let previous_config=current_config.clone();
         let current_path=directory.path().join("current.json");
         let previous_path=directory.path().join("previous.json");
         std::fs::write(&current_path,current_config.to_string())?;
+        let previous_schema: Value = serde_saphyr::from_str(&std::fs::read_to_string(
+            std::env::var("TOPUP_ROLLBACK_CONFIG").context("verified N-1 kit configuration required")?
+        )?)?;
+        let mut previous_config=current_config.clone();
+        if previous_schema.get("max_refund_attachments_per_day").is_none() {
+            previous_config.as_object_mut().context("configuration object")?.remove("max_refund_attachments_per_day");
+        }
+        let old_rpc=previous_schema["rpc"].as_array().context("N-1 RPC configuration")?.first().context("N-1 chain")?;
+        if old_rpc.get("max_issued_addresses").is_none() {
+            for rpc in previous_config["rpc"].as_array_mut().context("RPC array")? {
+                rpc.as_object_mut().context("RPC object")?.remove("max_issued_addresses");
+            }
+        }
         std::fs::write(&previous_path,previous_config.to_string())?;
+        let validation=previous_image(&image,&[],&previous_path,&database,&tls)
+            .args(["config","check","/etc/drill.json"]).output()?;
+        ensure!(validation.status.success(), "N-1 fixture configuration: {}",String::from_utf8_lossy(&validation.stderr));
         let migration=Command::new("docker").args(["run","--rm","--network","host","-e",&format!("DATABASE_URL={}",database.owner_url),&image,"topup","migrate"]).output()?;
         ensure!(migration.status.success(),"published N-1 migrate: {}",String::from_utf8_lossy(&migration.stderr));
         // N-1 screens against a verified SDN snapshot; activate the fixture one before it serves.
@@ -615,7 +630,7 @@ async fn published_image_round_trip() -> Result<()> {
         current_service.stop()?;
         ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM deposits WHERE tx_hash=$1").bind(format!("{pending_hint:#x}")).fetch_one(&database.app_pool).await?==0);
         let historic_block:i64=sqlx::query_scalar("SELECT block_number FROM deposits WHERE tx_hash=$1").bind(format!("{first:#x}")).fetch_one(&database.app_pool).await?;
-        let (reissued,created)=topup::deposit_addresses::reissue(&database.app_pool,&account,true,"round-trip",&[ChainContracts::of(&route)],ReissueTarget {version:Some(2),address:Some(historical_forwarder)},None,None,Some(Utc::now()-chrono::TimeDelta::hours(1)),&std::collections::BTreeMap::from([(1,u64::try_from(historic_block.saturating_sub(16))?)]),&Actor::system("rollback-drill"),"historical payment reissue").await?;
+        let (reissued,created)=topup::deposit_addresses::reissue(&database.app_pool,&account,true,"round-trip",&[ChainContracts::of(&route, 1000)],ReissueTarget {version:Some(2),address:Some(historical_forwarder)},None,None,Some(Utc::now()-chrono::TimeDelta::hours(1)),&std::collections::BTreeMap::from([(1,u64::try_from(historic_block.saturating_sub(16))?)]),&Actor::system("rollback-drill"),"historical payment reissue").await?;
         ensure!(created && reissued.version==2);
         ensure!(sqlx::query_scalar::<_,bool>("SELECT dual_covered_through IS NULL AND created_block < $2 FROM addresses WHERE deposit_address_id=$1").bind(reissued.id).bind(i64::try_from(historical_block)?).fetch_one(&database.app_pool).await?);
         let salts:Vec<String>=sqlx::query_scalar("SELECT salt FROM addresses WHERE deposit_address_id=ANY($1) ORDER BY deposit_address_id").bind(vec![da_id,reissued.id]).fetch_all(&database.app_pool).await?;
@@ -642,11 +657,12 @@ async fn published_image_round_trip() -> Result<()> {
         let frozen=reqwest::Client::new().post(format!("{origin}/v1/quotes")).bearer_auth(&key).header("Idempotency-Key",Uuid::new_v4().to_string()).json(&json!({"client_reference_id":"frozen","amount":100,"currency":"usd","chain_id":1,"asset":"usdc"})).send().await?;
         ensure!(frozen.status().as_u16()==400 && frozen.json::<Value>().await?["error"]["code"]=="chain_frozen","N-1 ignored N's chain-scope freeze");
         // Only after a fresh passing dual contract check, use the audited lift boundary.
-        let pair=topup::chain_rpc::ChainRpc {read:Arc::new(topup_adapters::chain::evm::EvmClient::new(&anvil.rpc_url)?),verify:Arc::new(topup_adapters::chain::evm::EvmClient::new(&anvil.rpc_url)?)};
+        let pair=topup::chain_rpc::ChainRpc { max_issued_addresses: 1000,read:Arc::new(topup_adapters::chain::evm::EvmClient::new(&anvil.rpc_url)?),verify:Arc::new(topup_adapters::chain::evm::EvmClient::new(&anvil.rpc_url)?)};
         let routes=RouteSet::with_rpc(vec![route.clone()],std::collections::BTreeMap::from([(1,pair)])).map_err(anyhow::Error::msg)?;
         let (app, _)=topup::api::router(topup::api::AppState {
             pool:database.app_pool.clone(), routes:Arc::new(routes),
             max_attached_pending_refunds: std::num::NonZeroU32::new(2).expect("positive refund limit"),
+        max_refund_attachments_per_day: 1,
             admin_key:topup::api::VerificationKey::from_base64("drill/admin".into(),&support::public_key_base64(&ed25519_dalek::SigningKey::from_bytes(&[41;32]))).unwrap(),
             maintenance_keys:Vec::new(),public_origin:topup::api::PublicOrigin::parse(support::TEST_ORIGIN).unwrap(),
             attestor:Arc::new(topup_adapters::attestation::DstackAttestor::new()),

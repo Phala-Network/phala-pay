@@ -25,6 +25,8 @@ pub struct EndpointSpec {
 pub struct ChainRpcSpec {
     /// EVM chain identifier.
     pub chain_id: u64,
+    /// Required cap on all historical issued addresses on this chain (1..=1,000,000).
+    pub max_issued_addresses: u32,
     /// Ankr read endpoint.
     pub read: EndpointSpec,
     /// Independent verify endpoint (BlockPI in production, Infura in staging).
@@ -33,6 +35,8 @@ pub struct ChainRpcSpec {
 /// Shared endpoint clients, without selection, member pinning or failover.
 #[derive(Clone, Debug)]
 pub struct ChainRpc {
+    /// Attested historical issued-address cap.
+    pub max_issued_addresses: u32,
     /// Read client.
     pub read: Arc<EvmClient>,
     /// Independently decoded verification client.
@@ -50,6 +54,7 @@ pub fn validate(specs: &[ChainRpcSpec], routes: &[RouteFile]) -> Result<(), Stri
         {
             return Err("rpc.chain_id must be positive, fit bigint and be unique".into());
         }
+        crate::config::validate_capacity("rpc.max_issued_addresses", spec.max_issued_addresses)?;
         let mut hosts = Vec::new();
         for endpoint in [&spec.read, &spec.verify] {
             if endpoint.id.is_empty()
@@ -154,6 +159,7 @@ impl ChainRpcSpec {
             Ok(Arc::new(client))
         };
         Ok(ChainRpc {
+            max_issued_addresses: self.max_issued_addresses,
             read: build(&self.read, false)?,
             verify: build(&self.verify, true)?,
         })

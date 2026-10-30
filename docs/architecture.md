@@ -609,7 +609,7 @@ One transaction writes evidence, dual markers, coverage at `e`, address progress
 backfill end, and the N-1 compatibility cursor at the boundary reached by every address. The
 cursor's header is read on both endpoints when it differs from `e`. It deletes pending rows at or below `e`. Only
 caught-up addresses become `backfilled`. Issuance requires initialized dual coverage and respects
-the 1,000-address chain cap. Empty chains start at the agreed checkpoint; an upgraded or restored
+the configured `rpc[].max_issued_addresses` cap (currently 1,000 on every chain). Empty chains start at the agreed checkpoint; an upgraded or restored
 chain starts at `min(min(created_block).saturating_sub(1), checkpoint)`, with its header read on
 both endpoints. Startup rebases an old cursor above dual coverage. Lowering `created_block`
 atomically clears its dual marker, lowers the compatibility cursor as needed and clears its time.
@@ -1590,7 +1590,7 @@ in-flight deposits have resolved (`deploy/runbooks/route-retirement.md`).
 Engineering limits that do not decide money are code constants, such as the RPC timeout. Reads
 over every issued address (token balances, `addressOf`) are
 aggregated through the canonical Multicall3 (`0xcA11bde05977b3631167028862bE2a173976CA11`) with
-`aggregate3` and `allowFailure = false`, one `eth_call` per 200 calls (a code constant bounding
+`aggregate3` and `allowFailure = false`, one `eth_call` per 1,000 calls (a code constant bounding
 calldata and gas), at the block each read needs (`finalized` for custody reconciliation). They
 never use JSON-RPC batches, which public providers throttle far below their single-request limits
 (Tenderly's public gateway refuses a batch of more than five `eth_call`s), nor one request per

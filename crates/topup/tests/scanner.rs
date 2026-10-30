@@ -1066,7 +1066,7 @@ async fn slow_rpc_does_not_hold_chain_lock_during_initialization_or_coverage() -
                     started.notified().await;
                     let outcome = tokio::time::timeout(std::time::Duration::from_secs(1), async {
                         let mut tx = d.app_pool.begin().await?;
-                        let admitted = db::chain_reads::admit_address(&mut tx, 1).await?;
+                        let admitted = db::chain_reads::admit_address(&mut tx, 1, 1000).await?;
                         tx.rollback().await?;
                         Ok::<_, sqlx::Error>(admitted)
                     })
@@ -1379,7 +1379,7 @@ async fn empty_chain_is_initialized_before_issuance_and_legacy_state_refuses_sta
         Box::pin(async move {
             let mut tx = d.app_pool.begin().await?;
             ensure!(
-                db::chain_reads::admit_address(&mut tx, 1).await?
+                db::chain_reads::admit_address(&mut tx, 1, 1000).await?
                     == db::chain_reads::AddressAdmission::NotReady
             );
             tx.rollback().await?;
@@ -1387,7 +1387,7 @@ async fn empty_chain_is_initialized_before_issuance_and_legacy_state_refuses_sta
             scanner::initialize_chain(&d.app_pool, 1, &reader, &reader).await?;
             let mut tx = d.app_pool.begin().await?;
             ensure!(
-                db::chain_reads::admit_address(&mut tx, 1).await?
+                db::chain_reads::admit_address(&mut tx, 1, 1000).await?
                     == db::chain_reads::AddressAdmission::Admitted
             );
             tx.rollback().await?;
@@ -1808,7 +1808,12 @@ async fn lagging_chunk_is_bounded_and_never_bulk_marks_unscanned_addresses() -> 
         ensure!(marked==1000);
         ensure!(read.requests.lock().unwrap().iter().all(|(addresses,_,_)|addresses.len()<=1000));
         ensure!(verify.requests.lock().unwrap().iter().all(|(addresses,_,_)|addresses.len()<=1000));
-        let mut tx=d.app_pool.begin().await?;ensure!(db::chain_reads::admit_address(&mut tx,1).await? == db::chain_reads::AddressAdmission::CapacityReached);tx.rollback().await?;
+        let mut tx=d.app_pool.begin().await?;ensure!(db::chain_reads::admit_address(&mut tx, 1, 1000).await? == db::chain_reads::AddressAdmission::CapacityReached);tx.rollback().await?;
+        let mut tx=d.app_pool.begin().await?;
+        ensure!(db::chain_reads::admit_address(&mut tx, 1, 1001).await? == db::chain_reads::AddressAdmission::CapacityReached);
+        ensure!(db::chain_reads::admit_address(&mut tx, 1, 1002).await? == db::chain_reads::AddressAdmission::Admitted);
+        ensure!(db::chain_reads::admit_addresses(&mut tx, 1, 2, 1002).await? == db::chain_reads::AddressAdmission::CapacityReached);
+        tx.rollback().await?;
         Ok(())
     })).await
 }

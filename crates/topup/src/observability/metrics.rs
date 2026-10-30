@@ -266,20 +266,25 @@ pub fn render_daily_budget_limits(
 
 /// Durable coverage and daily budget gauges are reloaded on authenticated scrapes, including
 /// after restart; no RPC request or address-wide backfill is issued here.
-pub async fn render_chain_reads(pool: &PgPool) -> Result<String, anyhow::Error> {
-    render_chain_reads_with_clock(pool, None).await
+pub async fn render_chain_reads(
+    pool: &PgPool,
+    routes: &crate::routes::RouteSet,
+) -> Result<String, anyhow::Error> {
+    render_chain_reads_with_clock(pool, routes, None).await
 }
 
 /// Reloads durable gauges with a supplied clock for the rolling unresolved-entry window.
 pub async fn render_chain_reads_at(
     pool: &PgPool,
+    routes: &crate::routes::RouteSet,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<String, anyhow::Error> {
-    render_chain_reads_with_clock(pool, Some(now)).await
+    render_chain_reads_with_clock(pool, routes, Some(now)).await
 }
 
 async fn render_chain_reads_with_clock(
     pool: &PgPool,
+    routes: &crate::routes::RouteSet,
     now: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Result<String, anyhow::Error> {
     if let Some(snapshot) = crate::sanctions::active(pool)
@@ -332,16 +337,19 @@ async fn render_chain_reads_with_clock(
     let cap_gauge = IntGaugeVec::new(
         Opts::new(
             "topup_issued_address_cap",
-            "Permanent per-chain issued-address pilot cap.",
+            "Configured per-chain historical issued-address cap.",
         ),
         &["chain_id"],
     )?;
     for (chain, count) in health.issued {
+        let cap = u64::try_from(chain)
+            .ok()
+            .map(|chain| routes.max_issued_addresses(chain));
         let chain = chain.to_string();
         issued_gauge.with_label_values(&[&chain]).set(count);
-        cap_gauge
-            .with_label_values(&[&chain])
-            .set(crate::db::chain_reads::ISSUED_ADDRESS_CAP);
+        if let Some(cap) = cap {
+            cap_gauge.with_label_values(&[&chain]).set(i64::from(cap));
+        }
     }
     let unresolved_gauge = IntGaugeVec::new(
         Opts::new(

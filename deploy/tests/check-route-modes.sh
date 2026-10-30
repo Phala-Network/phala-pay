@@ -37,7 +37,7 @@ environment() {
         id=$(sed -E 's/.*route"?: *"?([a-z0-9-]+).*/\1/' <<<"$line")
         chain=$(sed -E 's/.*chain_id"?: *([0-9]+).*/\1/' <<<"$line")
         if ! grep -q "chain_id: $chain$" "$tmp/$name/topup.yaml"; then
-            sed -i "s|^rpc:$|rpc:\n  - chain_id: $chain\n    read: {id: $id-read, url: 'https://read.example/{key}', sealed_key: TOPUP_RPC_ANKR_KEY, max_log_blocks: 3000}\n    verify: {id: $id-verify, url: 'https://verify.example/{key}', sealed_key: TOPUP_RPC_INFURA_KEY, max_log_blocks: 3000}|" "$tmp/$name/topup.yaml"
+            sed -i "s|^rpc:$|rpc:\n  - chain_id: $chain\n    max_issued_addresses: 1000\n    read: {id: $id-read, url: 'https://read.example/{key}', sealed_key: TOPUP_RPC_ANKR_KEY, max_log_blocks: 3000}\n    verify: {id: $id-verify, url: 'https://verify.example/{key}', sealed_key: TOPUP_RPC_INFURA_KEY, max_log_blocks: 3000}|" "$tmp/$name/topup.yaml"
         fi
 
     done

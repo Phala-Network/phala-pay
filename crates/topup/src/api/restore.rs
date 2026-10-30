@@ -603,7 +603,15 @@ pub(crate) async fn reissue_deposit_address(
         .routes
         .current_in(request.livemode)
         .filter(|route| state.routes.chain_ready(route.chain.chain_id))
-        .map(|route| (route.chain.chain_id, ChainContracts::of(route)))
+        .map(|route| {
+            (
+                route.chain.chain_id,
+                ChainContracts::of(
+                    route,
+                    state.routes.max_issued_addresses(route.chain.chain_id),
+                ),
+            )
+        })
         .collect::<std::collections::BTreeMap<_, _>>()
         .into_values()
         .collect();

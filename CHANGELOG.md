@@ -14,6 +14,18 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Changed
+
+- Require reviewed `rpc[].max_issued_addresses` and top-level
+  `max_refund_attachments_per_day` configuration. Shipped values stay at 1,000 historical
+  addresses per chain and one new refund attachment per rolling 24 hours. Address admission,
+  metrics, 70%/90% alerts and restore checks use the configured cap; the restore/rollback check
+  compares against the target release's validated config. Older releases require their retained
+  config and kit; exceeding their fixed 1,000-address cap raises the effective rollback floor.
+- Batch custody Multicall3 reads in chunks of 1,000. RPC startup/deploy preflight proves a full
+  aggregate on each endpoint at finalized and historical canonical pins and fails closed on
+  provider rejection, failed subcalls or incomplete results.
+
 ## [0.13.3] - 2026-10-29
 
 ### Added

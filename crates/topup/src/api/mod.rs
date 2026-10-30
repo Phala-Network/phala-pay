@@ -80,6 +80,8 @@ pub struct AppState {
     pub routes: Arc<RouteSet>,
     /// Positive deployment-wide admission cap; staging uses 1 and production 2.
     pub max_attached_pending_refunds: std::num::NonZeroU32,
+    /// Required deployment-wide new attachment limit over a rolling 24 hours.
+    pub max_refund_attachments_per_day: u32,
     /// Separately configured administrative verification key.
     pub admin_key: VerificationKey,
     /// Least-privilege signing keys for POST instance pause/resume only.
@@ -843,6 +845,7 @@ mod tests {
             pool,
             max_attached_pending_refunds: std::num::NonZeroU32::new(2)
                 .expect("positive refund limit"),
+            max_refund_attachments_per_day: 1,
             routes: Arc::default(),
             maintenance_keys: Vec::new(),
             admin_key: VerificationKey::from_base64(

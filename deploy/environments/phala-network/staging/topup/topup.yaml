@@ -3,6 +3,7 @@
 # request and a Deploy `upgrade`.
 environment: staging
 max_attached_pending_refunds: 1
+max_refund_attachments_per_day: 1
 public_origin: https://pay-api-staging.phala.com
 admin_key:
   id: admin/staging-v1
@@ -16,6 +17,7 @@ maintenance_keys:
 # Fast discovery uses read; coverage and money decisions require read/verify agreement.
 rpc:
   - chain_id: 11155111
+    max_issued_addresses: 1000
     read:
       id: ankr-sepolia
       url: "https://rpc.ankr.com/eth_sepolia/{key}"
@@ -27,6 +29,7 @@ rpc:
       sealed_key: TOPUP_RPC_INFURA_KEY
       max_log_blocks: 3000
   - chain_id: 84532
+    max_issued_addresses: 1000
     read:
       id: ankr-base-sepolia
       url: "https://rpc.ankr.com/base_sepolia/{key}"
@@ -38,6 +41,7 @@ rpc:
       sealed_key: TOPUP_RPC_INFURA_KEY
       max_log_blocks: 3000
   - chain_id: 1
+    max_issued_addresses: 1000
     read:
       id: ankr-mainnet
       url: "https://rpc.ankr.com/eth/{key}"
@@ -49,6 +53,7 @@ rpc:
       sealed_key: TOPUP_RPC_INFURA_KEY
       max_log_blocks: 3000
   - chain_id: 8453
+    max_issued_addresses: 1000
     read:
       id: ankr-base-mainnet
       url: "https://rpc.ankr.com/base/{key}"

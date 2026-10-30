@@ -20,12 +20,12 @@ pub const ERROR_CODES: &[(&str, u16, &str)] = &[
     (
         "refund_attachment_limit_exceeded",
         422,
-        "The environment has a configured attached-pending refund limit (production 2, staging 1), and permits one new attachment per rolling 24 hours, across all merchants and modes. This is not retryable; contact the operator before sending or attaching another payout. The refund stays pending and reserved. Repeating the same attachment does not consume quota; existing attachments continue verification.",
+        "The environment has a configured attached-pending refund limit (production 2, staging 1), and a configured rolling 24-hour attachment limit (currently 1), across all merchants and modes. This is not retryable; contact the operator before sending or attaching another payout. The refund stays pending and reserved. Repeating the same attachment does not consume quota; existing attachments continue verification.",
     ),
     (
         "address_capacity_reached",
         422,
-        "The chain has reached its permanent pilot limit of 1,000 issued addresses, including retired and expired addresses. This is not retryable; the operator must upgrade the scanning/provider plan before issuing more.",
+        "The chain has reached its configured limit of historical issued addresses, including retired and expired addresses. This is not retryable; the operator must review capacity and the scanning/provider plan before issuing more.",
     ),
     (
         "chain_unavailable",
@@ -859,7 +859,7 @@ impl ApiError {
         )
     }
 
-    /// Permanent per-chain pilot quota; no automatic retry can recover capacity.
+    /// Configured historical per-chain quota; no automatic retry can recover capacity.
     #[must_use]
     pub fn address_capacity_reached() -> Self {
         Self::new(

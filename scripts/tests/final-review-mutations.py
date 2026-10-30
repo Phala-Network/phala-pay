@@ -35,7 +35,7 @@ cases = [
      ["--test", "finality", "ambiguous_replacements_read_no_candidates_and_alert_without_reversing"]),
     (repository, "refund concurrent pending cap", "if pending >= i64::from(max_attached_pending_refunds.get()) {", "if false {",
      ["--test", "refunds", "refund_attachment_pending_cap_keeps_existing_checks_and_reservations"]),
-    (repository, "refund rolling daily cap", "if recent >= MAX_REFUND_ATTACHMENTS_PER_DAY {", "if false {",
+    (repository, "refund rolling daily cap", "if recent >= i64::from(max_refund_attachments_per_day) {", "if false {",
      ["--test", "refunds", "refund_attachment_daily_cap_is_atomic_across_merchants_and_keeps_reservations"]),
     (refunds, "refund reservation", "\n            if overdue {", "\n            if overdue {\n                sqlx::query(\"UPDATE refunds SET status='failed', failure_reason='transaction_not_found' WHERE id=$1\").bind(check.refund_id).execute(&self.pool).await?;",
      ["--test", "refunds", "an_unseen_refund_alerts_after_a_day_and_cannot_be_refunded_twice"]),

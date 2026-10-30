@@ -551,7 +551,12 @@ async fn ambiguous_replacements_read_no_candidates_and_alert_without_reversing()
 }
 
 async fn unresolved_counts(pool: &sqlx::PgPool, now: DateTime<Utc>) -> Result<(u64, u64)> {
-    let text = topup::observability::metrics::render_chain_reads_at(pool, now).await?;
+    let text = topup::observability::metrics::render_chain_reads_at(
+        pool,
+        &topup::routes::RouteSet::default(),
+        now,
+    )
+    .await?;
     let count = |name: &str| -> Result<u64> {
         let series = format!("{name}{{chain_id=\"{CHAIN_ID}\"}} ");
         Ok(text

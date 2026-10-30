@@ -171,14 +171,22 @@ const OUTBOX_HEALTH_SQL: &str = "SELECT count(*) AS pending_count, \
     AND ((e.status = 'enabled' AND e.deleted_at IS NULL) OR d.url IS NOT NULL) \
     AND (e.last_attempt_at IS NULL OR e.last_attempt_status BETWEEN 200 AND 299)";
 
-fn report_address_capacity(state: &mut AlertState, now: DateTime<Utc>, chain: i64, count: i64) {
-    let cap = crate::db::chain_reads::ISSUED_ADDRESS_CAP;
-    let (severity, threshold) = if count >= cap * 90 / 100 {
-        (Some("critical"), cap * 90 / 100)
-    } else if count >= cap * 70 / 100 {
-        (Some("warning"), cap * 70 / 100)
+fn report_address_capacity(
+    state: &mut AlertState,
+    now: DateTime<Utc>,
+    chain: i64,
+    count: i64,
+    cap: u32,
+) {
+    let cap = i64::from(cap);
+    let warning = (cap * 70 + 99) / 100;
+    let critical = (cap * 90 + 99) / 100;
+    let (severity, threshold) = if count >= critical {
+        (Some("critical"), critical)
+    } else if count >= warning {
+        (Some("warning"), warning)
     } else {
-        (None, cap * 70 / 100)
+        (None, warning)
     };
     state.observe(
         now.timestamp(),
@@ -210,7 +218,15 @@ fn report_pilot(state: &mut AlertState, now: DateTime<Utc>, routes: &RouteSet, h
         );
     }
     for &(chain, count) in &health.issued {
-        report_address_capacity(state, now, chain, count);
+        if let Ok(chain_id) = u64::try_from(chain) {
+            report_address_capacity(
+                state,
+                now,
+                chain,
+                count,
+                routes.max_issued_addresses(chain_id),
+            );
+        }
     }
     for (alert, observed) in [
         (
@@ -470,6 +486,7 @@ mod tests {
             BTreeMap::from([(
                 1,
                 crate::chain_rpc::ChainRpc {
+                    max_issued_addresses: 1000,
                     read: client.clone(),
                     verify: client,
                 },
@@ -681,6 +698,37 @@ mod tests {
         );
     }
 
+    #[test]
+    fn capacity_thresholds_follow_each_configured_cap_and_round_up() {
+        let now = DateTime::from_timestamp(1_000_000, 0).unwrap();
+        let mut state = AlertState::default();
+        for (chain, cap, below, warning, critical) in
+            [(1, 50_000, 34_999, 35_000, 45_000), (2, 3, 2, 3, 3)]
+        {
+            report_address_capacity(&mut state, now, chain, below, cap);
+            assert!(
+                !state
+                    .active
+                    .contains_key(&("TopupAddressCapacity", format!("chain:{chain}")))
+            );
+            report_address_capacity(&mut state, now, chain, warning, cap);
+            let expected = if warning == critical {
+                "critical"
+            } else {
+                "warning"
+            };
+            assert_eq!(
+                state.active[&("TopupAddressCapacity", format!("chain:{chain}"))].0,
+                expected
+            );
+            report_address_capacity(&mut state, now, chain, critical, cap);
+            assert_eq!(
+                state.active[&("TopupAddressCapacity", format!("chain:{chain}"))].0,
+                "critical"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn capacity_counts_all_history_and_alerts_at_seventy_and_ninety_percent()
     -> Result<(), sqlx::Error> {
@@ -699,11 +747,11 @@ mod tests {
         let events = sentry::test::with_captured_events(|| {
             tracing::subscriber::with_default(super::super::log_subscriber(std::io::sink), || {
                 let mut state = AlertState::default();
-                report_address_capacity(&mut state, now, 1, 699);
-                report_address_capacity(&mut state, now, 1, 700);
-                report_address_capacity(&mut state, now, 1, 899);
-                report_address_capacity(&mut state, now, 1, 900);
-                report_address_capacity(&mut state, now, 2, 700);
+                report_address_capacity(&mut state, now, 1, 699, 1000);
+                report_address_capacity(&mut state, now, 1, 700, 1000);
+                report_address_capacity(&mut state, now, 1, 899, 1000);
+                report_address_capacity(&mut state, now, 1, 900, 1000);
+                report_address_capacity(&mut state, now, 2, 700, 1000);
             });
         });
         assert_eq!(events.len(), 3, "70%, 90%, and a separate chain must alert");
@@ -727,17 +775,44 @@ mod tests {
             .fetch_all(&mut conn)
             .await?;
         assert_eq!(counts, vec![(1, 1000)]);
-        let preupgrade = include_str!("../../../../deploy/check-address-capacity.sql");
-        sqlx::raw_sql(preupgrade).execute(&mut conn).await?;
+        // Only the fixed JSON fixtures below replace psql's quoted parameter; no user input.
+        let capacity_sql = include_str!("../../../../deploy/check-address-capacity.sql");
+        let preupgrade = capacity_sql.replace(
+            ":'config'",
+            r#"'{"rpc":[{"chain_id":1,"max_issued_addresses":1000}]}'"#,
+        );
+        sqlx::raw_sql(sqlx::AssertSqlSafe(preupgrade.as_str()))
+            .execute(&mut conn)
+            .await?;
         sqlx::query("INSERT INTO addresses VALUES (1,'active')")
             .execute(&mut conn)
             .await?;
-        let error = sqlx::raw_sql(preupgrade)
+        let larger_target = capacity_sql.replace(
+            ":'config'",
+            r#"'{"rpc":[{"chain_id":1,"max_issued_addresses":2000}]}'"#,
+        );
+        sqlx::raw_sql(sqlx::AssertSqlSafe(larger_target.as_str()))
+            .execute(&mut conn)
+            .await?;
+        let error = sqlx::raw_sql(sqlx::AssertSqlSafe(preupgrade.as_str()))
             .execute(&mut conn)
             .await
             .unwrap_err();
         assert!(error.to_string().contains("address capacity exceeded"));
         sqlx::raw_sql("ROLLBACK").execute(&mut conn).await?;
+        sqlx::query("INSERT INTO addresses VALUES (2,'retired')")
+            .execute(&mut conn)
+            .await?;
+        let error = sqlx::raw_sql(sqlx::AssertSqlSafe(larger_target.as_str()))
+            .execute(&mut conn)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("missing target chain cap"));
+        sqlx::raw_sql("ROLLBACK").execute(&mut conn).await?;
+        let two_chains = capacity_sql.replace(":'config'", r#"'{"rpc":[{"chain_id":1,"max_issued_addresses":2000},{"chain_id":2,"max_issued_addresses":1}]}'"#);
+        sqlx::raw_sql(sqlx::AssertSqlSafe(two_chains.as_str()))
+            .execute(&mut conn)
+            .await?;
         Ok(())
     }
 

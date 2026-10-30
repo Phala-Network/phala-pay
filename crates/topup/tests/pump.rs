@@ -145,7 +145,7 @@ async fn absent_confirm_and_watcher_share_one_schedule_for_twenty_four_hours() -
                     let timeline: serde_json::Value = sqlx::query_scalar("SELECT evidence FROM transitions WHERE deposit_id=$1 ORDER BY created_at DESC LIMIT 1").bind(id).fetch_one(pool).await?;
                     ensure!(timeline["error"] == "log_absent_at_finality", "finality evidence lost: {timeline}");
                 }
-                let gauges = topup::observability::metrics::render_chain_reads_at(pool, due).await?;
+                let gauges = topup::observability::metrics::render_chain_reads_at(pool, &topup::routes::RouteSet::default(), due).await?;
                 for name in ["topup_finality_unresolved", "topup_finality_unresolved_entries_24h"] {
                     let count = 1;
                     ensure!(gauges.lines().any(|line| line == format!("{name}{{chain_id=\"1\"}} {count}")), "confirm absence missing from {name}");

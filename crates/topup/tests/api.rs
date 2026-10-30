@@ -1064,7 +1064,11 @@ async fn admin_metrics_serve_rpc_call_counters_to_the_admin_only() -> Result<()>
         let app = test_router(&database.app_pool, &admin_key);
         let now = Utc::now().timestamp();
         let path = "/v1/admin/metrics";
-        topup::observability::metrics::render_chain_reads(&database.app_pool).await?;
+        topup::observability::metrics::render_chain_reads(
+            &database.app_pool,
+            &topup::routes::RouteSet::default(),
+        )
+        .await?;
 
         let response = app
             .clone()
@@ -1398,6 +1402,7 @@ fn app_state_with_attestor(
     AppState {
         pool,
         max_attached_pending_refunds: std::num::NonZeroU32::new(2).expect("positive refund limit"),
+        max_refund_attachments_per_day: 1,
         routes: Arc::new(topup::routes::RouteSet::new(vec![route]).expect("route loads")),
         maintenance_keys: Vec::new(),
         admin_key: VerificationKey::from_base64(

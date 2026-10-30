@@ -120,12 +120,14 @@ FORWARDER_FACTORY="$factory" \
     cat <<YAML
 environment: sandbox
 max_attached_pending_refunds: 2
+max_refund_attachments_per_day: 1
 public_origin: https://topup.localhost
 admin_key:
   id: $admin_key_id
   public_key: $admin_public_key
 rpc:
   - chain_id: 11155111
+    max_issued_addresses: 1000
     read: {id: ankr-sepolia, url: 'https://rpc-read.rpc.test/{key}', sealed_key: TOPUP_RPC_ANKR_KEY, max_log_blocks: 3000}
     verify: {id: infura-sepolia, url: 'https://rpc-verify.rpc.test/{key}', sealed_key: TOPUP_RPC_INFURA_KEY, max_log_blocks: 3000}
 routes:
