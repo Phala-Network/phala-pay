@@ -337,13 +337,14 @@ flush_failures  chain_id, tx_hash, log_index, address_id, token, reason (revert 
               block_number, block_hash      PRIMARY KEY (chain_id, tx_hash, log_index)
               -- finalized FlushFailed events for a known address; its deposits stay unswept
 refunds       id, account_id, livemode, chain_id, deposit_id, amount_atomic, destination_address,
-              tx_hash, receipt_log_index, paid_at, tx_from, tx_nonce,
+              tx_hash, receipt_log_index, paid_at, tx_from, tx_nonce, origin_checked, origin_probes,
+              observed_block, verify_checked_at, verification_attempts, replacement_hash, replacement_attempts, replacement_started_at, next_check_at,
               status (pending|succeeded|failed|canceled), failure_reason,
               metadata jsonb, created_at   -- paid by the merchant from the address's treasury
               UNIQUE (chain_id, tx_hash, receipt_log_index) among pending and succeeded refunds
               -- receipt_log_index: the log's position in its receipt, which survives
-              -- re-inclusion; legacy tx_from, tx_nonce are retained when both providers
-              -- agree, for investigation; origin alone never proves replacement
+              -- re-inclusion; tx_from, tx_nonce come from dual agreement or hash-checked signature recovery.
+              -- A replacement also requires identical dual finalized receipts.
 webhook_endpoints  id (we_…), account_id, livemode, url, enabled_events text[], status
               (enabled|disabled), disabled_reason (gone), description, metadata jsonb,
               created_at, deleted_at, last_attempt_at, last_attempt_status
@@ -1133,7 +1134,7 @@ GET    /v1/deposits?client_reference_id&quote&deposit_address&status&tx_hash&cre
 GET    /v1/deposits/{id}                                          expand[]=quote
 POST   /v1/deposits/{id} {metadata}                               update metadata (`deposits.write`)
 POST   /v1/refunds {deposit, destination_address, amount_atomic?, metadata?}  pending; the merchant pays it from its treasury (§15)
-POST   /v1/refunds/{id}/mark_paid {transaction_hash, receipt_log_index?}  verified at finality: succeeded or failed
+POST   /v1/refunds/{id}/mark_paid {transaction_hash, receipt_log_index?, replacement_transaction_hash?, original_signed_transaction?}  verified at finality: succeeded or failed
 POST   /v1/refunds/{id}/cancel                                    a pending refund not marked paid
 GET    /v1/refunds?deposit&status&limit&starting_after&ending_before, GET /v1/refunds/{id}
 POST   /v1/refunds/{id} {metadata}                                update metadata
@@ -1318,12 +1319,44 @@ instead marks it `failed` with `failure_reason` and releases the reservation. On
 attaches a transaction, the refund cannot be canceled: it may still be mined and remains pending
 and reserved while missing, provisional or disputed. Twenty-four hours without an observed
 transaction raises `TopupRefundProgressAge`; it does not fail the refund. Nonce changes alone
-cannot prove replacement, and this version has no release API for a claimed replacement.
-Historical failed refunds may still carry `transaction_dropped` or `transaction_not_found`.
-Checks run every 60 seconds for 30 minutes after attachment, every ten minutes until 24 hours,
-then hourly indefinitely, using both endpoints and the published checkpoint. Atomic
-environment-wide admission limits concurrent attached-pending refunds (production 2, staging 1)
-and new attachments (one per rolling 24 hours); idempotent retries do not consume quota.
+cannot prove replacement. A merchant can repeat `mark_paid` with the original `transaction_hash`
+and optional `replacement_transaction_hash`, storing one candidate at a time. Each has eight
+persisted recovery passes on the A/C cadence, with no calls or passes spent during checkpoint
+waiting. Exhaustion stops candidate calls while preserving the reservation and original
+verification. Before exhaustion or 24 hours, identical re-POSTs are idempotent no-ops. After both,
+an explicit `mark_paid` re-POST can renew the same candidate or supply another, at most once
+per rolling 24 hours per attachment, using a stored epoch timestamp; never automatically.
+Use a fresh `Idempotency-Key` for the deliberate renewal. If providers have evicted the original
+before its origin was captured, include optional `original_signed_transaction` with the
+candidate: Alloy decodes the signed EIP-2718 envelope, checks its keccak256 against the original
+hash, and recovers its sender/nonce locally. Legacy and EIP-2930/1559/4844/7702 are supported.
+Only the recovered fields are stored and audited; an already agreed origin is preserved. This
+adds no RPC and does not renew candidate attempts. Only identical
+finalized replacement receipts on both providers, at or below the agreed checkpoint, with both
+replacement origins equal to the original's verified sender and nonce, resolve it as
+`failed` / `transaction_dropped`. Unknown origins, absence and disagreements keep the reservation;
+there is no nonce inference (including EIP-7702 authorization nonce changes). Historical failed
+refunds may still carry `transaction_not_found`.
+
+Refund verification persists its phase and due time before RPC, so restart causes no catch-up
+burst. Phase A uses `eth_getTransactionReceipt` as a scheduling hint: read at 0, 1, 2, 5,
+10 minutes, then every ten minutes through two hours, then hourly; verify also probes hourly
+from hour one so a lagging read cannot stall progress. After 24 hours of absence, both endpoints
+probe every six hours. While the original is absent, at most three durable dual-origin attempts
+at 0, 10 minutes and one hour preserve its sender/nonce before eviction, stopping on agreement.
+Phase B makes no RPC until the same `FinalizedHeads` watch consumed by
+finality publishes a checkpoint at or above the observed inclusion block. Phase C independently
+reads receipt and canonical header at that block on both endpoints, and reads the original's
+origin once if still unknown (a replacement proof can retry an unavailable origin). It trusts the checkpoint
+loop's verification/freeze, without rereading the checkpoint header. Moved receipts return to
+A/B; unresolved or disagreeing evidence retries after ten minutes, then hourly, then every six
+hours after 24 hours. Completion still requires identical finalized receipts at or below the
+agreed checkpoint on both providers.
+
+Atomic environment-wide admission limits concurrent attached-pending refunds (production 2,
+staging 1) and new attachments (one per rolling 24 hours). A separate
+`max_attached_pending_refunds_per_account` concurrency cap defaults to one across modes.
+Idempotent retries and submitting a replacement candidate consume no additional quota.
 Exhaustion is non-retryable `422 refund_attachment_limit_exceeded`; contact the operator before
 sending another payout. An ineligible deposit is
 `400 deposit_not_refundable`; one that is not final yet, and so could still be reversed, is

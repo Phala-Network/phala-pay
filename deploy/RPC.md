@@ -16,12 +16,14 @@ Ethereum and Base price chains too. Both environments share `TOPUP_RPC_ANKR_KEY`
 `TOPUP_RPC_BLOCKPI_ETHEREUM_KEY` and `TOPUP_RPC_BLOCKPI_BASE_KEY` from one BlockPI free account,
 with archive mode off and a separate key for each mainnet. Production verifies with BlockPI
 before provisioning; staging stays on Ankr + Infura. No dRPC adoption is required.
-All pilot caps remain unchanged; a later increase needs a separately reviewed budget
+Existing environment-wide pilot caps remain unchanged; a later increase needs a separately reviewed budget
 ([launch procedure](runbooks/production-launch.md#18-rpc-accounts-and-production-allocation)).
 
 `topup.yaml` also requires the top-level positive integer `max_attached_pending_refunds`:
 production sets it to 2 and staging to 1. It atomically limits attached-pending refunds across
-all accounts and modes in that environment. Required top-level `max_refund_attachments_per_day`
+all accounts and modes in that environment. Optional positive
+`max_attached_pending_refunds_per_account` defaults to 1 across modes and prevents one account
+from occupying every slot when R is raised. Required top-level `max_refund_attachments_per_day`
 sets the rolling 24-hour attachment allowance (including resolved refunds); all shipped configs
 use 1. Each `rpc` entry also requires `max_issued_addresses`; all shipped configs use 1,000. Both
 new limits accept integers from 1 to 1,000,000 and appear in `topup config show`. Missing or invalid
@@ -207,7 +209,8 @@ Variable allowances before retries (the Infura column applies only to staging):
 
 BlockPI variable allowances use the same pilot work limits, priced by its RU table. A complete
 receipt/header/transaction set costs 70 RU; an unresolved replacement check costs at most
-15 + 70 = 85; a refund check costs 15 + 35 + 2×20 = 90. Price snapshots cost 3×20 = 60
+15 + 70 = 85; refund receipt/header/origin costs 15 + 20 + 35 = 70 RU per endpoint
+on its first complete verification (later receipt/header checks cost 35 RU). Price snapshots cost 3×20 = 60
 on verify. For the existing 2,000-credit deposit allowance and 640-credit hint allowance,
 conservatively charge all non-log methods at the highest used rate, 35 RU: **875/deposit**
 and **280/hint**. These are upper bounds, not a blended average. Each environment has 86 S
@@ -305,21 +308,54 @@ Infura:        86 × 80 = 6,880 staging credits
 BlockPI:       86 × 20 = 1,720 production RU
 ```
 
-The refund receipt reader uses `eth_getTransactionReceipt`, the persisted-checkpoint header and
-the receipt-height header independently on both endpoints: at most three methods per endpoint.
-Missing receipts use one method; included receipts above the checkpoint use two; finalized
-receipts use three. The checkpoint is loaded from the DB; there is no finalized-tag RPC.
-The worker's pending/missing branches additionally call `eth_getTransactionByHash` on both
-endpoints until an agreed sender/nonce is persisted. Asymmetric evidence can therefore cost
-four methods per endpoint per check; a never-seen transaction costs two.
+Refund verification uses three durable phases:
 
-Checks run every 60 s for the first 30 min after attachment, every ten minutes until 24 h, then
-hourly indefinitely. The Infura figures below apply only to staging; production uses the
-90-RU BlockPI bound per check above. Before transport retries, the first half-open refund-day
-has at most
-`30 + 141 = 171` checks: `171×4 = 684` Ankr / 54,720 Infura. A full ten-minute-phase day costs
-`144×4 = 576` / 46,080; an hourly-phase day costs `24×4 = 96` / 7,680. A never-seen transaction
-uses `171×2 = 342` / 27,360 on its first day and `24×2 = 48` / 3,840 per hourly-phase day.
+- **A, inclusion:** `eth_getTransactionReceipt` on read at 0, 1, 2, 5, 10 minutes, then
+  every ten minutes through two hours, then hourly. Verify probes hourly from hour one so a
+  lagging read cannot stall inclusion. After 24 hours of absence both probe every six hours.
+  While the original receipt is absent, capture its sender/nonce on both endpoints at most
+  three times, at 0, 10 minutes and one hour, stopping when both agree. These attempts are
+  durable across restarts and preserve pending transactions before nodes can evict them.
+- **B, checkpoint:** after observing inclusion at block b, no RPC until the finality watch's
+  shared `FinalizedHeads` publication reaches b. The checkpoint loop already verifies its
+  stored hash and freezes conflicts; refunds do not reread the checkpoint header.
+- **C, evidence:** receipt and canonical header(b) independently on each endpoint, plus original
+  transaction origin once. Identical finalized receipts at/below the checkpoint are required.
+  Reorg-moved receipts return to A/B. Unresolved/disagreeing evidence retries after ten minutes,
+  then hourly, then every six hours after 24 hours. No absence or nonce inference cancels or
+  fails an attachment.
+
+A typical already-included refund uses seven logical calls total: one read hint plus three
+methods on each endpoint. Persistent absence on the half-open first day uses 37 read receipts
+and 23 verify receipts (60 combined), plus at most three origin methods per endpoint
+(66 combined calls when all three attempts remain unknown); unresolved finalized evidence with a cached origin uses
+52 read / 51 verify calls. Allow **80 logical calls per endpoint on day one**, including
+inclusion probes followed by unresolved evidence. Ordinary verification attempts the original
+origin once in phase C if still unknown, in addition to the three bounded phase A attempts;
+a merchant-supplied replacement proof can retry an unavailable original origin.
+After day one, absence uses at most four receipt calls per endpoint/day, and unresolved evidence
+uses eight receipt/header calls per endpoint/day; reserve **12 per carried attachment/day**.
+A positive replacement proof is an operator-controlled recovery operation charged separately to
+the extra-operation reserve: both origins must equal the original's sender/nonce, captured by
+dual agreement or recovered locally from `original_signed_transaction` whose keccak256 matches
+the attached hash. The signed-original fallback uses Alloy's EIP-2718 decoder/signature recovery
+(legacy, EIP-2930/1559/4844/7702) and adds zero RPC methods. Raw bytes are not retained,
+and both replacement receipts must be identical and finalized at/below the checkpoint. Missing
+or disagreeing evidence keeps the reservation. One candidate is stored at a time, with at most
+**eight durable recovery passes**, using the attachment's A/C backoff; checkpoint waiting
+spends no pass and makes no calls. A pass adds at most one receipt hint, three replacement
+receipt/header/origin methods, and one retry of an unavailable original origin per endpoint:
+**at most 40 additional logical methods per endpoint/epoch (120 transport attempts at ×3)**.
+At exhaustion automatic candidate reads stop. Before exhaustion or 24 hours, identical re-POSTs
+are idempotent no-ops. After both, an explicit POST can renew the same hash or supply another;
+the stored epoch timestamp allows at most one renewal per rolling 24 hours per attachment.
+The worker never renews it. Conservatively reserve **80 additional logical methods per endpoint
+in a 24-hour window overlapping the old and renewed epochs (240 transport attempts)**; each
+renewal adds at most 40. Charge this to the extra-operation reserve before submitting the
+initial or renewed candidate; original verification and its reservation continue.
+
+At Infura's conservative 80-credit method ceiling this is 6,400 credits on day one and 960
+per carried day. At BlockPI's conservative 35-RU method ceiling it is 2,800 RU and 420 RU.
 Reserve first-day cost for N new attachments plus later-day cost for all R pending attachments,
 including carry-over. Combined N=2, R=3. Refunds reserve all three allowed transport attempts;
 non-refund work uses the approved ten-percent allowance:
@@ -327,20 +363,20 @@ non-refund work uses the approved ten-percent allowance:
 ```text
 Shared Ankr non-refund:
 5,256 + 708 + 24×(115+20) + 12×(200+80) + 3×(150+20) + 3×12 + 300 + 688 + 172 = 14,270
-Shared Ankr refunds: 3×(684×2 + 96×3) = 4,968
-Shared Ankr total:   ceil(14,270×1.1 + 4,968) = 20,665 calls/day
+Shared Ankr refunds: 3×(80×2 + 12×3) = 588
+Shared Ankr total:   ceil(14,270×1.1 + 588) = 16,285 calls/day
 
 Staging-only Infura non-refund:
 213,120 + 240×408 + 2,000×20 + 640×80 + 240×20 + 160×2
 + 255×150 + 320×86 + 80×86 = 480,010
-Staging-only Infura refunds: 3×(54,720×1 + 7,680×1) = 187,200
-Staging-only Infura total:   480,010×1.1 + 187,200 = 715,211 credits/day
+Staging-only Infura refunds: 3×(6,400×1 + 960×1) = 22,080
+Staging-only Infura total:   480,010×1.1 + 22,080 = 550,091 credits/day
 
 Production-only BlockPI non-refund:
 82,400 + 60×300 + 875×115 + 280×200 + 70×150 + 40×10
 + 50×150 + 85×86 + 20×86 = 284,455
-Production-only BlockPI refunds: 3×(171×90×1 + 24×90×2) = 59,130
-Production-only BlockPI total:   284,455×1.1 + 59,130 = 372,030.5 RU/day (ceil: 372,031)
+Production-only BlockPI refunds: 3×(2,800×1 + 420×2) = 10,920
+Production-only BlockPI total:   284,455×1.1 + 10,920 = 323,820.5 RU/day (ceil: 323,821)
 ```
 
 Staging's two mainnet price chains do not run payment discovery, checkpoints, coverage or
@@ -351,16 +387,16 @@ BlockPI's two chain keys share one account quota; they do not each receive 50M R
 
 | Provider account | Roles | Modeled daily usage | Stop line/day | Headroom below stop | D permitted with ≥10% headroom |
 |---|---|---:|---:|---:|---|
-| Ankr | Production + staging read | 20,665 calls | 25,000 calls | 17.34% | Production ≤184 with staging D=20 |
-| Infura | Staging verify only | 715,211 credits | 1,500,000 credits | 52.32% | Staging ≤308; no production D constraint |
-| BlockPI | Production verify only | 372,031 RU (rounded up) | 1,250,000 RU | 70.24% | Production ≤897 under conservative method weights |
+| Ankr | Production + staging read | 16,285 calls | 25,000 calls | 34.86% | Production ≤350 with staging D=20 |
+| Infura | Staging verify only | 550,091 credits | 1,500,000 credits | 63.33% | Staging ≤383; no production D constraint |
+| BlockPI | Production verify only | 323,821 RU (rounded up) | 1,250,000 RU | 74.09% | Production ≤947 under conservative method weights |
 
 Holding every other allowance fixed, the equations before rounding are:
 
 ```text
-Ankr(D production, staging 20) = 17,629 + 26.4D;  ≤ 0.9×25,000       → D≤184
-Infura(D staging)             = 671,211 + 2,200D; ≤ 0.9×1,500,000    → D≤308
-BlockPI(D production)         = 261,343 + 962.5D; ≤ 0.9×1,250,000    → D≤897
+Ankr(D production, staging 20) = 13,249 + 26.4D;  ≤ 0.9×25,000       → D≤350
+Infura(D staging)             = 506,091 + 2,200D; ≤ 0.9×1,500,000    → D≤383
+BlockPI(D production)         = 213,133 + 962.5D; ≤ 0.9×1,250,000    → D≤947
 ```
 
 The shared Ankr account is the production capacity bound. BlockPI's D ceiling uses conservative

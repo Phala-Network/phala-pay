@@ -161,6 +161,8 @@ async fn a_failure_before_the_response_is_saved_creates_no_quote_and_is_replayed
         seed_account(&database.app_pool, product.id, "retried").await?;
         let app = topup::api::router(AppState {
             pool: database.app_pool.clone(),
+            max_attached_pending_refunds_per_account: std::num::NonZeroU32::new(2)
+                .expect("positive account refund limit"),
             max_attached_pending_refunds: std::num::NonZeroU32::new(2)
                 .expect("positive refund limit"),
             max_refund_attachments_per_day: 1,
@@ -269,6 +271,8 @@ impl SlowQuote {
         });
         let app = topup::api::router(AppState {
             pool: database.app_pool.clone(),
+            max_attached_pending_refunds_per_account: std::num::NonZeroU32::new(2)
+                .expect("positive account refund limit"),
             max_attached_pending_refunds: std::num::NonZeroU32::new(2)
                 .expect("positive refund limit"),
             max_refund_attachments_per_day: 1,
@@ -603,6 +607,8 @@ async fn quotes_api_is_idempotent_rate_limited_paused_tenant_safe_and_emits_eip6
         limit_quote_rate(&database.app_pool, product.id, 1).await?;
         let app = topup::api::router(AppState {
             pool: database.app_pool.clone(),
+            max_attached_pending_refunds_per_account: std::num::NonZeroU32::new(2)
+                .expect("positive account refund limit"),
             max_attached_pending_refunds: std::num::NonZeroU32::new(2)
                 .expect("positive refund limit"),
             max_refund_attachments_per_day: 1,
@@ -1113,6 +1119,8 @@ async fn client_secret_reads_are_limited_per_object_and_forgeries_cost_nothing()
         seed_account(&database.app_pool, product.id, "flooded").await?;
         let app = topup::api::router(AppState {
             pool: database.app_pool.clone(),
+            max_attached_pending_refunds_per_account: std::num::NonZeroU32::new(2)
+                .expect("positive account refund limit"),
             max_attached_pending_refunds: std::num::NonZeroU32::new(2)
                 .expect("positive refund limit"),
             max_refund_attachments_per_day: 1,
@@ -1301,6 +1309,8 @@ async fn quoted_amount_rounds_up_to_the_routes_amount_decimals() -> Result<()> {
             topup_core::route::Bounded::at(AtomicAmount::new(U256::MAX));
         let app = topup::api::router(AppState {
             pool: database.app_pool.clone(),
+            max_attached_pending_refunds_per_account: std::num::NonZeroU32::new(2)
+                .expect("positive account refund limit"),
             max_attached_pending_refunds: std::num::NonZeroU32::new(2)
                 .expect("positive refund limit"),
             max_refund_attachments_per_day: 1,
@@ -1772,6 +1782,8 @@ async fn the_client_view_reports_the_credit_of_a_spot_valued_underpayment() -> R
         let admin_key = SigningKey::from_bytes(&[44; 32]);
         let app = topup::api::router(AppState {
             pool: pool.clone(),
+            max_attached_pending_refunds_per_account: std::num::NonZeroU32::new(2)
+                .expect("positive account refund limit"),
             max_attached_pending_refunds: std::num::NonZeroU32::new(2)
                 .expect("positive refund limit"),
             max_refund_attachments_per_day: 1,
@@ -2569,6 +2581,7 @@ async fn quote_pages_preserve_payments_tenant_mode_and_cursor_semantics() -> Res
         let admin_key = SigningKey::from_bytes(&[48;32]);
         let app = topup::api::router(AppState {
             pool: pool.clone(), routes: Arc::new(test_routes()),
+            max_attached_pending_refunds_per_account: std::num::NonZeroU32::new(2).expect("positive account refund limit"),
             max_attached_pending_refunds: std::num::NonZeroU32::new(2).expect("positive refund limit"),
         max_refund_attachments_per_day: 1,
             maintenance_keys: Vec::new(),
@@ -2672,6 +2685,7 @@ async fn exhausted_snapshot_budget(limit: i32) -> Result<()> {
             let admin = SigningKey::from_bytes(&[44;32]);
             let app = topup::api::router(AppState {
                 pool:pool.clone(), routes,
+                max_attached_pending_refunds_per_account: std::num::NonZeroU32::new(2).expect("positive account refund limit"),
                 max_attached_pending_refunds: std::num::NonZeroU32::new(2).expect("positive refund limit"),
         max_refund_attachments_per_day: 1,
                 admin_key:VerificationKey::from_base64(ADMIN_KID.into(), &public_key_base64(&admin)).map_err(anyhow::Error::msg)?,
@@ -2726,6 +2740,7 @@ async fn permanent_chain_capacity_counts_closed_history_and_returns_same_nonretr
         ])).map_err(anyhow::Error::msg)?);
         let app=topup::api::router(AppState {
             pool:pool.clone(),routes:routes.clone(),maintenance_keys:Vec::new(),
+            max_attached_pending_refunds_per_account: std::num::NonZeroU32::new(2).expect("positive account refund limit"),
             max_attached_pending_refunds: std::num::NonZeroU32::new(2).expect("positive refund limit"),
         max_refund_attachments_per_day: 1,
             admin_key:VerificationKey::from_base64(ADMIN_KID.into(),&public_key_base64(&admin)).map_err(anyhow::Error::msg)?,
@@ -2774,6 +2789,7 @@ async fn routed_chain_not_ready_returns_chain_unavailable_for_both_issuance_path
         let admin=SigningKey::from_bytes(&[44;32]);
         let app=topup::api::router(AppState {
             pool:pool.clone(),routes:Arc::new(routes),maintenance_keys:Vec::new(),
+            max_attached_pending_refunds_per_account: std::num::NonZeroU32::new(2).expect("positive account refund limit"),
             max_attached_pending_refunds: std::num::NonZeroU32::new(2).expect("positive refund limit"),
         max_refund_attachments_per_day: 1,
             admin_key:VerificationKey::from_base64(ADMIN_KID.into(),&public_key_base64(&admin)).map_err(anyhow::Error::msg)?,

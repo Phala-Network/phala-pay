@@ -35,6 +35,7 @@ means stop, fix the cause, and repeat the step. Never work around it.
 |---|---:|---|
 | Deposits handled per UTC day, D | 115 (20) | Operational: tally and stop |
 | Concurrent attached pending refunds, R (`max_attached_pending_refunds`) | 2 (1) | Service: `422 refund_attachment_limit_exceeded` |
+| Attached pending refunds per account across modes | 1 (1), configurable | Service: same error |
 | New refund attachments per rolling 24 h, N | 1 (1) | Service: same error |
 | Unresolved finality stock S, and its new entries per rolling 24 h | 1 and 1 | Operational: pause the chain's quotes above it |
 | Slow-confirmation stock L, and its new entries per rolling 24 h | 1 and 1 | Operational: pause the chain's quotes above it |
@@ -1333,7 +1334,7 @@ seven-day RU run rate. BlockPI payload surcharges are visible in its dashboard. 
 | Staging Infura `402`, or production BlockPI quota/throughput exhaustion | Infura verify halts until UTC midnight; BlockPI verify waits for provider recovery. Preserve pending work and do not switch endpoints | [RPC health](rpc-health.md) |
 | `TopupAddressCapacity` or 700 addresses on a chain (70%); 900 is critical | Plan the paid-provider or indexer upgrade, and stop growth before 1,000 | [Address capacity](address-capacity.md) |
 | `422 refund_attachment_limit_exceeded` (R=2 attached pending, N=1 per 24 h) | Enforced by the service. The merchant contacts the operator before another payout. Never cancel an attached refund to make room | [RPC operations](../RPC.md#pilot-limits-and-operating-modes) |
-| `TopupRefundProgressAge`: attached refund pending over 1 h, or unseen by both endpoints for 24 h | The refund stays pending and reserved. Checks back off from 60 s to ten minutes after 30 min, then hourly after 24 h | [Pending refund transaction](rejected-funds-at-treasury.md#pending-refund-transaction-alert) |
+| `TopupRefundProgressAge`: attached refund pending over 1 h, or unseen by both endpoints for 24 h | The refund stays pending and reserved. Inclusion probes back off through two hours, hourly until day one, then every six hours. Observed receipts wait for checkpoint publication without RPC; unresolved dual evidence also backs off to six hours | [Pending refund transaction](rejected-funds-at-treasury.md#pending-refund-transaction-alert) |
 | `TopupSanctionsListStale`, `TopupSanctionsListVerifyFailed`, `TopupSanctionsRescreenFailed` | Restore verification before the 24 h freshness limit, or pause `settlement` on the routes | [Sanctions list](sanctions-list.md) |
 | H 200 or Q 150 exhausted | Automatic until UTC midnight. Review the demand, but never raise caps without a reviewed budget | [RPC health](rpc-health.md) |
 | Any other Sentry alert or missed Crons check-in | Follow its runbook | [Alert index](README.md#alert-and-symptom-index) |

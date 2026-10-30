@@ -999,7 +999,14 @@ impl EvmClient {
         let transaction = self
             .bounded("transaction", self.provider.get_transaction_by_hash(hash))
             .await?;
-        Ok(transaction.map(|transaction| (transaction.from(), transaction.nonce())))
+        transaction
+            .map(|transaction| {
+                if transaction.tx_hash() != hash {
+                    return Err(ChainError::Reorganized("transaction origin identity"));
+                }
+                Ok((transaction.from(), transaction.nonce()))
+            })
+            .transpose()
     }
 
     /// Returns `account`'s nonce at `block`: the number of its transactions up to that block.

@@ -1535,6 +1535,8 @@ fn app(
     let admin_key = SigningKey::from_bytes(&ADMIN_KEY);
     Ok(topup::api::router(AppState {
         pool: pool.clone(),
+        max_attached_pending_refunds_per_account: std::num::NonZeroU32::new(2)
+            .expect("positive account refund limit"),
         max_attached_pending_refunds: std::num::NonZeroU32::new(2).expect("positive refund limit"),
         max_refund_attachments_per_day: 1,
         routes: Arc::new(RouteSet::new(routes).map_err(anyhow::Error::msg)?),

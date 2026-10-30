@@ -713,6 +713,8 @@ class Refunds:
         *,
         transaction_hash: str,
         receipt_log_index: int | None = None,
+        replacement_transaction_hash: str | None = None,
+        original_signed_transaction: str | None = None,
         idempotency_key: str | None = None,
         **options: Unpack[RequestOptions],
     ) -> Refund:
@@ -723,6 +725,8 @@ class Refunds:
             refund_id,
             transaction_hash,
             receipt_log_index=receipt_log_index,
+            replacement_transaction_hash=replacement_transaction_hash,
+            original_signed_transaction=original_signed_transaction,
             **_request_options(options),
             idempotency_key=idempotency_key,
         )

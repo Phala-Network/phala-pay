@@ -54,8 +54,9 @@ class Refund:
             failure_reason (None | str | Unset): Why the refund failed: `transaction_failed`, `transfer_not_found`,
                 `sender_mismatch`,
                 `destination_mismatch`, `amount_mismatch`, or `transfer_already_used`.
-                Historical refunds may retain `transaction_dropped` or `transaction_not_found`; missing
-                transactions now remain pending with their reservation and alert after 24 hours.
+                `transaction_dropped` requires a distinct replacement finalized on both providers with
+                the original transaction's dual-verified sender and nonce. Historical refunds may retain
+                `transaction_not_found`; missing transactions remain pending and alert after 24 hours.
                 New values may be added.
             receipt_log_index (int | None | Unset): Position of the paying `Transfer` log among the logs of the
                 transaction's receipt: as named

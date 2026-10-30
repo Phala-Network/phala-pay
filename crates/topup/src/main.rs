@@ -700,6 +700,8 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
         }
         let state = topup::api::AppState {
             pool,
+            max_attached_pending_refunds_per_account: config
+                .max_attached_pending_refunds_per_account,
             max_attached_pending_refunds: config.max_attached_pending_refunds,
             max_refund_attachments_per_day: config.max_refund_attachments_per_day,
             routes: Arc::new(routes),
@@ -839,15 +841,17 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
         .context("invalid pump configuration")?,
     );
     let refund_reader = |index| {
-        topup::refunds::EvmRefundChainReader::from_routes(pool.clone(), &routes, index)
+        topup::refunds::EvmRefundChainReader::from_routes(&routes, index)
             .context("failed to configure refund verification chain reader")
     };
+    let finalized_heads = topup::scanner::FinalizedHeads::default();
     let refund_worker = topup::refunds::RefundVerificationWorker::new(
         pool.clone(),
         Arc::clone(&routes),
         refund_reader(0)?,
         refund_reader(1)?,
         topup::refunds::RefundVerificationConfig::default(),
+        finalized_heads.clone(),
     );
     let finality_watch =
         topup::finality::FinalityWatch::from_routes(pool.clone(), Arc::clone(&routes))
@@ -860,6 +864,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     });
     let state = topup::api::AppState {
         pool: pool.clone(),
+        max_attached_pending_refunds_per_account: config.max_attached_pending_refunds_per_account,
         max_attached_pending_refunds: config.max_attached_pending_refunds,
         max_refund_attachments_per_day: config.max_refund_attachments_per_day,
         routes: Arc::clone(&routes),
@@ -917,7 +922,6 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     let scanner_pool = pool.clone();
     let scanner_routes = Arc::clone(&routes);
     let scan_config = topup::scanner::ScanConfig;
-    let finalized_heads = topup::scanner::FinalizedHeads::default();
     let scanner_heads = finalized_heads.clone();
     tasks.spawn("scanner", |cancellation| async move {
         topup::scanner::run(

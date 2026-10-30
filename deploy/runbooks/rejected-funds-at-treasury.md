@@ -62,8 +62,8 @@ Read the refund and its `transaction_hash` with `GET /v1/refunds/{id}` through t
    the original signed transaction, checked against its hash, or matching prior observations from
    both endpoints. A receipt disappearing or the sender's transaction count advancing alone does
    not prove a replacement.
-3. Read the sender's nonce at an agreed finalized block/hash on both endpoints. Locate the
-   different transaction that consumed the original nonce, then independently retrieve its
+3. Locate the different transaction with the original sender and nonce, then independently
+   retrieve its
    transaction, finalized receipt and canonical block on both endpoints. Verify identical sender,
    nonce, replacement hash and canonical inclusion, and inspect all transfers to ensure the
    replacement did not itself pay this refund. For a Safe, use the actual outer payout transaction's
@@ -73,18 +73,42 @@ Read the refund and its `transaction_hash` with `GET /v1/refunds/{id}` through t
    record. Record the refund/deposit ids, original and replacement hashes, sender/nonce, agreed
    finalized block number/hash, transfer assessment, verifier identity and time. Keep provider
    credentials, full keyed URLs and signed raw transactions out of logs.
-5. **Reservation release is follow-up work:** this version has no code/API path for releasing an
-   attached refund based on replacement evidence or merchant responsibility acceptance. Do not
-   edit the database directly or create/pay another refund to bypass the reservation. Escalate
-   to the owner for a reviewed release mechanism. Any future release must require independently
-   verified dual-source finalized evidence that the recorded payout cannot pay, or an explicit
-   recorded merchant acceptance of responsibility, and transactionally audit the evidence,
-   approving actor, reason, reservation change and resulting events. Only after that mechanism
-   commits a release may the merchant consider a new refund.
+5. Through the merchant, repeat `POST /v1/refunds/{id}/mark_paid` with the original
+   `transaction_hash` and `replacement_transaction_hash`. If both providers have forgotten the
+   original and no agreed origin was captured, also supply `original_signed_transaction`: the
+   original 0x-prefixed signed EIP-2718 bytes from the merchant's signing/broadcast record. The
+   service checks keccak256 against `transaction_hash` and recovers sender/nonce locally with
+   Alloy (legacy, EIP-2930/1559/4844/7702); malformed bytes, a bad signature or a hash mismatch
+   are rejected. Raw bytes are not stored; no RPC is spent. A previously agreed origin is kept.
+   Keep the signed broadcast record for every payout; without either origin proof an evicted
+   transaction cannot be resolved safely. One candidate is stored at a time;
+   repeating it is idempotent and consumes no additional attachment quota. Each candidate has
+   eight persisted recovery passes per epoch on the A/C cadence (checkpoint waiting spends
+   none), at most 40 additional logical methods per endpoint, or 120 transport attempts with
+   retries. An invalid or never-proven candidate stops consuming RPC after exhaustion. Before
+   exhaustion or 24 hours, identical re-POSTs are idempotent no-ops. After both, an explicit POST
+   with a fresh `Idempotency-Key` can renew the same candidate (including one that finalized
+   late) or supply another; a stored timestamp allows only one renewal per rolling 24 hours per
+   attachment. The worker never renews it. Reserve up to 80 additional logical methods per
+   endpoint in a 24-hour window crossing epochs (240 transport attempts), charged to the
+   extra-operation reserve before submission. The original stays reserved and continues verification. The service requires
+   the original's sender and nonce from dual agreement or the hash-checked signed original,
+   plus identical finalized replacement
+   receipts and both replacement origins matching that original. It then fails the original as
+   `transaction_dropped`, audits the candidate and persists proof with `refund.updated` and
+   `refund.failed`. Missing original origin, nonce/sender mismatch, provider disagreement or an
+   unfinalized replacement leaves the refund pending and reserved. Do not edit the database or
+   bypass the reservation. Check the replacement did not already pay before any new payout.
 
-Verification uses both endpoints every 60 s for the first 30 min after attachment, every 10 min
-until 24 h, and every hour thereafter without an expiry. This scheduling uses existing timestamps;
-N-1 can read the rows, but reverting the worker also reverts this cadence and the timeout behavior.
+Read receipt probes run at 0, 1, 2, 5, 10 minutes, then every ten minutes through two hours,
+then hourly; verify probes hourly from hour one. After 24 hours of absence both probe every six
+hours. While absent, up to three durable dual-origin attempts at 0, 10 minutes and one hour
+preserve the sender/nonce before eviction, stopping on agreement. Once inclusion is observed there are no RPC calls until the published checkpoint reaches
+its block. Dual receipt/header verification then retries unresolved evidence at ten minutes,
+hourly, and every six hours after day one. Reorgs return to inclusion/checkpoint waiting. Phase,
+attempt count and due times survive restarts. The per-account attached-pending cap defaults to
+one across modes; environment R/N stay separately configured. A rollback to N-1 can read the
+rows, but restores its old cadence and cannot consume replacement candidates.
 
 ## Done when
 

@@ -486,10 +486,15 @@ struct ReceiptGate {
 
 #[async_trait]
 impl RefundChainReader for ReceiptGate {
+    async fn receipt_block(&self, _: u64, _: B256) -> Result<Option<u64>, RefundReadError> {
+        Ok(Some(90))
+    }
+
     async fn receipt(
         &self,
         _chain_id: u64,
         _tx_hash: B256,
+        _checkpoint: u64,
     ) -> Result<RefundReceipt, RefundReadError> {
         if let Some((started, resume)) = &self.gate {
             started.notify_one();
@@ -538,10 +543,10 @@ async fn a_sanctions_hit_during_verification_keeps_the_refund_pending() -> Resul
                         gate: None,
                     },
                     RefundVerificationConfig {
-                        retry_interval: StdDuration::ZERO,
                         observe_timeout: StdDuration::from_secs(10),
                         ..Default::default()
                     },
+                    test_heads(100),
                 );
                 let verifying = tokio::spawn(async move { worker.check_once().await });
                 tokio::time::timeout(StdDuration::from_secs(5), started.notified()).await?;
@@ -761,7 +766,11 @@ async fn a_refund_paid_from_the_address_treasury_succeeds_at_finality() -> Resul
         )?]);
         let worker = test_worker(
             pool,
-            vec![RefundReceipt::Pending, paying.clone(), paying.clone()],
+            vec![
+                RefundReceipt::Pending { block_number: 101 },
+                paying.clone(),
+                paying.clone(),
+            ],
             vec![
                 paying.clone(),
                 RefundReceipt::Finalized {
@@ -894,8 +903,8 @@ async fn a_refused_or_repeated_refund_call_holds_no_lock_once_it_answers() -> Re
         // So the verification worker, which skips locked refunds, claims it straight away.
         let worker = test_worker(
             pool,
-            vec![RefundReceipt::Pending],
-            vec![RefundReceipt::Pending],
+            vec![RefundReceipt::Pending { block_number: 101 }],
+            vec![RefundReceipt::Pending { block_number: 101 }],
         );
         ensure!(worker.check_once().await? == Verification::Waiting);
         Ok(())
@@ -1513,106 +1522,6 @@ async fn an_unseen_refund_alerts_after_a_day_and_cannot_be_refunded_twice() -> R
     result.and(cleanup)
 }
 
-#[cfg(feature = "test-support")]
-#[tokio::test]
-async fn pending_refund_cadence_uses_attachment_age_without_catching_up() -> Result<()> {
-    support::with_database(|database| {
-        Box::pin(async move {
-            use std::sync::atomic::{AtomicUsize, Ordering};
-            #[derive(Clone, Default)]
-            struct MissingReader(Arc<AtomicUsize>);
-            #[async_trait]
-            impl RefundChainReader for MissingReader {
-                async fn receipt(&self, _: u64, _: B256) -> Result<RefundReceipt, RefundReadError> {
-                    self.0.fetch_add(1, Ordering::SeqCst);
-                    Ok(RefundReceipt::Missing)
-                }
-                async fn origin(
-                    &self,
-                    _: u64,
-                    _: B256,
-                ) -> Result<Option<(Address, u64)>, RefundReadError> {
-                    self.0.fetch_add(1, Ordering::SeqCst);
-                    Ok(None)
-                }
-            }
-            let pool = &database.app_pool;
-            seed::initialize_dual_chain(pool, 1).await?;
-            let admin_key = SigningKey::from_bytes(&[49; 32]);
-            let app = test_router(pool, &admin_key);
-            let merchant = Merchant::seed(pool, &app, "phala-cloud").await?;
-            let deposit = seed_rejected_deposit(pool, merchant.account.id, "cadence", 100).await?;
-            let id = merchant.refund(deposit, "100").await?;
-            merchant.mark_paid(&id, REFUND_TX).await?;
-            let id = topup::ids::parse(topup::ids::REFUND, &id).context("refund id")?;
-            let attached = chrono::DateTime::from_timestamp(Utc::now().timestamp(), 0)
-                .context("attachment time")?;
-            sqlx::query("UPDATE refunds SET paid_at=$2,next_check_at=$2 WHERE id=$1")
-                .bind(id)
-                .bind(attached)
-                .execute(pool)
-                .await?;
-            let read = MissingReader::default();
-            let verify = MissingReader::default();
-            let worker = RefundVerificationWorker::new(
-                pool.clone(),
-                Arc::new(
-                    topup::routes::RouteSet::new(vec![route_fixture()])
-                        .map_err(anyhow::Error::msg)?,
-                ),
-                read.clone(),
-                verify.clone(),
-                RefundVerificationConfig::default(),
-            );
-            let mut checks = 0;
-            // Half-open phase intervals: [0, 30 min), [30 min, 24 h), then hourly forever.
-            for (start, count, interval) in
-                [(0_i64, 30, 60_i64), (1800, 141, 600), (86400, 24, 3600)]
-            {
-                for index in 0..count {
-                    let now = attached + Duration::seconds(start + i64::from(index) * interval);
-                    if checks > 0 {
-                        ensure!(
-                            worker.check_once_at(now - Duration::seconds(1)).await?
-                                == Verification::Idle
-                        );
-                        ensure!(read.0.load(Ordering::SeqCst) == checks * 2);
-                        ensure!(verify.0.load(Ordering::SeqCst) == checks * 2);
-                    }
-                    ensure!(worker.check_once_at(now).await? == Verification::Waiting);
-                    checks += 1;
-                    ensure!(read.0.load(Ordering::SeqCst) == checks * 2);
-                    ensure!(verify.0.load(Ordering::SeqCst) == checks * 2);
-                    let next: chrono::DateTime<Utc> =
-                        sqlx::query_scalar("SELECT next_check_at FROM refunds WHERE id=$1")
-                            .bind(id)
-                            .fetch_one(pool)
-                            .await?;
-                    ensure!(
-                        next == now + Duration::seconds(interval),
-                        "phase at {now}: next {next}"
-                    );
-                    ensure!(worker.check_once_at(now).await? == Verification::Idle);
-                }
-            }
-            ensure!(checks == 195);
-            // A restart long after the last check performs one observation, with no catch-up burst.
-            let later = attached + Duration::days(365);
-            ensure!(worker.check_once_at(later).await? == Verification::Waiting);
-            ensure!(
-                worker.check_once_at(later + Duration::minutes(59)).await? == Verification::Idle
-            );
-            ensure!(
-                worker.check_once_at(later + Duration::hours(1)).await? == Verification::Waiting
-            );
-            ensure!(read.0.load(Ordering::SeqCst) == 394 && verify.0.load(Ordering::SeqCst) == 394);
-            ensure!(refund_status(pool, id).await? == "pending");
-            Ok(())
-        })
-    })
-    .await
-}
-
 #[tokio::test]
 async fn refunds_take_back_the_credit_pro_rata_in_each_deposit_snapshot() -> Result<()> {
     let Some(database) = TestDatabase::create().await? else {
@@ -2203,14 +2112,16 @@ async fn evm_reader_reads_every_transfer_only_at_finality_and_times_out() -> Res
         )
         .await
     });
-    let reader = EvmRefundChainReader::new(
-        database.app_pool.clone(),
-        BTreeMap::from([(1, Arc::new(EvmClient::new(&format!("http://{address}"))?))]),
-    );
+    let reader = EvmRefundChainReader::new(BTreeMap::from([(
+        1,
+        Arc::new(EvmClient::new(&format!("http://{address}"))?),
+    )]));
     let token = route_fixture().asset.contract;
     // Scenario 1 transfers another token, 4 is above `finalized`, 5 reverted.
     for scenario in [1_u64, 2, 3, 5] {
-        let receipt = reader.receipt(1, B256::from(U256::from(scenario))).await?;
+        let receipt = reader
+            .receipt(1, B256::from(U256::from(scenario)), 100)
+            .await?;
         let RefundReceipt::Finalized {
             block_number,
             succeeded,
@@ -2228,8 +2139,18 @@ async fn evm_reader_reads_every_transfer_only_at_finality_and_times_out() -> Res
         ensure!(transfer.receipt_log_index == 0 && transfer.amount == U256::from(100_u64));
         ensure!((transfer.token == token) == (scenario != 1));
     }
-    ensure!(reader.receipt(1, B256::from(U256::from(4_u64))).await? == RefundReceipt::Pending);
-    ensure!(reader.receipt(1, B256::from(U256::from(7_u64))).await? == RefundReceipt::Missing);
+    ensure!(
+        reader
+            .receipt(1, B256::from(U256::from(4_u64)), 100)
+            .await?
+            == RefundReceipt::Pending { block_number: 101 }
+    );
+    ensure!(
+        reader
+            .receipt(1, B256::from(U256::from(7_u64)), 100)
+            .await?
+            == RefundReceipt::Missing
+    );
     ensure!(
         reader.origin(1, B256::from(U256::from(2_u64))).await?
             == Some((Address::from_str(REFUND_SENDER)?, 5))
@@ -2240,22 +2161,26 @@ async fn evm_reader_reads_every_transfer_only_at_finality_and_times_out() -> Res
             .await?
             .is_none()
     );
-    let hanging = EvmRefundChainReader::new(
-        database.app_pool.clone(),
-        BTreeMap::from([(
-            1,
-            Arc::new(EvmClient::with_timeout(
-                &format!("http://{address}/hang"),
-                StdDuration::from_millis(50),
-            )?),
-        )]),
+    ensure!(
+        matches!(
+            reader.origin(1, B256::from(U256::from(6_u64))).await,
+            Err(RefundReadError::Rpc("transaction fetch"))
+        ),
+        "an origin from another transaction was accepted"
     );
+    let hanging = EvmRefundChainReader::new(BTreeMap::from([(
+        1,
+        Arc::new(EvmClient::with_timeout(
+            &format!("http://{address}/hang"),
+            StdDuration::from_millis(50),
+        )?),
+    )]));
     ensure!(matches!(
-        hanging.receipt(1, B256::from(U256::from(6_u64))).await,
+        hanging.receipt(1, B256::from(U256::from(6_u64)), 100).await,
         Err(RefundReadError::Rpc("transaction receipt fetch"))
     ));
     ensure!(matches!(
-        reader.receipt(2, B256::ZERO).await,
+        reader.receipt(2, B256::ZERO, 100).await,
         Err(RefundReadError::UnknownChain(2))
     ));
     server.abort();
@@ -2294,9 +2219,9 @@ async fn worker_shutdown_cancels_a_hung_read() -> Result<()> {
             },
             RefundVerificationConfig {
                 poll_interval: StdDuration::from_secs(60),
-                retry_interval: StdDuration::ZERO,
                 observe_timeout: StdDuration::from_secs(60),
             },
+            test_heads(100),
         );
         let cancellation = CancellationToken::new();
         let child = cancellation.clone();
@@ -2549,7 +2474,7 @@ async fn refund_rpc(Json(request): Json<Value>) -> Json<Value> {
     let unknown = |tx_hash: &str| tx_hash == format!("{:#x}", B256::from(U256::from(7_u64)));
     if method == "eth_getTransactionByHash" {
         let tx_hash = request["params"][0].as_str().unwrap_or_default();
-        let transaction = json!({
+        let mut transaction = json!({
             "hash": tx_hash,
             "nonce": "0x5",
             "blockHash": format!("{:#x}", B256::from(U256::from(900_u64))),
@@ -2571,6 +2496,9 @@ async fn refund_rpc(Json(request): Json<Value>) -> Json<Value> {
             "r": "0x1",
             "s": "0x1",
         });
+        if tx_hash == format!("{:#x}", B256::from(U256::from(6_u64))) {
+            transaction["hash"] = json!(OTHER_TX);
+        }
         let result = if unknown(tx_hash) {
             Value::Null
         } else {
@@ -2801,10 +2729,15 @@ struct ScriptedReader {
 
 #[async_trait]
 impl RefundChainReader for ScriptedReader {
+    async fn receipt_block(&self, _: u64, _: B256) -> Result<Option<u64>, RefundReadError> {
+        Ok(Some(90))
+    }
+
     async fn receipt(
         &self,
         chain_id: u64,
         tx_hash: B256,
+        _checkpoint: u64,
     ) -> Result<RefundReceipt, RefundReadError> {
         assert_eq!(chain_id, 1);
         assert_eq!(tx_hash, B256::from_str(REFUND_TX).expect("valid refund tx"));
@@ -2830,10 +2763,16 @@ struct HangingReader {
 
 #[async_trait]
 impl RefundChainReader for HangingReader {
+    async fn receipt_block(&self, _: u64, _: B256) -> Result<Option<u64>, RefundReadError> {
+        self.started.notify_one();
+        std::future::pending().await
+    }
+
     async fn receipt(
         &self,
         _chain_id: u64,
         _tx_hash: B256,
+        _checkpoint: u64,
     ) -> Result<RefundReceipt, RefundReadError> {
         self.started.notify_one();
         std::future::pending().await
@@ -2878,9 +2817,9 @@ fn test_worker_with(
             reader(secondary),
             RefundVerificationConfig {
                 poll_interval: StdDuration::ZERO,
-                retry_interval: StdDuration::ZERO,
                 observe_timeout: StdDuration::from_secs(1),
             },
+            test_heads(100),
         ),
     }
 }
@@ -2894,9 +2833,11 @@ struct TestWorker {
 
 impl TestWorker {
     async fn check_once(&self) -> Result<Verification> {
-        sqlx::query("UPDATE refunds SET next_check_at=now() WHERE status='pending'")
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "UPDATE refunds SET next_check_at=now(), observed_block=0 WHERE status='pending'",
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(self.inner.check_once().await?)
     }
 }
@@ -2993,9 +2934,32 @@ fn test_router_on_with_limits(
     max_attached_pending_refunds: std::num::NonZeroU32,
     max_refund_attachments_per_day: u32,
 ) -> Router {
-    let state = AppState {
+    topup::api::router(test_state_on_with_limits(
+        pool,
+        admin_key,
+        screening,
+        client_reads,
+        routes,
+        max_attached_pending_refunds,
+        max_refund_attachments_per_day,
+    ))
+    .0
+}
+
+fn test_state_on_with_limits(
+    pool: &sqlx::PgPool,
+    admin_key: &SigningKey,
+    screening: Arc<dyn DestinationScreener>,
+    client_reads: Arc<ClientReadLimiter>,
+    routes: Vec<RouteFile>,
+    max_attached_pending_refunds: std::num::NonZeroU32,
+    max_refund_attachments_per_day: u32,
+) -> AppState {
+    AppState {
         pool: pool.clone(),
         max_attached_pending_refunds,
+        max_attached_pending_refunds_per_account: std::num::NonZeroU32::new(2)
+            .expect("account cap"),
         max_refund_attachments_per_day,
         routes: Arc::new(topup::routes::RouteSet::new(routes).expect("routes load")),
         maintenance_keys: Vec::new(),
@@ -3014,8 +2978,7 @@ fn test_router_on_with_limits(
         screening,
         sanctions_rescreen: Arc::default(),
         contract_signatures: Arc::new(topup::treasuries::UnavailableContractSignatures),
-    };
-    topup::api::router(state).0
+    }
 }
 
 /// Delivers every pending event of `account_id` to a local receiver and returns the bodies.
@@ -3431,4 +3394,974 @@ async fn list_activation_rescreens_pending_refund_and_stale_hit_still_denies() -
         ensure!(source.screen(&route,address).await==DestinationScreening::Sanctioned);
         Ok(())
     })).await
+}
+
+fn test_heads(number: u64) -> topup::scanner::FinalizedHeads {
+    let heads = topup::scanner::FinalizedHeads::default();
+    heads.publish(
+        1,
+        topup_adapters::chain::evm::FinalizedHead {
+            number,
+            time: Utc::now(),
+        },
+    );
+    heads
+}
+
+#[cfg(feature = "test-support")]
+mod event_driven {
+    use super::*;
+    use axum::extract::State;
+    use topup::scanner::FinalizedHeads;
+
+    #[derive(Clone, Default)]
+    struct Rpc {
+        receipts: Arc<Mutex<BTreeMap<String, Value>>>,
+        origins: Arc<Mutex<BTreeMap<String, (String, u64)>>>,
+        unknown_origins: Arc<Mutex<std::collections::BTreeSet<String>>>,
+        calls: Arc<Mutex<BTreeMap<String, usize>>>,
+        by_hash: Arc<Mutex<BTreeMap<String, usize>>>,
+    }
+    impl Rpc {
+        fn receipt(&self, hash: &str, block: u64, amount: u64) {
+            let mut receipt = refund_receipt(hash);
+            receipt["blockNumber"] = json!(format!("{block:#x}"));
+            receipt["logs"][0]["data"] = json!(format!("0x{amount:064x}"));
+            self.receipts
+                .lock()
+                .expect("receipts")
+                .insert(hash.to_owned(), receipt);
+        }
+        fn tx_calls(&self, hash: &str) -> usize {
+            self.by_hash
+                .lock()
+                .expect("hash calls")
+                .get(hash)
+                .copied()
+                .unwrap_or_default()
+        }
+        fn count(&self, method: &str) -> usize {
+            self.calls
+                .lock()
+                .expect("calls")
+                .get(method)
+                .copied()
+                .unwrap_or_default()
+        }
+        fn total(&self) -> usize {
+            self.calls.lock().expect("calls").values().sum()
+        }
+    }
+    async fn rpc(State(state): State<Rpc>, Json(request): Json<Value>) -> Json<Value> {
+        let method = request["method"].as_str().unwrap_or_default().to_owned();
+        *state
+            .calls
+            .lock()
+            .expect("calls")
+            .entry(method.clone())
+            .or_default() += 1;
+        if matches!(
+            method.as_str(),
+            "eth_getTransactionReceipt" | "eth_getTransactionByHash"
+        ) {
+            let hash = request["params"][0].as_str().unwrap_or_default().to_owned();
+            *state
+                .by_hash
+                .lock()
+                .expect("hash calls")
+                .entry(hash)
+                .or_default() += 1;
+        }
+        if method == "eth_getTransactionReceipt" {
+            let hash = request["params"][0].as_str().unwrap_or_default();
+            let result = state
+                .receipts
+                .lock()
+                .expect("receipts")
+                .get(hash)
+                .cloned()
+                .unwrap_or(Value::Null);
+            return Json(json!({"jsonrpc":"2.0","id":request["id"],"result":result}));
+        }
+        let mut response = refund_rpc(Json(request.clone())).await.0;
+        if method == "eth_getBlockByNumber" {
+            response["result"]["number"] = request["params"][0].clone();
+            response["result"]["hash"] = json!(format!("{:#x}", B256::from(U256::from(900_u64))));
+        }
+        if method == "eth_getTransactionByHash" {
+            let hash = request["params"][0].as_str().unwrap_or_default();
+            if state
+                .unknown_origins
+                .lock()
+                .expect("unknown origins")
+                .contains(hash)
+            {
+                response["result"] = Value::Null;
+                return Json(response);
+            }
+            if let Some((sender, nonce)) = state.origins.lock().expect("origins").get(hash) {
+                response["result"]["from"] = json!(sender);
+                response["result"]["nonce"] = json!(format!("{nonce:#x}"));
+            }
+        }
+        Json(response)
+    }
+    struct Endpoint {
+        state: Rpc,
+        reader: EvmRefundChainReader,
+        server: tokio::task::JoinHandle<std::io::Result<()>>,
+    }
+    impl Drop for Endpoint {
+        fn drop(&mut self) {
+            self.server.abort();
+        }
+    }
+    impl Endpoint {
+        async fn start() -> Result<Self> {
+            let state = Rpc::default();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            let client = EvmClient::new(&format!("http://{}", listener.local_addr()?))?;
+            let app = Router::new()
+                .route("/", post(rpc))
+                .with_state(state.clone());
+            let server = tokio::spawn(async move { axum::serve(listener, app).await });
+            Ok(Self {
+                state,
+                reader: EvmRefundChainReader::new(BTreeMap::from([(1, Arc::new(client))])),
+                server,
+            })
+        }
+    }
+    struct BorrowedReader<'a>(&'a EvmRefundChainReader);
+    // Borrow endpoints so their server lifetime spans the worker and every assertion.
+    #[async_trait]
+    impl RefundChainReader for BorrowedReader<'_> {
+        async fn receipt_block(&self, c: u64, t: B256) -> Result<Option<u64>, RefundReadError> {
+            self.0.receipt_block(c, t).await
+        }
+        async fn receipt(&self, c: u64, t: B256, b: u64) -> Result<RefundReceipt, RefundReadError> {
+            self.0.receipt(c, t, b).await
+        }
+        async fn origin(&self, c: u64, t: B256) -> Result<Option<(Address, u64)>, RefundReadError> {
+            self.0.origin(c, t).await
+        }
+    }
+    fn worker<'a>(
+        pool: &sqlx::PgPool,
+        a: &'a Endpoint,
+        b: &'a Endpoint,
+        heads: &FinalizedHeads,
+    ) -> RefundVerificationWorker<BorrowedReader<'a>, BorrowedReader<'a>> {
+        RefundVerificationWorker::new(
+            pool.clone(),
+            Arc::new(topup::routes::RouteSet::new(vec![route_fixture()]).expect("routes")),
+            BorrowedReader(&a.reader),
+            BorrowedReader(&b.reader),
+            RefundVerificationConfig::default(),
+            heads.clone(),
+        )
+    }
+    async fn attached(
+        pool: &sqlx::PgPool,
+    ) -> Result<(Merchant, String, Uuid, chrono::DateTime<Utc>)> {
+        attached_transaction(pool, REFUND_TX).await
+    }
+    async fn attached_transaction(
+        pool: &sqlx::PgPool,
+        hash: &str,
+    ) -> Result<(Merchant, String, Uuid, chrono::DateTime<Utc>)> {
+        seed::initialize_dual_chain(pool, 1).await?;
+        let merchant = Merchant::seed(
+            pool,
+            &test_router(pool, &SigningKey::from_bytes(&[49; 32])),
+            "cadence",
+        )
+        .await?;
+        let deposit = seed_rejected_deposit(pool, merchant.account.id, "cadence", 100).await?;
+        let id = merchant.refund(deposit, "100").await?;
+        merchant.mark_paid(&id, hash).await?;
+        let uuid = topup::ids::parse(topup::ids::REFUND, &id).context("refund id")?;
+        let time = chrono::DateTime::from_timestamp(Utc::now().timestamp(), 0).context("clock")?;
+        sqlx::query("UPDATE refunds SET paid_at=$2,next_check_at=$2 WHERE id=$1")
+            .bind(uuid)
+            .bind(time)
+            .execute(pool)
+            .await?;
+        Ok((merchant, id, uuid, time))
+    }
+    async fn next(pool: &sqlx::PgPool, id: Uuid) -> Result<chrono::DateTime<Utc>> {
+        Ok(
+            sqlx::query_scalar("SELECT next_check_at FROM refunds WHERE id=$1")
+                .bind(id)
+                .fetch_one(pool)
+                .await?,
+        )
+    }
+
+    #[tokio::test]
+    async fn typical_refund_waits_for_published_checkpoint_and_costs_seven_calls() -> Result<()> {
+        support::with_database(|database| {
+            Box::pin(async move {
+                let pool = &database.app_pool;
+                let (_, _, id, time) = attached(pool).await?;
+                let a = Endpoint::start().await?;
+                let b = Endpoint::start().await?;
+                a.state.receipt(REFUND_TX, 90, 100);
+                b.state.receipt(REFUND_TX, 90, 100);
+                let heads = test_heads(89);
+                let worker = worker(pool, &a, &b, &heads);
+                ensure!(worker.check_once_at(time).await? == Verification::Waiting);
+                ensure!(a.state.total() == 1 && b.state.total() == 0);
+                for minute in [1, 2, 5, 10, 60] {
+                    ensure!(
+                        worker
+                            .check_once_at(time + Duration::minutes(minute))
+                            .await?
+                            == Verification::Idle
+                    );
+                    ensure!(
+                        a.state.total() == 1 && b.state.total() == 0,
+                        "phase B performed RPC"
+                    );
+                }
+                heads.publish(
+                    1,
+                    topup_adapters::chain::evm::FinalizedHead { number: 90, time },
+                );
+                ensure!(
+                    worker.check_once_at(time + Duration::minutes(60)).await?
+                        == Verification::Succeeded
+                );
+                ensure!(a.state.total() == 4 && b.state.total() == 3);
+                ensure!(
+                    a.state.count("eth_getBlockByNumber") == 1
+                        && b.state.count("eth_getBlockByNumber") == 1,
+                    "checkpoint header was reread"
+                );
+                ensure!(refund_status(pool, id).await? == "succeeded");
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn absent_receipts_use_sixty_calls_in_first_day_and_preserve_cadence_on_restart()
+    -> Result<()> {
+        support::with_database(|database| {
+            Box::pin(async move {
+                let pool = &database.app_pool;
+                let (_, _, id, time) = attached(pool).await?;
+                let a = Endpoint::start().await?;
+                let b = Endpoint::start().await?;
+                let heads = test_heads(100);
+                let mut now = time;
+                let mut ticks = Vec::new();
+                while now < time + Duration::days(1) {
+                    // Reconstructing the worker simulates a restart: all cadence state is durable.
+                    let worker = worker(pool, &a, &b, &heads);
+                    ensure!(worker.check_once_at(now).await? == Verification::Waiting);
+                    ticks.push((now - time).num_minutes());
+                    now = next(pool, id).await?;
+                    ensure!(
+                        worker.check_once_at(now - Duration::seconds(1)).await?
+                            == Verification::Idle
+                    );
+                }
+                ensure!(ticks.starts_with(&[
+                    0, 1, 2, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 180
+                ]));
+                ensure!(
+                    a.state.count("eth_getTransactionReceipt") == 37
+                        && b.state.count("eth_getTransactionReceipt") == 23,
+                    "read {}, verify {}",
+                    a.state.total(),
+                    b.state.total()
+                );
+                ensure!(
+                    a.state.count("eth_getTransactionByHash") == 1
+                        && b.state.count("eth_getTransactionByHash") == 1
+                        && a.state.count("eth_getBlockByNumber") == 0
+                );
+                let later = time + Duration::days(365);
+                let worker = worker(pool, &a, &b, &heads);
+                ensure!(worker.check_once_at(later).await? == Verification::Waiting);
+                ensure!(
+                    worker.check_once_at(later + Duration::minutes(59)).await?
+                        == Verification::Idle
+                );
+                ensure!(
+                    worker.check_once_at(later + Duration::hours(6)).await?
+                        == Verification::Waiting
+                );
+                ensure!(refund_status(pool, id).await? == "pending");
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn disagreeing_receipts_back_off_to_six_hours_and_cache_origin_once() -> Result<()> {
+        support::with_database(|database| {
+            Box::pin(async move {
+                let pool = &database.app_pool;
+                let (_, _, id, time) = attached(pool).await?;
+                let a = Endpoint::start().await?;
+                let b = Endpoint::start().await?;
+                let heads = test_heads(100);
+                a.state.receipt(REFUND_TX, 90, 100);
+                b.state.receipt(REFUND_TX, 90, 101);
+                let mut now = time;
+                let mut checks = 0;
+                while now < time + Duration::days(1) {
+                    let worker = worker(pool, &a, &b, &heads);
+                    ensure!(worker.check_once_at(now).await? == Verification::Waiting);
+                    checks += 1;
+                    let due = next(pool, id).await?;
+                    ensure!(
+                        due - now
+                            == if checks == 1 {
+                                Duration::minutes(10)
+                            } else {
+                                Duration::hours(1)
+                            }
+                    );
+                    ensure!(
+                        worker.check_once_at(due - Duration::seconds(1)).await?
+                            == Verification::Idle
+                    );
+                    now = due;
+                }
+                ensure!(checks == 25 && a.state.total() == 52 && b.state.total() == 51);
+                ensure!(a.state.total() <= 80 && b.state.total() <= 80);
+                ensure!(
+                    a.state.count("eth_getTransactionByHash") == 1
+                        && b.state.count("eth_getTransactionByHash") == 1
+                );
+                let worker = worker(pool, &a, &b, &heads);
+                ensure!(worker.check_once_at(now).await? == Verification::Waiting);
+                ensure!(next(pool, id).await? - now == Duration::hours(6));
+                b.state.receipt(REFUND_TX, 90, 100);
+                ensure!(
+                    worker.check_once_at(now + Duration::hours(6)).await?
+                        == Verification::Succeeded
+                );
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn late_inclusion_and_unknown_origin_stay_within_eighty_calls_per_endpoint() -> Result<()>
+    {
+        support::with_database(|database| {
+            Box::pin(async move {
+                let pool = &database.app_pool;
+                let (_, _, id, time) = attached(pool).await?;
+                let a = Endpoint::start().await?;
+                let b = Endpoint::start().await?;
+                let heads = test_heads(100);
+                a.state
+                    .unknown_origins
+                    .lock()
+                    .expect("origins")
+                    .insert(REFUND_TX.to_owned());
+                b.state
+                    .unknown_origins
+                    .lock()
+                    .expect("origins")
+                    .insert(REFUND_TX.to_owned());
+                let worker = worker(pool, &a, &b, &heads);
+                let mut now = time;
+                while now < time + Duration::hours(2) {
+                    ensure!(worker.check_once_at(now).await? == Verification::Waiting);
+                    now = next(pool, id).await?;
+                }
+                a.state.receipt(REFUND_TX, 90, 100);
+                b.state.receipt(REFUND_TX, 90, 101);
+                while now < time + Duration::days(1) {
+                    ensure!(worker.check_once_at(now).await? == Verification::Waiting);
+                    now = next(pool, id).await?;
+                }
+                ensure!(
+                    a.state.total() <= 80 && b.state.total() <= 80,
+                    "read {}, verify {}",
+                    a.state.total(),
+                    b.state.total()
+                );
+                ensure!(
+                    a.state.count("eth_getTransactionByHash") == 4
+                        && b.state.count("eth_getTransactionByHash") == 4
+                );
+                ensure!(refund_status(pool, id).await? == "pending");
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn hourly_verify_hint_survives_a_lagging_read_and_reorg_returns_to_checkpoint_wait()
+    -> Result<()> {
+        support::with_database(|database| {
+            Box::pin(async move {
+                let pool = &database.app_pool;
+                let (_, _, id, time) = attached(pool).await?;
+                let a = Endpoint::start().await?;
+                let b = Endpoint::start().await?;
+                let heads = test_heads(89);
+                b.state.receipt(REFUND_TX, 90, 100);
+                let worker = worker(pool, &a, &b, &heads);
+                let mut now = time;
+                while now < time + Duration::hours(1) {
+                    ensure!(worker.check_once_at(now).await? == Verification::Waiting);
+                    now = next(pool, id).await?;
+                }
+                ensure!(b.state.count("eth_getTransactionReceipt") == 0);
+                ensure!(worker.check_once_at(now).await? == Verification::Waiting);
+                ensure!(
+                    b.state.count("eth_getTransactionReceipt") == 1,
+                    "verify did not discover the inclusion"
+                );
+                let count = (a.state.total(), b.state.total());
+                ensure!(
+                    worker.check_once_at(now + Duration::minutes(10)).await? == Verification::Idle
+                );
+                ensure!(count == (a.state.total(), b.state.total()));
+                // Both providers now have the receipt, moved by a reorg beyond the old checkpoint.
+                a.state.receipt(REFUND_TX, 110, 100);
+                b.state.receipt(REFUND_TX, 110, 100);
+                heads.publish(
+                    1,
+                    topup_adapters::chain::evm::FinalizedHead { number: 100, time },
+                );
+                ensure!(
+                    worker.check_once_at(now + Duration::minutes(10)).await?
+                        == Verification::Waiting
+                );
+                let count = (a.state.total(), b.state.total());
+                ensure!(
+                    worker.check_once_at(now + Duration::hours(2)).await? == Verification::Idle
+                );
+                ensure!(count == (a.state.total(), b.state.total()));
+                heads.publish(
+                    1,
+                    topup_adapters::chain::evm::FinalizedHead { number: 110, time },
+                );
+                ensure!(
+                    worker.check_once_at(now + Duration::hours(2)).await?
+                        == Verification::Succeeded
+                );
+                ensure!(refund_status(pool, id).await? == "succeeded");
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn captured_pending_origin_resolves_replacement_after_both_nodes_evict_original()
+    -> Result<()> {
+        support::with_database(|database| {
+            Box::pin(async move {
+                let pool = &database.app_pool;
+                let (merchant, id, uuid, time) = attached(pool).await?;
+                let a = Endpoint::start().await?;
+                let b = Endpoint::start().await?;
+                let heads = test_heads(100);
+                let worker = worker(pool, &a, &b, &heads);
+                ensure!(worker.check_once_at(time).await? == Verification::Waiting);
+                let origin: (Option<String>, Option<String>) =
+                    sqlx::query_as("SELECT tx_from,tx_nonce::text FROM refunds WHERE id=$1")
+                        .bind(uuid)
+                        .fetch_one(pool)
+                        .await?;
+                ensure!(origin == (Some(REFUND_SENDER.to_owned()), Some("5".to_owned())));
+                for endpoint in [&a, &b] {
+                    endpoint
+                        .state
+                        .unknown_origins
+                        .lock()
+                        .expect("origins")
+                        .insert(REFUND_TX.to_owned());
+                    endpoint.state.receipt(OTHER_TX, 90, 0);
+                }
+                let (status, body) = merchant
+                    .post(
+                        &format!("/v1/refunds/{id}/mark_paid"),
+                        serde_json::to_vec(&json!({
+                            "transaction_hash": REFUND_TX, "replacement_transaction_hash": OTHER_TX,
+                        }))?,
+                    )
+                    .await?;
+                ensure!(status == StatusCode::OK, "{body}");
+                ensure!(
+                    worker.check_once_at(time + Duration::minutes(1)).await?
+                        == Verification::Failed
+                );
+                ensure!(refund_status(pool, uuid).await? == "failed");
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn signed_original_resolves_evicted_transaction_without_origin_rpc() -> Result<()> {
+        use alloy_consensus::{SignableTransaction, TxEip7702, TxEnvelope};
+        use alloy_eips::eip2718::Encodable2718;
+        use alloy_signer::SignerSync;
+        use alloy_signer_local::PrivateKeySigner;
+
+        support::with_database(|database| {
+            Box::pin(async move {
+                let pool = &database.app_pool;
+                let signer = PrivateKeySigner::from_bytes(&B256::repeat_byte(0x55))?;
+                let transaction = TxEip7702 {
+                    chain_id: 1,
+                    nonce: 5,
+                    ..Default::default()
+                };
+                let signature = signer.sign_hash_sync(&transaction.signature_hash())?;
+                let envelope: TxEnvelope = transaction.into_signed(signature).into();
+                let hash = format!("{:#x}", envelope.tx_hash());
+                let raw = format!("0x{}", hex::encode(envelope.encoded_2718()));
+                let (merchant, id, uuid, time) = attached_transaction(pool, &hash).await?;
+                let a = Endpoint::start().await?;
+                let b = Endpoint::start().await?;
+                for endpoint in [&a, &b] {
+                    endpoint
+                        .state
+                        .unknown_origins
+                        .lock()
+                        .expect("origins")
+                        .insert(hash.clone());
+                }
+                let heads = test_heads(100);
+                let worker = worker(pool, &a, &b, &heads);
+                for minute in [0, 10, 60, 120, 180] {
+                    ensure!(
+                        worker
+                            .check_once_at(time + Duration::minutes(minute))
+                            .await?
+                            == Verification::Waiting
+                    );
+                }
+                ensure!(
+                    a.state.count("eth_getTransactionByHash") == 3
+                        && b.state.count("eth_getTransactionByHash") == 3
+                );
+                let origin: Option<String> =
+                    sqlx::query_scalar("SELECT tx_from FROM refunds WHERE id=$1")
+                        .bind(uuid)
+                        .fetch_one(pool)
+                        .await?;
+                ensure!(origin.is_none());
+                let path = format!("/v1/refunds/{id}/mark_paid");
+                for bad in ["0xzz".to_owned(), format!("{raw}00")] {
+                    let (status, body) = merchant
+                        .post(
+                            &path,
+                            serde_json::to_vec(&json!({
+                                "transaction_hash": hash, "replacement_transaction_hash": OTHER_TX,
+                                "original_signed_transaction": bad,
+                            }))?,
+                        )
+                        .await?;
+                    ensure!(
+                        status == StatusCode::BAD_REQUEST
+                            && body["error"]["param"] == "original_signed_transaction",
+                        "{body}"
+                    );
+                }
+                // Raw proof alone cannot declare a drop, and cannot be supplied without a candidate.
+                let (status, _) = merchant
+                    .post(
+                        &path,
+                        serde_json::to_vec(&json!({
+                            "transaction_hash": hash, "original_signed_transaction": raw,
+                        }))?,
+                    )
+                    .await?;
+                ensure!(status == StatusCode::BAD_REQUEST);
+                let calls = (a.state.total(), b.state.total());
+                let (status, body) = merchant
+                    .post(
+                        &path,
+                        serde_json::to_vec(&json!({
+                            "transaction_hash": hash, "replacement_transaction_hash": OTHER_TX,
+                            "original_signed_transaction": raw,
+                        }))?,
+                    )
+                    .await?;
+                ensure!(
+                    status == StatusCode::OK && body["status"] == "pending",
+                    "{body}"
+                );
+                ensure!(
+                    calls == (a.state.total(), b.state.total()),
+                    "signed proof made RPC calls"
+                );
+                let origin: (Option<String>, Option<String>) =
+                    sqlx::query_as("SELECT tx_from,tx_nonce::text FROM refunds WHERE id=$1")
+                        .bind(uuid)
+                        .fetch_one(pool)
+                        .await?;
+                ensure!(
+                    origin
+                        == (
+                            Some(format!("{:#x}", signer.address())),
+                            Some("5".to_owned())
+                        )
+                );
+                for endpoint in [&a, &b] {
+                    endpoint.state.receipt(OTHER_TX, 90, 0);
+                    endpoint
+                        .state
+                        .origins
+                        .lock()
+                        .expect("origins")
+                        .insert(OTHER_TX.to_owned(), (format!("{:#x}", signer.address()), 5));
+                }
+                ensure!(
+                    worker.check_once_at(time + Duration::hours(4)).await? == Verification::Failed
+                );
+                // Only the replacement's origin was fetched: the original stays evicted on both.
+                ensure!(
+                    a.state.count("eth_getTransactionByHash") == 4
+                        && b.state.count("eth_getTransactionByHash") == 4
+                );
+                let (_, body) = merchant
+                    .call(Method::GET, &format!("/v1/refunds/{id}"), Vec::new())
+                    .await?;
+                ensure!(
+                    body["failure_reason"] == "transaction_dropped"
+                        && body["transaction_hash"] == hash,
+                    "{body}"
+                );
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn exhausted_replacement_renews_only_on_explicit_post_after_twenty_four_hours()
+    -> Result<()> {
+        for included in [false, true] {
+            support::with_database(|database| {
+                Box::pin(async move {
+                    let pool = &database.app_pool;
+                    let (merchant, id, uuid, time) = attached(pool).await?;
+                    let body = serde_json::to_vec(&json!({
+                        "transaction_hash": REFUND_TX,
+                        "replacement_transaction_hash": OTHER_TX,
+                    }))?;
+                    let path = format!("/v1/refunds/{id}/mark_paid");
+                    merchant.post(&path, body.clone()).await?;
+                    let a = Endpoint::start().await?;
+                    let b = Endpoint::start().await?;
+                    let heads = test_heads(100);
+                    if included {
+                        a.state.receipt(OTHER_TX, 90, 0);
+                        b.state.receipt(OTHER_TX, 90, 0);
+                        b.state.origins.lock().expect("origins").insert(
+                            OTHER_TX.to_owned(), (REFUND_SENDER.to_owned(), 6),
+                        );
+                    }
+                    let worker = worker(pool, &a, &b, &heads);
+                    let mut now = time + Duration::seconds(1);
+                    for pass in 0..topup::refunds::MAX_REPLACEMENT_ATTEMPTS {
+                        ensure!(worker.check_once_at(now).await? == Verification::Waiting);
+                        let due = next(pool, uuid).await?;
+                        if included {
+                            let delay = if pass == 0 { Duration::minutes(10) } else { Duration::hours(1) };
+                            ensure!(due - now == delay);
+                        }
+                        now = due;
+                    }
+                    let calls = || (a.state.tx_calls(OTHER_TX), b.state.tx_calls(OTHER_TX));
+                    let exhausted = calls();
+                    ensure!(exhausted.0 <= 40 && exhausted.1 <= 40);
+                    // Newly available or repaired proof cannot refill an exhausted candidate.
+                    a.state.receipt(OTHER_TX, 90, 0);
+                    b.state.receipt(OTHER_TX, 90, 0);
+                    b.state.origins.lock().expect("origins").remove(OTHER_TX);
+                    merchant.post(&path, body.clone()).await?;
+                    for _ in 0..3 {
+                        ensure!(worker.check_once_at(now).await? == Verification::Waiting);
+                        now = next(pool, uuid).await?;
+                    }
+                    ensure!(calls() == exhausted, "candidate retry refilled its budget");
+                    ensure!(refund_status(pool, uuid).await? == "pending");
+                    // Even after a day, the worker cannot renew the stored epoch itself.
+                    sqlx::query("UPDATE refunds SET replacement_started_at=now()-interval '25 hours' WHERE id=$1")
+                        .bind(uuid).execute(pool).await?;
+                    ensure!(worker.check_once_at(now).await? == Verification::Waiting);
+                    ensure!(calls() == exhausted, "automatic epoch renewal");
+                    let ((status, body_a), (other_status, body_b)) = tokio::try_join!(
+                        merchant.post(&path, body.clone()), merchant.post(&path, body.clone()),
+                    )?;
+                    ensure!(status == StatusCode::OK && other_status == StatusCode::OK, "{body_a}, {body_b}");
+                    let (epoch, attempts, paid_at): (chrono::DateTime<Utc>, i16, chrono::DateTime<Utc>) =
+                        sqlx::query_as("SELECT replacement_started_at,replacement_attempts,paid_at FROM refunds WHERE id=$1")
+                            .bind(uuid).fetch_one(pool).await?;
+                    ensure!(attempts == 0 && paid_at == time);
+                    let epochs: i64 = sqlx::query_scalar("SELECT count(*) FROM audit WHERE action='refund.attach_replacement'")
+                        .fetch_one(pool).await?;
+                    ensure!(epochs == 2, "concurrent POSTs renewed the epoch more than once");
+                    merchant.post(&path, body).await?;
+                    ensure!(epoch == sqlx::query_scalar::<_,chrono::DateTime<Utc>>(
+                        "SELECT replacement_started_at FROM refunds WHERE id=$1",
+                    ).bind(uuid).fetch_one(pool).await?);
+                    ensure!(worker.check_once_at(now).await? == Verification::Failed);
+                    Ok(())
+                })
+            }).await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn replacement_requires_dual_finalized_receipt_and_same_original_sender_and_nonce()
+    -> Result<()> {
+        support::with_database(|database| {
+            Box::pin(async move {
+                let pool = &database.app_pool;
+                let (merchant, id, uuid, time) = attached(pool).await?;
+                let original: (chrono::DateTime<Utc>, String) =
+                    sqlx::query_as("SELECT paid_at,tx_hash FROM refunds WHERE id=$1")
+                        .bind(uuid)
+                        .fetch_one(pool)
+                        .await?;
+                let body = serde_json::to_vec(
+                    &json!({"transaction_hash":REFUND_TX,"replacement_transaction_hash":OTHER_TX}),
+                )?;
+                let (status, response) = merchant
+                    .post(&format!("/v1/refunds/{id}/mark_paid"), body.clone())
+                    .await?;
+                ensure!(
+                    status == StatusCode::OK && response["status"] == "pending",
+                    "{response}"
+                );
+                merchant
+                    .post(&format!("/v1/refunds/{id}/mark_paid"), body)
+                    .await?;
+                ensure!(
+                    original
+                        == sqlx::query_as::<_, (chrono::DateTime<Utc>, String)>(
+                            "SELECT paid_at,tx_hash FROM refunds WHERE id=$1"
+                        )
+                        .bind(uuid)
+                        .fetch_one(pool)
+                        .await?
+                );
+                let a = Endpoint::start().await?;
+                let b = Endpoint::start().await?;
+                let heads = test_heads(100);
+                b.state
+                    .unknown_origins
+                    .lock()
+                    .expect("unknown origins")
+                    .insert(REFUND_TX.to_owned());
+                a.state.receipt(OTHER_TX, 90, 0);
+                let worker = worker(pool, &a, &b, &heads);
+                // Candidate known on only one source cannot release the reservation.
+                ensure!(
+                    worker.check_once_at(time + Duration::seconds(1)).await?
+                        == Verification::Waiting
+                );
+                ensure!(refund_status(pool, uuid).await? == "pending");
+                b.state.receipt(OTHER_TX, 90, 0);
+                sqlx::query("UPDATE refunds SET next_check_at=$2 WHERE id=$1")
+                    .bind(uuid)
+                    .bind(time)
+                    .execute(pool)
+                    .await?;
+                ensure!(
+                    worker.check_once_at(time + Duration::seconds(2)).await?
+                        == Verification::Waiting
+                );
+                ensure!(
+                    refund_status(pool, uuid).await? == "pending",
+                    "an unknown original origin released the reservation"
+                );
+                b.state
+                    .unknown_origins
+                    .lock()
+                    .expect("unknown origins")
+                    .clear();
+                // A nonce change alone (including EIP-7702 authorization) is not replacement proof.
+                b.state
+                    .origins
+                    .lock()
+                    .expect("origins")
+                    .insert(OTHER_TX.to_owned(), (REFUND_SENDER.to_owned(), 6));
+                sqlx::query("UPDATE refunds SET next_check_at=$2 WHERE id=$1")
+                    .bind(uuid)
+                    .bind(time)
+                    .execute(pool)
+                    .await?;
+                ensure!(
+                    worker.check_once_at(time + Duration::minutes(1)).await?
+                        == Verification::Waiting
+                );
+                ensure!(refund_status(pool, uuid).await? == "pending");
+                b.state
+                    .origins
+                    .lock()
+                    .expect("origins")
+                    .insert(OTHER_TX.to_owned(), (REFUND_DESTINATION.to_owned(), 5));
+                sqlx::query("UPDATE refunds SET next_check_at=$2 WHERE id=$1")
+                    .bind(uuid)
+                    .bind(time)
+                    .execute(pool)
+                    .await?;
+                ensure!(
+                    worker.check_once_at(time + Duration::minutes(2)).await?
+                        == Verification::Waiting
+                );
+                ensure!(refund_status(pool, uuid).await? == "pending");
+                b.state
+                    .origins
+                    .lock()
+                    .expect("origins")
+                    .insert(OTHER_TX.to_owned(), (REFUND_SENDER.to_owned(), 5));
+                sqlx::query("UPDATE refunds SET next_check_at=$2 WHERE id=$1")
+                    .bind(uuid)
+                    .bind(time)
+                    .execute(pool)
+                    .await?;
+                ensure!(
+                    worker.check_once_at(time + Duration::minutes(3)).await?
+                        == Verification::Failed
+                );
+                let (_, refund) = merchant
+                    .call(Method::GET, &format!("/v1/refunds/{id}"), Vec::new())
+                    .await?;
+                ensure!(
+                    refund["failure_reason"] == "transaction_dropped"
+                        && refund["transaction_hash"] == REFUND_TX,
+                    "{refund}"
+                );
+                let (status, replayed) = merchant
+                    .post(
+                        &format!("/v1/refunds/{id}/mark_paid"),
+                        serde_json::to_vec(&json!({
+                    "transaction_hash":REFUND_TX,"replacement_transaction_hash":OTHER_TX}))?,
+                    )
+                    .await?;
+                ensure!(
+                    status == StatusCode::OK && replayed["status"] == "failed",
+                    "{replayed}"
+                );
+                let events: i64 =
+                    sqlx::query_scalar("SELECT count(*) FROM events WHERE type='refund.failed'")
+                        .fetch_one(pool)
+                        .await?;
+                ensure!(
+                    events == 1
+                        && a.state.count("eth_getTransactionCount") == 0
+                        && b.state.count("eth_getTransactionCount") == 0
+                );
+                Ok(())
+            })
+        })
+        .await
+    }
+}
+
+#[tokio::test]
+async fn account_refund_cap_is_atomic_across_modes_and_leaves_capacity_for_other_accounts()
+-> Result<()> {
+    support::with_database(|database| {
+        Box::pin(async move {
+            let pool = &database.app_pool;
+            seed::initialize_dual_chain(pool, 1).await?;
+            seed::initialize_dual_chain(pool, 11155111).await?;
+            let admin = SigningKey::from_bytes(&[43; 32]);
+            let mut test_route = route_fixture();
+            test_route.livemode = false;
+            test_route.chain.chain_id = 11155111;
+            let mut state = test_state_on_with_limits(
+                pool,
+                &admin,
+                Arc::new(StaticScreener::Listing),
+                Arc::default(),
+                vec![route_fixture()],
+                std::num::NonZeroU32::new(3).context("env cap")?,
+                10,
+            );
+            state.max_attached_pending_refunds_per_account = std::num::NonZeroU32::MIN;
+            let mut test_state = state.clone();
+            test_state.routes =
+                Arc::new(topup::routes::RouteSet::new(vec![test_route]).expect("test routes"));
+            let test_app = topup::api::router(test_state).0;
+            let app = topup::api::router(state).0;
+            let merchant = Merchant::seed(pool, &app, "capped-account").await?;
+            let test_key = seed::create_api_key(pool, merchant.account.id, false).await?;
+            seed::set_treasury(pool, merchant.account.id, false, 11155111, FIXTURE_TREASURY)
+                .await?;
+            let test_merchant = Merchant {
+                app: test_app,
+                account: merchant.account.clone(),
+                key: test_key,
+            };
+            let live_deposit =
+                seed_rejected_deposit(pool, merchant.account.id, "live", 100).await?;
+            let test_deposit = seed_deposit_in_mode(
+                pool,
+                merchant.account.id,
+                ("test", false),
+                100,
+                DepositState::Rejected,
+                Some(RejectReason::OutOfBounds),
+            )
+            .await?;
+            let live = merchant.refund(live_deposit, "100").await?;
+            let test = test_merchant.refund(test_deposit, "100").await?;
+            let live_path = format!("/v1/refunds/{live}/mark_paid");
+            let test_path = format!("/v1/refunds/{test}/mark_paid");
+            let (a, b) = tokio::join!(
+                merchant.post(&live_path, mark_paid_body(REFUND_TX)?),
+                test_merchant.post(&test_path, mark_paid_body(OTHER_TX)?)
+            );
+            let (a, body_a) = a?;
+            let (b, body_b) = b?;
+            ensure!(
+                (a == StatusCode::OK && b == StatusCode::UNPROCESSABLE_ENTITY)
+                    || (b == StatusCode::OK && a == StatusCode::UNPROCESSABLE_ENTITY),
+                "{body_a}, {body_b}"
+            );
+            let other = Merchant::seed(pool, &app, "other-account").await?;
+            let deposit = seed_rejected_deposit(pool, other.account.id, "other", 100).await?;
+            let id = other.refund(deposit, "100").await?;
+            other.mark_paid(&id, REFUND_TX).await?;
+            let count: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM refunds WHERE status='pending' AND tx_hash IS NOT NULL",
+            )
+            .fetch_one(pool)
+            .await?;
+            ensure!(count == 2);
+            let (winner, id) = if a == StatusCode::OK {
+                (&merchant, &live)
+            } else {
+                (&test_merchant, &test)
+            };
+            winner
+                .mark_paid(
+                    id,
+                    if a == StatusCode::OK {
+                        REFUND_TX
+                    } else {
+                        OTHER_TX
+                    },
+                )
+                .await?;
+            Ok(())
+        })
+    })
+    .await
 }

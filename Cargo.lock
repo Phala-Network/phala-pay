@@ -5787,6 +5787,7 @@ name = "topup"
 version = "0.13.3"
 dependencies = [
  "alloy 2.5.0",
+ "alloy-consensus 2.5.0",
  "alloy-eips 2.5.0",
  "alloy-network 2.5.0",
  "alloy-primitives",

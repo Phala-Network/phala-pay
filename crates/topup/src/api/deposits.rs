@@ -2,6 +2,8 @@
 
 use std::str::FromStr;
 
+use alloy_consensus::{Transaction, TxEnvelope, transaction::SignerRecoverable};
+use alloy_eips::eip2718::Decodable2718;
 use alloy_primitives::{Address as EvmAddress, B256, U256};
 use axum::Json;
 use axum::extract::{Extension, RawQuery, State};
@@ -639,9 +641,21 @@ pub(crate) async fn update_refund(
 /// `deposit.refunded` is sent; otherwise it is `failed` with a `failure_reason`. Repeating the same
 /// transaction returns the refund. From here on the refund cannot be canceled: it is `failed`
 /// only when its transaction is proven not to pay it.
-/// Each environment has a configured attached-pending refund limit (production 2, staging 1),
-/// and a configured rolling 24-hour attachment limit (currently 1), across all accounts and modes. Repeating the same attachment consumes no
-/// quota. A limit refusal preserves the reservation; contact the operator before another payout.
+/// Environment-wide attached-pending and rolling 24-hour limits apply across accounts and modes.
+/// An additional per-account concurrency cap (`max_attached_pending_refunds_per_account`,
+/// default 1) also spans both modes. Repeating an
+/// attachment consumes no quota. A refusal preserves the reservation; contact the operator.
+/// To resolve a replaced attachment, repeat its original `transaction_hash` with optional
+/// `replacement_transaction_hash`. One candidate is stored at a time, with at most eight recovery
+/// passes on the same A/C backoff. Before exhaustion or 24 hours, identical re-POSTs are
+/// idempotent no-ops. After both, an explicit re-POST renews that candidate (or supplies another)
+/// at most once per 24 hours per attachment; never automatically. Only identical
+/// finalized replacement receipts on both providers and the original's verified sender and
+/// nonce prove `transaction_dropped`; missing receipts and account nonce changes never suffice.
+/// If providers have forgotten the original, supply `original_signed_transaction` alongside
+/// the candidate. Its hash must equal `transaction_hash`; local signature recovery supplies the
+/// original sender/nonce only when they were not already captured from both providers. Raw
+/// bytes are not stored and this fallback makes no RPC calls.
 pub(crate) async fn mark_refund_paid(
     State(state): State<AppState>,
     Extension(merchant): Extension<Merchant>,
@@ -659,16 +673,47 @@ pub(crate) async fn mark_refund_paid(
                 "transaction_hash must be 0x and 32 bytes of hex",
             )
         })?;
+    let replacement = request
+        .replacement_transaction_hash
+        .as_deref()
+        .map(|hash| {
+            B256::from_str(hash)
+                .ok()
+                .filter(|candidate| hash.len() == 66 && *candidate != tx_hash)
+                .ok_or_else(|| {
+                    ApiError::invalid_param(
+                        "replacement_transaction_hash",
+                        "replacement_transaction_hash must be a distinct 0x-prefixed 32-byte hash",
+                    )
+                })
+        })
+        .transpose()?;
+    let original_origin = request
+        .original_signed_transaction
+        .as_deref()
+        .map(|raw| {
+            if replacement.is_none() {
+                return Err(ApiError::invalid_param(
+                    "original_signed_transaction",
+                    "a replacement_transaction_hash is required with the signed original",
+                ));
+            }
+            signed_original_origin(raw, tx_hash)
+        })
+        .transpose()?;
     let mut transaction = idempotent.begin(&state.pool).await?;
     repository::mark_refund_paid(
         &mut *transaction,
         &state.routes,
         state.max_attached_pending_refunds,
+        state.max_attached_pending_refunds_per_account,
         state.max_refund_attachments_per_day,
         merchant.scope,
         id,
         tx_hash,
         request.receipt_log_index,
+        replacement,
+        original_origin,
         &merchant.actor(),
     )
     .await?;
@@ -676,6 +721,23 @@ pub(crate) async fn mark_refund_paid(
         .await?
         .ok_or_else(ApiError::internal)?;
     idempotent.commit(transaction, Json(refund)).await
+}
+
+/// Authenticate the original origin without trusting a provider that may have evicted it.
+fn signed_original_origin(raw: &str, hash: B256) -> ApiResult<(EvmAddress, u64)> {
+    let invalid = || {
+        ApiError::invalid_param(
+            "original_signed_transaction",
+            "must be a valid 0x-prefixed signed transaction whose keccak256 equals transaction_hash",
+        )
+    };
+    let bytes = hex::decode(raw.strip_prefix("0x").ok_or_else(invalid)?).map_err(|_| invalid())?;
+    if alloy_primitives::keccak256(&bytes) != hash {
+        return Err(invalid());
+    }
+    let transaction = TxEnvelope::decode_2718_exact(&bytes).map_err(|_| invalid())?;
+    let sender = transaction.recover_signer().map_err(|_| invalid())?;
+    Ok((sender, transaction.nonce()))
 }
 
 #[utoipa::path(
@@ -1083,4 +1145,83 @@ fn decimal_u256(value: &str) -> Option<U256> {
         return None;
     }
     U256::from_str(value).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy_consensus::{
+        SignableTransaction, TxEip1559, TxEip2930, TxEip4844, TxEip7702, TxLegacy, TypedTransaction,
+    };
+    use alloy_eips::eip2718::Encodable2718;
+    use alloy_primitives::Signature;
+    use alloy_signer::SignerSync;
+    use alloy_signer_local::PrivateKeySigner;
+
+    #[test]
+    fn signed_original_recovers_all_envelopes_and_rejects_bad_proof() -> anyhow::Result<()> {
+        let signer = PrivateKeySigner::from_bytes(&B256::repeat_byte(0x55))?;
+        let transactions: [TypedTransaction; 5] = [
+            TxLegacy {
+                nonce: 5,
+                ..Default::default()
+            }
+            .into(),
+            TxEip2930 {
+                nonce: 5,
+                ..Default::default()
+            }
+            .into(),
+            TxEip1559 {
+                nonce: 5,
+                ..Default::default()
+            }
+            .into(),
+            TxEip4844 {
+                nonce: 5,
+                ..Default::default()
+            }
+            .into(),
+            TxEip7702 {
+                nonce: 5,
+                ..Default::default()
+            }
+            .into(),
+        ];
+        for transaction in transactions {
+            let signature = signer.sign_hash_sync(&transaction.signature_hash())?;
+            let envelope: TxEnvelope = transaction.into_signed(signature).into();
+            let bytes = envelope.encoded_2718();
+            let raw = format!("0x{}", hex::encode(&bytes));
+            assert_eq!(
+                signed_original_origin(&raw, *envelope.tx_hash()).expect("valid signed original"),
+                (signer.address(), 5)
+            );
+            assert!(signed_original_origin(&raw, B256::ZERO).is_err());
+            let mut trailing = bytes;
+            trailing.push(0);
+            assert!(
+                signed_original_origin(
+                    &format!("0x{}", hex::encode(&trailing)),
+                    alloy_primitives::keccak256(&trailing)
+                )
+                .is_err()
+            );
+        }
+        for raw in ["0x", "00", "0xzz", "0xdeadbeef"] {
+            assert!(signed_original_origin(raw, B256::ZERO).is_err());
+        }
+        let invalid: TxEnvelope = TxEip1559::default()
+            .into_signed(Signature::new(U256::ZERO, U256::ZERO, false))
+            .into();
+        let bytes = invalid.encoded_2718();
+        assert!(
+            signed_original_origin(
+                &format!("0x{}", hex::encode(&bytes)),
+                alloy_primitives::keccak256(&bytes)
+            )
+            .is_err()
+        );
+        Ok(())
+    }
 }

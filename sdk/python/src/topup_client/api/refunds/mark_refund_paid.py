@@ -119,10 +119,21 @@ def sync_detailed(
     `deposit.refunded` is sent; otherwise it is `failed` with a `failure_reason`. Repeating the same
     transaction returns the refund. From here on the refund cannot be canceled: it is `failed`
     only when its transaction is proven not to pay it.
-    Each environment has a configured attached-pending refund limit (production 2, staging 1),
-    and a configured rolling 24-hour attachment limit (currently 1), across all accounts and modes.
-    Repeating the same attachment consumes no
-    quota. A limit refusal preserves the reservation; contact the operator before another payout.
+    Environment-wide attached-pending and rolling 24-hour limits apply across accounts and modes.
+    An additional per-account concurrency cap (`max_attached_pending_refunds_per_account`,
+    default 1) also spans both modes. Repeating an
+    attachment consumes no quota. A refusal preserves the reservation; contact the operator.
+    To resolve a replaced attachment, repeat its original `transaction_hash` with optional
+    `replacement_transaction_hash`. One candidate is stored at a time, with at most eight recovery
+    passes on the same A/C backoff. Before exhaustion or 24 hours, identical re-POSTs are
+    idempotent no-ops. After both, an explicit re-POST renews that candidate (or supplies another)
+    at most once per 24 hours per attachment; never automatically. Only identical
+    finalized replacement receipts on both providers and the original's verified sender and
+    nonce prove `transaction_dropped`; missing receipts and account nonce changes never suffice.
+    If providers have forgotten the original, supply `original_signed_transaction` alongside
+    the candidate. Its hash must equal `transaction_hash`; local signature recovery supplies the
+    original sender/nonce only when they were not already captured from both providers. Raw
+    bytes are not stored and this fallback makes no RPC calls.
 
     Args:
         id (str):
@@ -166,10 +177,21 @@ def sync(
     `deposit.refunded` is sent; otherwise it is `failed` with a `failure_reason`. Repeating the same
     transaction returns the refund. From here on the refund cannot be canceled: it is `failed`
     only when its transaction is proven not to pay it.
-    Each environment has a configured attached-pending refund limit (production 2, staging 1),
-    and a configured rolling 24-hour attachment limit (currently 1), across all accounts and modes.
-    Repeating the same attachment consumes no
-    quota. A limit refusal preserves the reservation; contact the operator before another payout.
+    Environment-wide attached-pending and rolling 24-hour limits apply across accounts and modes.
+    An additional per-account concurrency cap (`max_attached_pending_refunds_per_account`,
+    default 1) also spans both modes. Repeating an
+    attachment consumes no quota. A refusal preserves the reservation; contact the operator.
+    To resolve a replaced attachment, repeat its original `transaction_hash` with optional
+    `replacement_transaction_hash`. One candidate is stored at a time, with at most eight recovery
+    passes on the same A/C backoff. Before exhaustion or 24 hours, identical re-POSTs are
+    idempotent no-ops. After both, an explicit re-POST renews that candidate (or supplies another)
+    at most once per 24 hours per attachment; never automatically. Only identical
+    finalized replacement receipts on both providers and the original's verified sender and
+    nonce prove `transaction_dropped`; missing receipts and account nonce changes never suffice.
+    If providers have forgotten the original, supply `original_signed_transaction` alongside
+    the candidate. Its hash must equal `transaction_hash`; local signature recovery supplies the
+    original sender/nonce only when they were not already captured from both providers. Raw
+    bytes are not stored and this fallback makes no RPC calls.
 
     Args:
         id (str):
@@ -208,10 +230,21 @@ async def asyncio_detailed(
     `deposit.refunded` is sent; otherwise it is `failed` with a `failure_reason`. Repeating the same
     transaction returns the refund. From here on the refund cannot be canceled: it is `failed`
     only when its transaction is proven not to pay it.
-    Each environment has a configured attached-pending refund limit (production 2, staging 1),
-    and a configured rolling 24-hour attachment limit (currently 1), across all accounts and modes.
-    Repeating the same attachment consumes no
-    quota. A limit refusal preserves the reservation; contact the operator before another payout.
+    Environment-wide attached-pending and rolling 24-hour limits apply across accounts and modes.
+    An additional per-account concurrency cap (`max_attached_pending_refunds_per_account`,
+    default 1) also spans both modes. Repeating an
+    attachment consumes no quota. A refusal preserves the reservation; contact the operator.
+    To resolve a replaced attachment, repeat its original `transaction_hash` with optional
+    `replacement_transaction_hash`. One candidate is stored at a time, with at most eight recovery
+    passes on the same A/C backoff. Before exhaustion or 24 hours, identical re-POSTs are
+    idempotent no-ops. After both, an explicit re-POST renews that candidate (or supplies another)
+    at most once per 24 hours per attachment; never automatically. Only identical
+    finalized replacement receipts on both providers and the original's verified sender and
+    nonce prove `transaction_dropped`; missing receipts and account nonce changes never suffice.
+    If providers have forgotten the original, supply `original_signed_transaction` alongside
+    the candidate. Its hash must equal `transaction_hash`; local signature recovery supplies the
+    original sender/nonce only when they were not already captured from both providers. Raw
+    bytes are not stored and this fallback makes no RPC calls.
 
     Args:
         id (str):
@@ -253,10 +286,21 @@ async def asyncio(
     `deposit.refunded` is sent; otherwise it is `failed` with a `failure_reason`. Repeating the same
     transaction returns the refund. From here on the refund cannot be canceled: it is `failed`
     only when its transaction is proven not to pay it.
-    Each environment has a configured attached-pending refund limit (production 2, staging 1),
-    and a configured rolling 24-hour attachment limit (currently 1), across all accounts and modes.
-    Repeating the same attachment consumes no
-    quota. A limit refusal preserves the reservation; contact the operator before another payout.
+    Environment-wide attached-pending and rolling 24-hour limits apply across accounts and modes.
+    An additional per-account concurrency cap (`max_attached_pending_refunds_per_account`,
+    default 1) also spans both modes. Repeating an
+    attachment consumes no quota. A refusal preserves the reservation; contact the operator.
+    To resolve a replaced attachment, repeat its original `transaction_hash` with optional
+    `replacement_transaction_hash`. One candidate is stored at a time, with at most eight recovery
+    passes on the same A/C backoff. Before exhaustion or 24 hours, identical re-POSTs are
+    idempotent no-ops. After both, an explicit re-POST renews that candidate (or supplies another)
+    at most once per 24 hours per attachment; never automatically. Only identical
+    finalized replacement receipts on both providers and the original's verified sender and
+    nonce prove `transaction_dropped`; missing receipts and account nonce changes never suffice.
+    If providers have forgotten the original, supply `original_signed_transaction` alongside
+    the candidate. Its hash must equal `transaction_hash`; local signature recovery supplies the
+    original sender/nonce only when they were not already captured from both providers. Raw
+    bytes are not stored and this fallback makes no RPC calls.
 
     Args:
         id (str):

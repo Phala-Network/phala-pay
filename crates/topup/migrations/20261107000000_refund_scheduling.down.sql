@@ -1,0 +1,11 @@
+ALTER TABLE refunds
+    DROP CONSTRAINT refunds_replacement_distinct_check,
+    DROP CONSTRAINT refunds_replacement_epoch_check,
+    DROP COLUMN replacement_hash,
+    DROP COLUMN replacement_attempts,
+    DROP COLUMN replacement_started_at,
+    DROP COLUMN verification_attempts,
+    DROP COLUMN verify_checked_at,
+    DROP COLUMN observed_block,
+    DROP COLUMN origin_checked,
+    DROP COLUMN origin_probes;

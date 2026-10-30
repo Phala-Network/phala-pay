@@ -17,6 +17,7 @@ dev-signer = ["topup-adapters/dev-signer"]
 
 [dependencies]
 alloy.workspace = true
+alloy-consensus.workspace = true
 alloy-primitives.workspace = true
 alloy-eips.workspace = true
 alloy-network.workspace = true

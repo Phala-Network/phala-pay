@@ -106,8 +106,8 @@ pub enum RefundFailure {
     AmountMismatch,
     /// The matching transfer already pays another refund.
     TransferAlreadyUsed,
-    /// Legacy failure code retained for historical objects. Current workers require a finalized
-    /// paying receipt to resolve attached refunds; nonce changes alone do not prove replacement.
+    /// A distinct finalized transaction with the same sender and nonce is proven on both
+    /// providers. Nonce changes alone do not prove replacement.
     TransactionDropped,
     /// Legacy absence-timeout failure code. Current workers alert and keep the reservation.
     TransactionNotFound,

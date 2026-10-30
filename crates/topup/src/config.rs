@@ -31,6 +31,8 @@ use crate::rpc_provider::ProviderUrl;
 struct ConfigSpec {
     environment: String,
     max_attached_pending_refunds: NonZeroU32,
+    #[serde(default = "default_refunds_per_account")]
+    max_attached_pending_refunds_per_account: NonZeroU32,
     max_refund_attachments_per_day: u32,
     #[serde(default = "default_hints_per_day")]
     hints_per_day: i32,
@@ -70,6 +72,8 @@ pub struct Config {
     pub environment: String,
     /// Required positive concurrency limit for attached-pending refunds in this deployment.
     pub max_attached_pending_refunds: NonZeroU32,
+    /// Account-wide concurrency limit across live and test mode (default 1).
+    pub max_attached_pending_refunds_per_account: NonZeroU32,
     /// Required environment-wide attachment limit over a rolling 24 hours.
     pub max_refund_attachments_per_day: u32,
     /// Atomic environment-wide hint task limit per UTC day (default 80).
@@ -110,6 +114,7 @@ impl std::fmt::Debug for AdminKeySpec {
 struct ResolvedConfig<'a> {
     environment: &'a str,
     max_attached_pending_refunds: NonZeroU32,
+    max_attached_pending_refunds_per_account: NonZeroU32,
     max_refund_attachments_per_day: u32,
     hints_per_day: i32,
     quote_snapshots_per_day: i32,
@@ -215,6 +220,7 @@ impl Config {
             sanctions: spec.sanctions,
             environment: spec.environment,
             max_attached_pending_refunds: spec.max_attached_pending_refunds,
+            max_attached_pending_refunds_per_account: spec.max_attached_pending_refunds_per_account,
             max_refund_attachments_per_day: spec.max_refund_attachments_per_day,
             hints_per_day: spec.hints_per_day,
             quote_snapshots_per_day: spec.quote_snapshots_per_day,
@@ -325,6 +331,7 @@ impl Config {
         serde_json::to_string_pretty(&ResolvedConfig {
             environment: &self.environment,
             max_attached_pending_refunds: self.max_attached_pending_refunds,
+            max_attached_pending_refunds_per_account: self.max_attached_pending_refunds_per_account,
             max_refund_attachments_per_day: self.max_refund_attachments_per_day,
             hints_per_day: self.hints_per_day,
             quote_snapshots_per_day: self.quote_snapshots_per_day,
@@ -393,6 +400,10 @@ fn is_name(value: &str, max: usize) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"-_".contains(&byte))
+}
+
+fn default_refunds_per_account() -> NonZeroU32 {
+    NonZeroU32::MIN
 }
 
 #[cfg(test)]
@@ -575,6 +586,37 @@ mod tests {
             assert_eq!(
                 (parsed.hints_per_day, parsed.quote_snapshots_per_day),
                 expected
+            );
+        }
+    }
+
+    #[test]
+    fn account_refund_cap_defaults_to_one_and_validates_positive_overrides() {
+        let yaml = config(PROVIDERS, "https://pay.example");
+        assert_eq!(
+            Config::parse(&yaml)
+                .expect("default")
+                .max_attached_pending_refunds_per_account
+                .get(),
+            1
+        );
+        for limit in [1, 3, 10] {
+            let configured = format!("max_attached_pending_refunds_per_account: {limit}\n{yaml}");
+            let parsed = Config::parse(&configured).expect("positive account cap");
+            assert_eq!(
+                Config::parse(&parsed.resolved_json().expect("show"))
+                    .expect("roundtrip")
+                    .max_attached_pending_refunds_per_account
+                    .get(),
+                limit
+            );
+        }
+        for invalid in ["0", "-1", "null"] {
+            assert!(
+                Config::parse(&format!(
+                    "max_attached_pending_refunds_per_account: {invalid}\n{yaml}"
+                ))
+                .is_err()
             );
         }
     }

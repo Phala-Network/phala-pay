@@ -535,8 +535,10 @@ async fn published_image_round_trip() -> Result<()> {
             std::env::var("TOPUP_ROLLBACK_CONFIG").context("verified N-1 kit configuration required")?
         )?)?;
         let mut previous_config=current_config.clone();
-        if previous_schema.get("max_refund_attachments_per_day").is_none() {
-            previous_config.as_object_mut().context("configuration object")?.remove("max_refund_attachments_per_day");
+        for key in ["max_refund_attachments_per_day", "max_attached_pending_refunds_per_account"] {
+            if previous_schema.get(key).is_none() {
+                previous_config.as_object_mut().context("configuration object")?.remove(key);
+            }
         }
         let old_rpc=previous_schema["rpc"].as_array().context("N-1 RPC configuration")?.first().context("N-1 chain")?;
         if old_rpc.get("max_issued_addresses").is_none() {
@@ -661,6 +663,7 @@ async fn published_image_round_trip() -> Result<()> {
         let routes=RouteSet::with_rpc(vec![route.clone()],std::collections::BTreeMap::from([(1,pair)])).map_err(anyhow::Error::msg)?;
         let (app, _)=topup::api::router(topup::api::AppState {
             pool:database.app_pool.clone(), routes:Arc::new(routes),
+            max_attached_pending_refunds_per_account: std::num::NonZeroU32::new(2).expect("positive account refund limit"),
             max_attached_pending_refunds: std::num::NonZeroU32::new(2).expect("positive refund limit"),
         max_refund_attachments_per_day: 1,
             admin_key:topup::api::VerificationKey::from_base64("drill/admin".into(),&support::public_key_base64(&ed25519_dalek::SigningKey::from_bytes(&[41;32]))).unwrap(),
