@@ -432,7 +432,7 @@ five-minute read discovery, ten-minute dual checkpoints, hourly dual coverage, s
 19,200-block catch-up, all seven six-hour custody routes, prices, deposits, hints, factory proofs,
 Safe proofs, attached refunds, unresolved finality stock and extra operations. It assumes every
 payment chain runs all day, one caught-up recipient chunk plus one lagging chunk, and all 1,000
-historical addresses.
+historical addresses treated as hot. No hot-set idle savings raise the approved capacity.
 
 The approved [parallel operating mode and limits](../../deploy/RPC.md#pilot-limits-and-operating-modes)
 run staging tests, including refunds, alongside production on the shared free quotas. D, factory

@@ -302,14 +302,14 @@ Binance announced 12 in 2021, before the Merge
 Exchanges credit withdrawable balances to anonymous users; a merchant crediting a known customer
 can claw back, so a shallower default is proportionate, and the account policy raises it.
 
-**Mechanics (implemented by PR 1, specified in architecture §7, §8, §11).** One scanner per
-chain polls the head once per block time (2 s on an OP-stack chain crediting at a depth), locked
-onto block arrival, scans each new block for
-transfers to every issued address in one request, and confirms on provider B at the required
-confirmation, then
-values, screens, and credits in the same pass: **credited in about 30 seconds** at Ethereum's
-default and **about 7 seconds** at OP-stack's;
-`GET /v1/config` reports the typical credit time for the account's policy. A deposit's identity
+**Mechanics (architecture §7, §8, §11).** Transaction-hash hints start immediate dual-provider
+confirmation. Five-minute read discovery finds recent quote/deposit recipients; hourly dual
+coverage includes every issued address. Cold unhinted payments can take about 70 minutes with
+healthy endpoints and caught-up coverage. Once found, transfers need independent agreement at
+the required confirmation before valuation, screening and credit. The confirmation target is
+**about 30 seconds** at Ethereum's default and **about 7 seconds** at OP-stack's;
+`GET /v1/config` reports that typical credit time for the account's policy, excluding discovery.
+A deposit's identity
 is its transfer's position in its transaction's receipt (`receipt_log_index`), which survives
 re-inclusion; the position holds at most one deposit that is not reversed, and a deposit recorded
 after one there was reversed takes the next revision and a new id (architecture §7). A finality watch re-reads every not-yet-final deposit's receipt on both providers
