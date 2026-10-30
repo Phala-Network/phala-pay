@@ -30,6 +30,14 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Changed
 
+- Share bounded immutable EVM facts within each endpoint and skip completion of exact active
+  dual-verified transfer positions. Canonical numbered headers and endpoint independence remain
+  fresh. Persist hint confirmation evidence for pump reuse, invalidating changed or reorged
+  proof and retaining full dual fallback. Depth hints never assert uncaptured finality.
+- Use fresh dual inclusion headers for the first finality check of proven deposits, with full
+  receipt fallback. Verify matching dual factory events directly; missing or conflicting logs
+  still require independent receipts and stored contradictions still freeze the chain.
+
 - Verify refunds from receipt inclusion and published checkpoint events. Receipt probes back
   off through two hours, hourly until day one, then every six hours; observed receipts make no
   RPC until the checkpoint reaches them. Up to three durable dual-origin attempts at 0, 10

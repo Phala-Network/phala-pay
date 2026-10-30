@@ -296,7 +296,7 @@ async fn process(
                 4
             }));
         confirmation_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let evidence = loop {
+        let (evidence, independent, heads) = loop {
             confirmation_poll.tick().await;
             let read_head = read_reader
                 .confirmation_heads(chain.chain.confirmations)
@@ -347,7 +347,7 @@ async fn process(
             if evidence.transfers.is_empty() {
                 return Ok(Outcome::Deferred);
             }
-            break evidence;
+            break (evidence, independent, [read_head, verify_head]);
         };
         let mut tx = pool.begin().await?;
         db::rpc::guard_in(&mut tx, hint.chain).await?;
@@ -370,12 +370,23 @@ async fn process(
             return Ok(Outcome::Deferred);
         }
         let mut recorded = false;
-        for log in evidence.transfers {
+        for (log, independent) in evidence.transfers.into_iter().zip(independent.transfers) {
             // Match coverage scanning's inclusive address creation boundary, using the
             // freshly agreed inclusion rather than the initial discovery receipt.
             if log.block_number < hint.address.created_block {
                 continue;
             }
+            let proof = crate::steps::confirm::ConfirmationEvidence {
+                policy: chain.chain.confirmations,
+                terminal: heads.iter().all(|head| log.block_number <= head.finalized),
+                heads,
+                receipts: [
+                    topup_adapters::chain::evm::ReceiptLookup::from_verified_transfer(log.clone()),
+                    topup_adapters::chain::evm::ReceiptLookup::from_verified_transfer(independent),
+                ],
+            };
+            let proof =
+                serde_json::to_value(proof).map_err(|error| sqlx::Error::Encode(error.into()))?;
             let deposit = scanner::resolve_log(log, &hint.address, &chain, chrono::Utc::now());
             // Inspect the full position history after RPC and under the chain lock. Hints
             // have confirmation evidence only: identical reversed evidence is dropped,
@@ -402,8 +413,8 @@ async fn process(
             {
                 // Both timestamps use PostgreSQL's transaction clock; rollback can prove that
                 // the hint, rather than a later scanner pass, wrote this verification marker.
-                sqlx::query("UPDATE deposits SET dual_verified_at=created_at WHERE id=$1")
-                    .bind(id)
+                sqlx::query("UPDATE deposits SET dual_verified_at=created_at,hint_confirmation_evidence=$2 WHERE id=$1")
+                    .bind(id).bind(proof)
                     .execute(&mut *tx)
                     .await?;
                 recorded = true;

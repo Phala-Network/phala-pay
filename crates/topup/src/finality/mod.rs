@@ -58,6 +58,7 @@ pub enum FinalityError {
 
 #[async_trait]
 trait WatchReader: Send + Sync {
+    async fn header(&self, number: u64) -> Result<(B256, DateTime<Utc>), ChainError>;
     async fn evidence(
         &self,
         tx: B256,
@@ -68,6 +69,9 @@ trait WatchReader: Send + Sync {
 
 #[async_trait]
 impl<R: ChainReader + Send + Sync> WatchReader for R {
+    async fn header(&self, number: u64) -> Result<(B256, DateTime<Utc>), ChainError> {
+        ChainReader::header(self, number).await
+    }
     async fn evidence(
         &self,
         tx: B256,
@@ -281,18 +285,59 @@ impl FinalityWatch {
         secondary_finalized: u64,
         now: DateTime<Utc>,
     ) -> Result<Applied, FinalityError> {
-        let (primary_evidence, secondary_evidence) = tokio::try_join!(
-            chain.primary.evidence(
-                deposit.tx_hash,
-                deposit.receipt_log_index,
-                primary_finalized
-            ),
-            chain.secondary.evidence(
-                deposit.tx_hash,
-                deposit.receipt_log_index,
-                secondary_finalized
-            ),
-        )?;
+        // A stored dual receipt is committed by its block hash. The first check needs
+        // only fresh independent ancestry headers; any mismatch/error uses full evidence.
+        let ancestry = if deposit.ancestry_eligible
+            && deposit.block_number <= primary_finalized.min(secondary_finalized)
+        {
+            let (a, b) = tokio::join!(
+                chain.primary.header(deposit.block_number),
+                chain.secondary.header(deposit.block_number),
+            );
+            matches!((a, b), (Ok(a), Ok(b)) if a == (deposit.block_hash, deposit.block_time) && b == a)
+        } else {
+            false
+        };
+        let (primary_evidence, secondary_evidence) = if ancestry {
+            let transfer = TransferLog {
+                tx_hash: deposit.tx_hash,
+                receipt_log_index: deposit.receipt_log_index,
+                log_index: deposit.log_index,
+                block_number: deposit.block_number,
+                block_hash: deposit.block_hash,
+                block_time: deposit.block_time,
+                tx_from: deposit.origin.0,
+                tx_nonce: deposit.origin.1,
+                token: deposit.asset_contract,
+                from: deposit.from_address,
+                to: deposit.address,
+                amount: deposit.amount_atomic,
+            };
+            let receipt = ReceiptLookup::from_verified_transfer(transfer);
+            (
+                topup_adapters::chain::evm::FinalityEvidence {
+                    finalized: primary_finalized,
+                    receipt: receipt.clone(),
+                },
+                topup_adapters::chain::evm::FinalityEvidence {
+                    finalized: secondary_finalized,
+                    receipt,
+                },
+            )
+        } else {
+            tokio::try_join!(
+                chain.primary.evidence(
+                    deposit.tx_hash,
+                    deposit.receipt_log_index,
+                    primary_finalized
+                ),
+                chain.secondary.evidence(
+                    deposit.tx_hash,
+                    deposit.receipt_log_index,
+                    secondary_finalized
+                ),
+            )?
+        };
         let replacement = if matches!(primary_evidence.receipt, ReceiptLookup::Missing)
             && matches!(secondary_evidence.receipt, ReceiptLookup::Missing)
         {
@@ -612,6 +657,7 @@ struct WatchedDeposit {
     token: Uuid,
     version: DateTime<Utc>,
     old_final: bool,
+    ancestry_eligible: bool,
 }
 
 impl WatchedDeposit {
@@ -770,7 +816,7 @@ async fn claim_unfinal_deposits(
         {
             continue;
         }
-        let row = sqlx::query("SELECT deposit.id,deposit.state,deposit.attempt,deposit.tx_hash,deposit.receipt_log_index,deposit.log_index,deposit.block_number,deposit.block_hash,deposit.block_time,address.address,deposit.asset_contract,deposit.from_address,deposit.amount_atomic::text AS amount_atomic,deposit.tx_from,deposit.tx_nonce::text AS tx_nonce,deposit.lease_token,deposit.updated_at,deposit.final_at IS NOT NULL AS old_final FROM deposits deposit JOIN addresses address ON address.id=deposit.address_id WHERE deposit.id=$1 AND deposit.lease_token=$2")
+        let row = sqlx::query("SELECT deposit.id,deposit.state,deposit.attempt,deposit.tx_hash,deposit.receipt_log_index,deposit.log_index,deposit.block_number,deposit.block_hash,deposit.block_time,address.address,deposit.asset_contract,deposit.from_address,deposit.amount_atomic::text AS amount_atomic,deposit.tx_from,deposit.tx_nonce::text AS tx_nonce,deposit.lease_token,deposit.updated_at,deposit.final_at IS NOT NULL AS old_final,deposit.dual_verified_at IS NOT NULL AND deposit.first_unresolved_at IS NULL AND deposit.final_at IS NULL AS ancestry_eligible FROM deposits deposit JOIN addresses address ON address.id=deposit.address_id WHERE deposit.id=$1 AND deposit.lease_token=$2")
             .bind(id).bind(token).fetch_one(pool).await?;
         rows.push(row);
     }
@@ -787,6 +833,7 @@ async fn claim_unfinal_deposits(
                 token: row.try_get("lease_token")?,
                 version: row.try_get("updated_at")?,
                 old_final: row.try_get("old_final")?,
+                ancestry_eligible: row.try_get("ancestry_eligible")?,
                 state: db::parse_state(&row.try_get::<String, _>("state")?)?,
                 attempt: row.try_get("attempt")?,
                 tx_hash: parse(&row.try_get::<String, _>("tx_hash")?)?,
@@ -1120,6 +1167,7 @@ mod tests {
             token: Uuid::nil(),
             version: Utc::now(),
             old_final: false,
+            ancestry_eligible: false,
             id: Uuid::nil(),
             state,
             attempt: 0,

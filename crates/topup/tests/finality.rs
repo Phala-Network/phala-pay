@@ -46,11 +46,21 @@ struct ScriptedChain {
     failing: Arc<BTreeSet<B256>>,
     reads: Arc<Mutex<Vec<B256>>>,
     nonce: Option<u64>,
+    header_reads: Arc<Mutex<Vec<u64>>>,
+    forged_header: bool,
 }
 
 impl ChainReader for ScriptedChain {
     async fn header(&self, number: u64) -> Result<(B256, DateTime<Utc>), ChainError> {
-        Ok((block_hash(number), BLOCK_TIME))
+        self.header_reads.lock().expect("header reads").push(number);
+        Ok((
+            if self.forged_header {
+                B256::ZERO
+            } else {
+                block_hash(number)
+            },
+            BLOCK_TIME,
+        ))
     }
     async fn finalized_head(&self) -> Result<FinalizedHead, ChainError> {
         Ok(FinalizedHead {
@@ -207,6 +217,8 @@ async fn deposits_the_watch_keeps_waiting_on_do_not_starve_later_ones() -> Resul
                 failing: Arc::new(BTreeSet::from([B256::from(U256::from(stuck + 1))])),
                 reads: Arc::default(),
                 nonce: None,
+                header_reads: Arc::default(),
+                forged_header: false,
             };
             let watch =
                 FinalityWatch::single(pool.clone(), Arc::default(), CHAIN_ID, chain.clone(), chain);
@@ -289,6 +301,8 @@ fn scripted(included: BTreeSet<B256>) -> ScriptedChain {
         failing: Arc::default(),
         reads: Arc::default(),
         nonce: None,
+        header_reads: Arc::default(),
+        forged_header: false,
     }
 }
 
@@ -766,4 +780,51 @@ async fn old_final_detected_absence_keeps_s_until_fresh_terminal_proof() -> Resu
 }
 fn hash_for_index(n: u64) -> B256 {
     B256::from(U256::from(n))
+}
+
+#[tokio::test]
+async fn first_dual_verified_finality_check_uses_ancestry_and_falls_back_on_mismatch() -> Result<()>
+{
+    for mismatch in [false, true] {
+        with_database(|context| {
+            Box::pin(async move {
+                let pool = &context.app_pool;
+                let address = setup(pool).await?;
+                let id = insert(pool, address, 1, 20).await?;
+                sqlx::query("UPDATE deposits SET dual_verified_at=now() WHERE id=$1")
+                    .bind(id)
+                    .execute(pool)
+                    .await?;
+                let read = scripted(BTreeSet::from([B256::from(U256::from(1))]));
+                let mut verify = scripted(BTreeSet::from([B256::from(U256::from(1))]));
+                verify.forged_header = mismatch;
+                let watch = FinalityWatch::single(
+                    pool.clone(),
+                    Arc::default(),
+                    CHAIN_ID,
+                    read.clone(),
+                    verify.clone(),
+                );
+                ensure!(watch.watch_once(CHAIN_ID).await?.finalized == 1);
+                for chain in [&read, &verify] {
+                    ensure!(*chain.header_reads.lock().unwrap() == vec![20]);
+                    ensure!(
+                        chain.reads.lock().unwrap().len() == usize::from(mismatch),
+                        "ancestry shortcut did not preserve full-read fallback"
+                    );
+                }
+                ensure!(
+                    sqlx::query_scalar::<_, bool>(
+                        "SELECT final_at IS NOT NULL FROM deposits WHERE id=$1"
+                    )
+                    .bind(id)
+                    .fetch_one(pool)
+                    .await?
+                );
+                Ok(())
+            })
+        })
+        .await?;
+    }
+    Ok(())
 }

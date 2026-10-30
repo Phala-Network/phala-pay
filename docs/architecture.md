@@ -445,8 +445,10 @@ confirmations in its payment settings instead (§9), which credits nothing befor
 
 **Finality watch.** Whenever the independent ten-minute loop publishes an agreed checkpoint (§8),
 and every minute besides, watcher-eligible deposits whose recheck time (`finality_check_at`) has
-come are read independently on both endpoints by receipt, transaction and block header, with
-the agreed checkpoint as the finality boundary. Ordinary unfinal deposits become eligible at
+come use the agreed checkpoint as the finality boundary. A dual-verified unfinal deposit outside
+unresolved stock S first checks fresh numbered inclusion headers on both endpoints; matching
+stored hash/time proves ancestry. Any mismatch or error falls back to independent receipt,
+transaction and canonical header evidence. Ordinary unfinal deposits become eligible at
 the checkpoint; S remains eligible above it and even with an old `final_at`. Nothing is read
 while no deposit is due. A pass selects pages of 500, oldest block first, at most 10 pages;
 each row uses the shared atomic lease/due claim with `FOR UPDATE SKIP LOCKED`.
@@ -582,7 +584,12 @@ with healthy endpoints and caught-up coverage. No negative evidence comes from t
 **Transaction-hash hints** can record positive transfers after both endpoints independently
 agree at the route's confirmation depth. They use the same receipt-position insertion identity
 and inclusive `block_number >= created_block` boundary as the scanners, without advancing
-coverage or making a negative decision. Read's head reaches depth before verify is polled.
+coverage or making a negative decision. Both receipts and captured heads are persisted as a
+separate hint proof. After terminal proof, the pump may reuse this proof for confirmation with
+current-policy/identity checks and fresh dual canonical inclusion headers; invalid proof is
+cleared and falls back to full dual reads. Identity/inclusion/unresolved changes invalidate it
+in SQL. `final_at` requires captured finalized heads covering inclusion. Read's head reaches
+depth before verify is polled.
 RPC runs outside the chain lock; insertion strictly rechecks the address snapshot and inspects
 all receipt-position history under that lock. Any reversed history defers the hint to scanning:
 identical evidence cannot re-enter, and differing evidence needs the finalized successor path.
@@ -612,7 +619,11 @@ canonical receipts beyond the scanned range wait. A changed provisional recipien
 shared finality reversal/successor transaction before coverage is published. Historical
 `reversed` revisions, including unmarked N-1 writes, are excluded from re-verification; a dual
 reversal marks its old revision verified. Differing agreed evidence freezes a progressed row.
-Factory events are always reverified. Only configured-factory events count.
+Exact active dual-verified transfer positions skip raw-log completion. Matching independent
+factory logs prove events directly; missing/disagreeing logs or differing stored facts need full
+dual receipts. Insert-only contradictions still freeze. Only configured-factory events count.
+Readers share bounded immutable facts within one endpoint client (time by block hash, signed
+origin by tx hash, receipt facts by tx/block hash); canonical headers and heads are always fresh.
 
 One transaction writes evidence, dual markers, coverage at `e`, address progress at its actual
 backfill end, and the N-1 compatibility cursor at the boundary reached by every address. The

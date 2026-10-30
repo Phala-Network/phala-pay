@@ -106,6 +106,16 @@ async fn rpc(State(state): State<Rpc>, Json(request): Json<Value>) -> Json<Value
         }
         "eth_getTransactionByHash" => state.transaction.lock().unwrap().clone(),
         "eth_getBlockByHash" => state.block.lock().unwrap().clone(),
+        "eth_getBlockByNumber" => {
+            let mut block = state.block.lock().unwrap().clone();
+            if matches!(
+                request["params"][0].as_str(),
+                Some("latest" | "safe" | "finalized")
+            ) {
+                block["number"] = state.head.lock().unwrap().clone();
+            }
+            block
+        }
         "eth_blockNumber" => state.head.lock().unwrap().clone(),
         method => panic!("unexpected RPC: {method}"),
     };
@@ -749,6 +759,86 @@ async fn hints_record_only_dual_verified_confirmed_positive_facts_and_scanner_du
     }.await;
     db.cleanup().await?;
     result
+}
+
+struct UnavailablePrice;
+#[async_trait::async_trait]
+impl topup_adapters::pricing::PriceSource for UnavailablePrice {
+    async fn observe(
+        &self,
+    ) -> Result<topup_adapters::pricing::Observation, topup_adapters::pricing::PriceError> {
+        Err(topup_adapters::pricing::PriceError::Timeout)
+    }
+}
+struct Paused;
+#[async_trait::async_trait]
+impl topup::pump::Step for Paused {
+    async fn run(&self, _: &topup::db::Deposit) -> topup::pump::StepResult {
+        topup::pump::StepResult::new(
+            topup_core::deposit::StepOutcome::Wait {
+                reason: topup_core::deposit::WaitReason::Paused,
+            },
+            Value::Null,
+        )
+    }
+}
+
+#[tokio::test]
+async fn pump_reuses_durable_hint_confirmation_but_falls_back_on_reorg_or_identity_change()
+-> Result<()> {
+    for change in ["none", "reorg", "identity"] {
+        support::with_database(|db| Box::pin(async move {
+            let read = Rpc::new();
+            let verify = Rpc::new();
+            let h = harness(&db.app_pool, read.clone(), verify.clone()).await?;
+            h.submit(&format!("/v1/quotes/{}/transactions", h.quote_id), Some(&h.key),
+                json!({"transaction_hash":TX})).await?;
+            let (cancel, _worker) = h.worker(&db.app_pool);
+            wait_until(async || Ok(deposits(&db.app_pool).await? == 1)).await?;
+            cancel.cancel();
+            let proof: Value = sqlx::query_scalar("SELECT hint_confirmation_evidence FROM deposits")
+                .fetch_one(&db.app_pool).await?;
+            ensure!(proof["terminal"] == false, "a depth hint asserted finality");
+            ensure!(proof["receipts"][0] == proof["receipts"][1]);
+            if change == "reorg" {
+                verify.block.lock().unwrap()["hash"] = json!(B256::repeat_byte(0xe9));
+            } else if change == "identity" {
+                sqlx::query("UPDATE deposits SET amount_atomic=amount_atomic+1")
+                    .execute(&db.app_pool).await?;
+                ensure!(sqlx::query_scalar::<_, bool>("SELECT hint_confirmation_evidence IS NULL FROM deposits")
+                    .fetch_one(&db.app_pool).await?, "identity update retained stale hint evidence");
+            }
+            for rpc in [&read, &verify] { rpc.methods.lock().unwrap().clear(); }
+            let route = h.routes.routes().first().context("hint route")?.clone();
+            let confirm = topup::steps::confirm::ConfirmStep::single(db.app_pool.clone(), route,
+                FinalizedReader::new(h.read.clone()), FinalizedReader::new(h.verify.clone()),
+                Arc::new(UnavailablePrice), None, None);
+            let pump = topup::pump::Pump::new(db.app_pool.clone(), h.routes.clone(),
+                Arc::new(topup::pump::StepSet::new(Box::new(confirm), Box::new(Paused))),
+                topup::pump::PumpConfig::default())?;
+            ensure!(matches!(pump.run_once().await?, topup::pump::RunOnceResult::Applied {..}));
+            ensure!(sqlx::query_scalar::<_, bool>("SELECT final_at IS NULL FROM deposits")
+                .fetch_one(&db.app_pool).await?, "reused depth evidence marked finality");
+            for rpc in [&read, &verify] {
+                let methods = rpc.methods.lock().unwrap();
+                if change == "none" {
+                    ensure!(*methods == vec!["eth_getBlockByNumber".to_owned()],
+                        "pump reconfirmed a proven hint: {methods:?}");
+                } else {
+                    ensure!(methods.iter().any(|method| method == "eth_getTransactionReceipt"),
+                        "invalid hint proof did not fall back to fresh receipt reads: {methods:?}");
+                }
+            }
+            if change == "none" {
+                ensure!(sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM transitions WHERE evidence ? 'chain_confirmation')")
+                    .fetch_one(&db.app_pool).await?, "pump did not retain the hint confirmation proof");
+            }
+            ensure!(sqlx::query_scalar::<_, bool>("SELECT hint_confirmation_evidence IS NULL FROM deposits")
+                .fetch_one(&db.app_pool).await?, "consumed or invalid hint proof was retained");
+            Ok(())
+        })).await?;
+    }
+    Ok(())
 }
 
 #[tokio::test]
@@ -1397,7 +1487,7 @@ async fn verify_lagging_for_one_and_a_half_seconds_records_within_whole_task_bud
         for rpc in [&read, &verify] {
             ensure!(!rpc.methods.lock().unwrap().iter().any(|method| matches!(
                 method.as_str(),
-                "eth_getBlockByHash" | "eth_getTransactionByHash"
+                "eth_getBlockByHash" | "eth_getBlockByNumber" | "eth_getTransactionByHash"
             )));
         }
         *verify.receipt.lock().unwrap() = receipt;
@@ -1446,7 +1536,7 @@ async fn reorg_during_confirmation_wait_uses_fresh_independent_evidence() -> Res
         for rpc in [&read, &verify] {
             ensure!(!rpc.methods.lock().unwrap().iter().any(|method| matches!(
                 method.as_str(),
-                "eth_getBlockByHash" | "eth_getTransactionByHash"
+                "eth_getBlockByHash" | "eth_getBlockByNumber" | "eth_getTransactionByHash"
             )));
         }
         reinclude(&read, &new_hash);

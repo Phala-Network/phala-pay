@@ -402,3 +402,13 @@ proofs and their canonical pin cannot be updated or deleted by `topup_app`. New 
 at current agreed checkpoint plus one and need no synchronous RPC. Existing and reissued rows
 use their own historical start; a missing proof fails custody incomplete with a named alert.
 The down migration preserves both tables for binary rollback and future recapture.
+
+## Hint confirmation handoff
+
+`20261109000000_hint_confirmation` adds optional JSON evidence holding both independently
+completed hint receipts and captured confirmation heads. It never establishes `final_at`.
+A trigger clears the hint when deposit identity/inclusion changes, unresolved state changes,
+or the row leaves `detected`. The pump validates current policy and fresh dual canonical
+headers before reuse and falls back to full dual reads on invalid proof. The down migration
+preserves this additive column and trigger for binary rollback; N-1 ignores the evidence
+and retains its previous confirmation RPC cost.

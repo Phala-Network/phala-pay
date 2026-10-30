@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use super::types::{address_hex, b256_hex, to_i64};
 
-/// Insert-only factory records must still match complete dual receipt evidence on re-coverage.
+/// Insert-only factory records must still match complete dual log or receipt evidence on re-coverage.
 pub(crate) async fn stored_factory_evidence_matches(
     executor: impl PgExecutor<'_>,
     chain: u64,

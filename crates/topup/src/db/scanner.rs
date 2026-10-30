@@ -390,3 +390,36 @@ pub async fn coverage_addresses(
         })
         .collect()
 }
+
+/// Durable dual proofs that let discovery omit receipt completion for the exact same log.
+pub(crate) async fn proven_log_positions(
+    pool: &PgPool,
+    chain: u64,
+    addresses: &[Uuid],
+    from: u64,
+    to: u64,
+) -> Result<
+    std::collections::BTreeSet<(alloy_primitives::B256, alloy_primitives::B256, u64)>,
+    sqlx::Error,
+> {
+    let rows: Vec<(String, String, i64)> = sqlx::query_as(
+        "SELECT tx_hash,block_hash,log_index FROM deposits WHERE chain_id=$1 \
+         AND address_id=ANY($2) AND block_number BETWEEN $3 AND $4 \
+         AND dual_verified_at IS NOT NULL AND state <> 'reversed'",
+    )
+    .bind(to_i64(chain, "chain id")?)
+    .bind(addresses)
+    .bind(to_i64(from, "from block")?)
+    .bind(to_i64(to, "to block")?)
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(|(tx, hash, index)| {
+            Ok((
+                super::types::parse_b256(&tx)?,
+                super::types::parse_b256(&hash)?,
+                to_u64(index, "log index")?,
+            ))
+        })
+        .collect()
+}

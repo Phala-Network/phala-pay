@@ -44,6 +44,8 @@ struct Reader {
     forged_at: Option<u64>,
     requests: Mutex<Vec<(Vec<Address>, u64, u64)>>,
     factory: Option<FactoryReceipt>,
+    factory_events: Vec<FactoryLog>,
+    exclusions: Mutex<Vec<BTreeSet<(B256, B256, u64)>>>,
     receipt_reads: Mutex<usize>,
     factory_reads: Mutex<usize>,
     header_reads: Mutex<Vec<u64>>,
@@ -66,6 +68,8 @@ impl Reader {
             forged_at: None,
             requests: Mutex::new(Vec::new()),
             factory: None,
+            factory_events: Vec::new(),
+            exclusions: Mutex::new(Vec::new()),
             receipt_reads: Mutex::new(0),
             factory_reads: Mutex::new(0),
             header_reads: Mutex::new(Vec::new()),
@@ -154,11 +158,34 @@ impl ChainReader for Reader {
     async fn factory_logs(
         &self,
         _: Address,
-        _: &[Address],
-        _: u64,
-        _: u64,
+        addresses: &[Address],
+        from: u64,
+        to: u64,
     ) -> Result<Vec<FactoryLog>, ChainError> {
-        Ok(Vec::new())
+        Ok(self
+            .factory_events
+            .iter()
+            .filter(|log| {
+                addresses.contains(&log.event.forwarder())
+                    && (from..=to).contains(&log.block_number)
+            })
+            .cloned()
+            .collect())
+    }
+    async fn transfer_logs_to_excluding(
+        &self,
+        addresses: &[Address],
+        from: u64,
+        to: u64,
+        proven: &BTreeSet<(B256, B256, u64)>,
+    ) -> Result<Vec<TransferLog>, ChainError> {
+        self.exclusions.lock().unwrap().push(proven.clone());
+        Ok(self
+            .transfer_logs_to(addresses, from, to)
+            .await?
+            .into_iter()
+            .filter(|log| !proven.contains(&(log.tx_hash, log.block_hash, log.log_index)))
+            .collect())
     }
     async fn factory_receipt(
         &self,
@@ -1749,7 +1776,7 @@ async fn request_error_or_evidence_disagreement_never_commits_coverage() -> Resu
             let mut verify = Reader::new(200);
             read.logs.push(log.clone());
             read.receipt = Some(log.clone());
-            verify.receipt = Some(log);
+            verify.receipt = Some(log.clone());
             scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
             for fault in ["request", "nonce", "time"] {
                 verify.error = fault == "request";
@@ -1794,7 +1821,7 @@ async fn fast_and_n_minus_one_rows_are_reverified_even_if_both_logs_omit_them() 
             let mut verify = Reader::new(200);
             read.logs.push(log.clone());
             read.receipt = Some(log.clone());
-            verify.receipt = Some(log);
+            verify.receipt = Some(log.clone());
             scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
             let mut fast_chain = chain();
             fast_chain.chain.confirmations = Confirmations::Depth(2);
@@ -1839,7 +1866,7 @@ async fn coverage_leaves_out_of_range_s_and_l_deposits_to_their_claim_schedule()
                 .bind(lane).execute(&d.owner_pool).await?;
             // Even an available receipt must not tempt coverage to bypass that schedule.
             read.receipt = Some(log.clone());
-            verify.receipt = Some(log);
+            verify.receipt = Some(log.clone());
             scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
             let before: (Option<DateTime<Utc>>, Option<DateTime<Utc>>, DateTime<Utc>) = sqlx::query_as(
                 "SELECT first_unresolved_at,first_slow_at,finality_check_at FROM deposits")
@@ -2120,7 +2147,7 @@ async fn marked_deposits_are_skipped_but_existing_factory_records_are_always_rev
             let mut verify = Reader::new(200);
             read.logs.push(log.clone());
             read.receipt = Some(log.clone());
-            verify.receipt = Some(log);
+            verify.receipt = Some(log.clone());
             scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
             scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
             let event = FactoryLog {
@@ -2171,6 +2198,9 @@ async fn marked_deposits_are_skipped_but_existing_factory_records_are_always_rev
             verify.factory = read.factory.clone();
             scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 3).await?;
             ensure!(*read.receipt_reads.lock().unwrap() == before);
+            let expected = BTreeSet::from([(log.tx_hash, log.block_hash, log.log_index)]);
+            ensure!(read.exclusions.lock().unwrap().last() == Some(&expected));
+            ensure!(verify.exclusions.lock().unwrap().last() == Some(&expected));
             ensure!(
                 *read.factory_reads.lock().unwrap() == 2
                     && *verify.factory_reads.lock().unwrap() == 2
@@ -2280,6 +2310,66 @@ async fn previous_checkpoint_conflict_freezes_even_when_peer_errors() -> Result<
                         && *verify.finalized_reads.lock().unwrap() == 0
                 );
             }
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn identical_dual_factory_logs_skip_receipts_and_disagreement_falls_back() -> Result<()> {
+    with_database(|d| {
+        Box::pin(async move {
+            let address = address(d, 100).await?;
+            let event = FactoryLog {
+                tx_hash: B256::repeat_byte(0xbb),
+                log_index: 3,
+                block_number: 100,
+                block_hash: hash(100),
+                event: topup_adapters::chain::flush::FactoryEvent::Flushed(
+                    topup_adapters::chain::flush::DecodedFlushed {
+                        salt: address.salt,
+                        forwarder: address.address,
+                        treasury: address.treasury,
+                        token: route().asset.contract,
+                        amount: U256::from(1000),
+                    },
+                ),
+            };
+            let mut read = Reader::new(200);
+            let mut verify = Reader::new(200);
+            read.factory_events = vec![event.clone()];
+            verify.factory_events = read.factory_events.clone();
+            scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
+            ensure!(*read.factory_reads.lock().unwrap() == 0);
+            ensure!(*verify.factory_reads.lock().unwrap() == 0);
+            ensure!(
+                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM flushed")
+                    .fetch_one(&d.app_pool)
+                    .await?
+                    == 1
+            );
+            // A changed dual response must be reconciled by independent full receipts.
+            sqlx::query("UPDATE addresses SET created_block=99 WHERE id=$1")
+                .bind(address.id)
+                .execute(&d.app_pool)
+                .await?;
+            verify.factory_events[0].block_hash = B256::ZERO;
+            let receipt = FactoryReceipt {
+                status: true,
+                block_number: 100,
+                block_hash: hash(100),
+                block_time: time(100),
+                origin: (Address::repeat_byte(4), 9),
+                logs: vec![event],
+            };
+            read.factory = Some(receipt.clone());
+            verify.factory = Some(receipt);
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 2).await?;
+            ensure!(*read.factory_reads.lock().unwrap() == 1);
+            ensure!(*verify.factory_reads.lock().unwrap() == 1);
+            ensure!(marker(d, address.id).await? == Some(200));
             Ok(())
         })
     })
