@@ -493,12 +493,13 @@ New addresses start caught up; no daily lagging chunk or four daily catch-up rou
 An explicit 9,000-method/account/month recovery reserve replaces those terms.
 
 Production uses 12,000 historical addresses but budgets at most 2,000 hot recipients/chain;
-staging's historical cap is 1,000. Activity is driven by organizations quoting within 24 hours
-or depositing within seven days, across all states. Quotes can share snapshots, so Q does not
+staging's historical cap is 1,000. The hot set counts addresses quoted in the last 24 hours or
+with a deposit in the last seven days, across all states. Quotes can share snapshots, so Q does not
 bound hot recipients. Per-chain DB gauges/alerts detect hot-set growth above 2,000 and rolling
 issuance above 50 production/10 staging; pause new quotes/issuance or reduce discovery windows
-without going below any route's maximum quote TTL. Opening captures charge `2·C·I` methods per
-endpoint separately from the extra-operation reserve. See the
+without going below any route's maximum quote TTL. Opening captures reserve 300 production and
+80 staging methods/endpoint/day at the full unbatched bound, separately from the extra-operation
+reserve. See the
 [runbook](../../deploy/runbooks/rpc-health.md#hot-set-and-issuance-budgets).
 
 Normal Depth uses at most six head probes, three complete-evidence methods and one first

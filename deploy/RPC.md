@@ -156,8 +156,8 @@ excluded; reconcile billed usage and debit the reserve before adding load.
 This is a steady-state model with an explicit monthly recovery allowance, not a daily full
 catch-up model. All four payment chains run continuously. Let `k = ceil(N/1,000)` for historical
 addresses and `h = ceil(N_hot/1,000)`. Production uses `k=12, h≤2` on each chain; staging uses
-`k=h=1`. The hot set is distinct addresses belonging to organizations quoting within 24 hours
-or receiving deposits within seven days, across every state. It is not bounded by snapshot Q:
+`k=h=1`. The hot set is distinct addresses quoted in the last 24 hours or with a deposit in the
+last seven days, across every state. It is not bounded by snapshot Q:
 quotes can reuse snapshots. `TopupRpcHotAddressBudget` alerts above 2,000/chain. Lower the
 activity windows through a reviewed config change (quote window must still cover maximum TTL)
 or pause new quotes; continue existing funded work and dual coverage. See

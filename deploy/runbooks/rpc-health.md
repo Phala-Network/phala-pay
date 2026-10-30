@@ -17,9 +17,9 @@ quotas still require a time-series collector or daily provider-dashboard checks.
 
 `TopupRpcHotAddressBudget` / `RpcHotAddressBudget` fires when
 `topup_hot_addresses{chain_id}` exceeds `topup_hot_addresses_budget{chain_id}` (2,000).
-The DB counts distinct physical recipients with a quote created in the configured 24-hour
-window or a deposit's chain block time in the configured seven-day window, in every state.
-Organizations quoting or paying on several chains contribute on each chain. Quote snapshot Q
+The DB counts distinct addresses quoted in the last 24 hours or with a deposit in the last
+seven days (chain block time), using the configured windows, in every state. Counts are per
+address and per chain. Quote snapshot Q
 cannot bound this set because quotes reuse snapshots. Staging's historical address cap is 1,000.
 
 Pause new quotes on the affected chain or reduce discovery windows through an attested config
