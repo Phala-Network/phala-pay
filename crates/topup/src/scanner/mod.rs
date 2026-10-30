@@ -26,9 +26,34 @@ pub const CONTRACT_RECOVERY_INTERVAL: Duration = Duration::from_secs(60);
 pub const COVERAGE_LIMIT: u64 = 3_000;
 /// Every sixth round catches up at this inclusive limit.
 pub const CATCHUP_LIMIT: u64 = 19_200;
-/// All scanner cadences are fixed by the attested design.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct ScanConfig;
+/// Activity windows for single-provider discovery; dual coverage always includes every address.
+#[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ScanConfig {
+    /// Any quote created within this many hours makes its address hot, regardless of state.
+    pub quote_window_hours: u32,
+    /// A deposit's chain block time keeps its address hot for this many days.
+    pub deposit_window_days: u32,
+}
+impl Default for ScanConfig {
+    fn default() -> Self {
+        Self {
+            quote_window_hours: 24,
+            deposit_window_days: 7,
+        }
+    }
+}
+impl ScanConfig {
+    pub(crate) fn validate(self) -> Result<(), String> {
+        if !(1..=8_760).contains(&self.quote_window_hours) {
+            return Err("discovery.quote_window_hours must be an integer from 1 to 8760".into());
+        }
+        if !(1..=365).contains(&self.deposit_window_days) {
+            return Err("discovery.deposit_window_days must be an integer from 1 to 365".into());
+        }
+        Ok(())
+    }
+}
 /// Per-chain checkpoint announcements used by finality and reconciliation.
 #[derive(Clone, Debug)]
 pub struct FinalizedHeads(Arc<tokio::sync::watch::Sender<BTreeMap<u64, FinalizedHead>>>);
@@ -216,12 +241,17 @@ pub async fn initialize_chain<R: ChainReader, V: ChainReader>(
     }
     Err(ScannerError::SnapshotChanged)
 }
-/// Fast candidates remain provisional; PR 3 uses the same public insertion boundary and receipt key.
+/// Discover hot recipients in bounded pages; candidates remain provisional until dual agreement.
 pub async fn fast_once<R: ChainReader>(
     pool: &PgPool,
     read: &R,
     routes: &ChainRoutes,
+    config: ScanConfig,
 ) -> Result<db::ScanCommit, ScannerError> {
+    config.validate().map_err(ScannerError::Configuration)?;
+    let now = Utc::now();
+    let quoted_since = now - chrono::Duration::hours(i64::from(config.quote_window_hours));
+    let deposited_since = now - chrono::Duration::days(i64::from(config.deposit_window_days));
     let chain = routes.chain.chain_id;
     let coverage = chain_reads::coverage(pool, chain)
         .await?
@@ -244,67 +274,78 @@ pub async fn fast_once<R: ChainReader>(
         .await?
         .unwrap_or(coverage.number);
     let from = cursor.saturating_add(1);
-    let addresses = db::list_scan_addresses(pool, chain).await?;
-    let index: BTreeMap<_, _> = addresses.into_iter().map(|a| (a.address, a)).collect();
-    tracing::debug!(
-        chain_id = chain,
-        from,
-        latest,
-        addresses = index.len(),
-        "fast discovery range"
-    );
-    let mut deposits = Vec::new();
-    let mut pending = Vec::new();
+    let mut commit = db::ScanCommit {
+        inserted: 0,
+        unsupported_inserted: 0,
+        inserted_positions: Vec::new(),
+    };
     if from <= latest {
-        let recipients: Vec<_> = index.keys().copied().collect();
-        for log in read.transfer_logs_to(&recipients, from, latest).await? {
-            let Some(address) = index.get(&log.to) else {
-                return Err(ScannerError::UnknownRecipient(log.to));
-            };
-            if !routes.routes.contains_key(&log.token)
-                || log.block_number < address.created_block
-                || log.amount.value().is_zero()
-            {
-                continue;
+        let mut after = None;
+        loop {
+            let (addresses, more) =
+                db::scanner::hot_address_page(pool, chain, after, quoted_since, deposited_since)
+                    .await?;
+            if addresses.is_empty() {
+                break;
             }
-            if routes.chain.confirmations.reached(log.block_number, heads) {
-                deposits.push(resolve_log(log, address, routes, Utc::now()));
-            } else if log.block_number > coverage.number {
-                pending.push(db::NewPendingTransfer {
-                    chain_id: chain,
-                    tx_hash: log.tx_hash,
-                    receipt_log_index: log.receipt_log_index,
-                    log_index: log.log_index,
-                    block_number: log.block_number,
-                    block_hash: log.block_hash,
-                    block_time: log.block_time,
-                    address_id: address.id,
-                    asset_contract: log.token,
-                    from_address: log.from,
-                    amount_atomic: log.amount,
-                });
+            after = addresses.last().map(|address| address.id);
+            let ids: Vec<_> = addresses.iter().map(|address| address.id).collect();
+            let index: BTreeMap<_, _> = addresses.into_iter().map(|a| (a.address, a)).collect();
+            tracing::debug!(
+                chain_id = chain,
+                from,
+                latest,
+                addresses = index.len(),
+                "fast discovery hot page"
+            );
+            let recipients: Vec<_> = index.keys().copied().collect();
+            let mut deposits = Vec::new();
+            let mut pending = Vec::new();
+            for log in read.transfer_logs_to(&recipients, from, latest).await? {
+                let Some(address) = index.get(&log.to) else {
+                    return Err(ScannerError::UnknownRecipient(log.to));
+                };
+                if !routes.routes.contains_key(&log.token)
+                    || log.block_number < address.created_block
+                    || log.amount.value().is_zero()
+                {
+                    continue;
+                }
+                if routes.chain.confirmations.reached(log.block_number, heads) {
+                    deposits.push(resolve_log(log, address, routes, Utc::now()));
+                } else if log.block_number > coverage.number {
+                    pending.push(db::NewPendingTransfer {
+                        chain_id: chain,
+                        tx_hash: log.tx_hash,
+                        receipt_log_index: log.receipt_log_index,
+                        log_index: log.log_index,
+                        block_number: log.block_number,
+                        block_hash: log.block_hash,
+                        block_time: log.block_time,
+                        address_id: address.id,
+                        asset_contract: log.token,
+                        from_address: log.from,
+                        amount_atomic: log.amount,
+                    });
+                }
+            }
+            let mut tx = pool.begin().await?;
+            db::rpc::guard_in(&mut tx, chain).await?;
+            let page = db::scanner::insert_deposits_in(&mut tx, &deposits, db::Evidence::Confirmed)
+                .await?;
+            db::pending::commit_head_page_in(&mut tx, chain, from, latest, &pending, Some(&ids))
+                .await?;
+            tx.commit().await?;
+            commit.inserted += page.inserted;
+            commit.unsupported_inserted += page.unsupported_inserted;
+            commit.inserted_positions.extend(page.inserted_positions);
+            if !more {
+                break;
             }
         }
     }
-    let mut tx = pool.begin().await?;
-    tracing::debug!(
-        chain_id = chain,
-        deposits = deposits.len(),
-        pending = pending.len(),
-        "fast discovery candidates"
-    );
-    db::rpc::guard_in(&mut tx, chain).await?;
-    let commit = db::scanner::commit_confirmed_scan_in(
-        &mut tx,
-        chain,
-        &deposits,
-        routes.chain.confirmations.horizon(heads),
-    )
-    .await?;
-    if from <= latest {
-        db::pending::commit_head_scan_in(&mut tx, chain, from, latest, &pending).await?;
-    }
-    tx.commit().await?;
+    // A failed page leaves the cursor unchanged, so retrying also revisits committed pages.
+    db::commit_confirmed_scan(pool, chain, &[], routes.chain.confirmations.horizon(heads)).await?;
     Ok(commit)
 }
 struct Range {
@@ -937,10 +978,11 @@ pub async fn coverage_loop<R: ChainReader, V: ChainReader>(
 pub async fn run(
     pool: PgPool,
     routes: &RouteSet,
-    _config: ScanConfig,
+    config: ScanConfig,
     heads: FinalizedHeads,
     cancellation: CancellationToken,
 ) -> Result<(), ScannerError> {
+    config.validate().map_err(ScannerError::Configuration)?;
     let mut tasks = tokio::task::JoinSet::new();
     for pair in routes.rpc().values() {
         let pair = pair.clone();
@@ -996,7 +1038,7 @@ pub async fn run(
                 }
                 let result = tokio::select! {
                     _ = fast_token.cancelled() => break,
-                    result = fast_once(&fast_pool,&fast_read,&fast_chain) => result,
+                    result = fast_once(&fast_pool,&fast_read,&fast_chain,config) => result,
                 };
                 monitor.check_in(result.is_ok());
                 if let Err(error) = result { tracing::warn!(chain_id=fast_chain.chain.chain_id,%error,"fast discovery waits"); }

@@ -555,15 +555,15 @@ describe("DepositAddress payments", () => {
     );
   });
 
-  it("states the chosen network's credit time after the discovery scan, as a payer sends no hint", async () => {
-    // Up to 5 minutes to discover an unhinted transfer, then the view's 30 s or 7 s confirmation.
+  it("avoids an unconditional discovery-time promise on every network", async () => {
+    // The public view does not say whether an address qualifies for the fast hot-set scan.
     expect(await messageWith([clientNetwork(11155111, 30), clientNetwork(84532, 7)])).toBe(
-      "Send PHA on Sepolia. Other tokens and networks aren’t credited. Credited at the market rate, usually within about 6 minutes.",
+      "Send PHA on Sepolia. Other tokens and networks aren’t credited. Credited at the market rate after confirmation.",
     );
     choose("Token", "USDC");
     choose("Network", "Base Sepolia");
-    expect(screen.getByText(/Credited at the market rate, usually within about 5 minutes\./)).toBeDefined();
-    expect(screen.queryByText(/6 minutes/)).toBeNull();
+    expect(screen.getByText(/Credited at the market rate after confirmation\./)).toBeDefined();
+    expect(screen.queryByText(/usually within/)).toBeNull();
   });
 
   it("formats the selected token's exact per-transfer range and changes it with the selection", () => {
@@ -605,7 +605,7 @@ describe("DepositAddress payments", () => {
       ...asset(11155111, "pha", TOKEN), min_amount: 100, min_deposit_atomic: "0", max_deposit_atomic: "1000000000000000000",
     }])] });
     expect(await messageWith([current], initial)).toContain("Send at least $5.00 and 25 PHA, up to 10,100 PHA per transfer on Sepolia.");
-    expect(screen.getByText(/Credited at the market rate, usually within about 6 minutes\./)).toBeDefined();
+    expect(screen.getByText(/Credited at the market rate after confirmation\./)).toBeDefined();
   });
 
   it.each(["", "abc", "1.5", "1e18", "0x10", "-1", " 10 ", "10\n"])("omits the range for malformed merchant atomic bounds %j", (invalid) => {
@@ -640,7 +640,7 @@ describe("DepositAddress payments", () => {
     old.assets = [asset(11155111, "pha", TOKEN)];
     const message = await messageWith([old]);
     expect(message).toContain("Send PHA on Sepolia.");
-    expect(message).toContain("Credited at the market rate, usually within about 6 minutes.");
+    expect(message).toContain("Credited at the market rate after confirmation.");
     expect(message).not.toMatch(/Any amount|per transfer/);
     cleanup();
     render(<DepositAddress depositAddress={details({ networks: [network(11155111, [

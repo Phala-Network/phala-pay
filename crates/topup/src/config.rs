@@ -25,7 +25,8 @@ use crate::routes::RouteSet;
 use crate::rpc_provider::ProviderUrl;
 
 /// The file as written. Maintenance keys default to empty; the two runtime-resolved public
-/// settings and daily budgets may be omitted. Other fields are required and unknown fields are errors.
+/// settings, daily budgets and discovery windows may be omitted. Other fields are required
+/// and unknown fields are errors.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ConfigSpec {
@@ -38,6 +39,8 @@ struct ConfigSpec {
     hints_per_day: i32,
     #[serde(default = "default_quote_snapshots_per_day")]
     quote_snapshots_per_day: i32,
+    #[serde(default)]
+    discovery: crate::scanner::ScanConfig,
     #[serde(default)]
     public_origin: Option<String>,
     admin_key: AdminKeySpec,
@@ -80,6 +83,8 @@ pub struct Config {
     pub hints_per_day: i32,
     /// Atomic fresh quote snapshot limit per price chain and UTC day (default 60).
     pub quote_snapshots_per_day: i32,
+    /// Fast discovery activity windows; hourly dual coverage still includes cold addresses.
+    pub discovery: crate::scanner::ScanConfig,
     /// The API's one public origin: admin signatures and treasury challenges name it. `None` when
     /// `topup run` takes it from its environment.
     pub public_origin: Option<PublicOrigin>,
@@ -118,6 +123,7 @@ struct ResolvedConfig<'a> {
     max_refund_attachments_per_day: u32,
     hints_per_day: i32,
     quote_snapshots_per_day: i32,
+    discovery: crate::scanner::ScanConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     public_origin: Option<String>,
     admin_key: &'a AdminKeySpec,
@@ -142,6 +148,7 @@ impl Config {
         let spec: ConfigSpec =
             serde_saphyr::from_str(yaml).map_err(|error| format!("invalid YAML: {error}"))?;
         validate_daily_budgets(spec.hints_per_day, spec.quote_snapshots_per_day)?;
+        spec.discovery.validate()?;
         validate_capacity(
             "max_refund_attachments_per_day",
             spec.max_refund_attachments_per_day,
@@ -224,6 +231,7 @@ impl Config {
             max_refund_attachments_per_day: spec.max_refund_attachments_per_day,
             hints_per_day: spec.hints_per_day,
             quote_snapshots_per_day: spec.quote_snapshots_per_day,
+            discovery: spec.discovery,
             public_origin,
             admin_key_id: spec.admin_key.id.clone(),
             admin_key,
@@ -335,6 +343,7 @@ impl Config {
             max_refund_attachments_per_day: self.max_refund_attachments_per_day,
             hints_per_day: self.hints_per_day,
             quote_snapshots_per_day: self.quote_snapshots_per_day,
+            discovery: self.discovery,
             public_origin: self.public_origin.as_ref().map(ToString::to_string),
             admin_key: &self.admin_key_spec,
             maintenance_keys: &self.maintenance_key_specs,
@@ -472,6 +481,47 @@ mod tests {
                     .all(|rpc| rpc.max_issued_addresses == 1000)
             );
         }
+    }
+
+    #[test]
+    fn discovery_windows_default_validate_and_round_trip() {
+        let base = config(PROVIDERS, "https://pay.example");
+        let defaults = Config::parse(&base).unwrap().discovery;
+        assert_eq!(
+            (defaults.quote_window_hours, defaults.deposit_window_days),
+            (24, 7)
+        );
+        for (hours, days) in [(1, 1), (48, 14), (8760, 365)] {
+            let configured = format!(
+                "{base}discovery:\n  quote_window_hours: {hours}\n  deposit_window_days: {days}\n"
+            );
+            let parsed = Config::parse(&configured).unwrap();
+            let shown = Config::parse(&parsed.resolved_json().unwrap())
+                .unwrap()
+                .discovery;
+            assert_eq!(
+                (shown.quote_window_hours, shown.deposit_window_days),
+                (hours, days)
+            );
+        }
+        for (name, max) in [("quote_window_hours", 8760), ("deposit_window_days", 365)] {
+            for invalid in [
+                "0".to_owned(),
+                "-1".into(),
+                (max + 1).to_string(),
+                "1.5".into(),
+                "null".into(),
+            ] {
+                assert!(
+                    Config::parse(&format!("{base}discovery:\n  {name}: {invalid}\n")).is_err()
+                );
+            }
+        }
+        assert!(Config::parse(&format!("{base}discovery:\n  unknown: 1\n")).is_err());
+        let partial = Config::parse(&format!("{base}discovery:\n  quote_window_hours: 48\n"))
+            .unwrap()
+            .discovery;
+        assert_eq!(partial.deposit_window_days, 7);
     }
 
     #[test]

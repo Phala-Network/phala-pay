@@ -6,6 +6,9 @@
 environment: testnet
 max_attached_pending_refunds: 2
 max_refund_attachments_per_day: 1
+discovery:
+  quote_window_hours: 24
+  deposit_window_days: 7
 admin_key:
   id: admin/v1
 # Independent Ankr read and Infura verify endpoints, with both sealed keys.

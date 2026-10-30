@@ -209,7 +209,7 @@ pub async fn insert_scanned_deposit_in(
     Ok(id)
 }
 
-async fn insert_deposits_in(
+pub(crate) async fn insert_deposits_in(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     deposits: &[NewDeposit],
     evidence: Evidence,
@@ -283,6 +283,39 @@ pub(crate) async fn find_scan_address<'e>(
 
 /// Maximum addresses resident in a scanner/reconciler work page.
 pub const ADDRESS_PAGE_SIZE: usize = 1_000;
+
+/// Keyset page of recent quote/deposit recipients, including every quote and deposit state.
+/// Time-leading indexes restrict the activity union to the windows, without scanning cold history.
+pub async fn hot_address_page(
+    pool: &PgPool,
+    chain_id: u64,
+    after: Option<Uuid>,
+    quoted_since: DateTime<Utc>,
+    deposited_since: DateTime<Utc>,
+) -> Result<(Vec<ScanAddress>, bool), sqlx::Error> {
+    let records = sqlx::query_as::<_, ScanAddressRecord>(
+        "SELECT a.id,a.address,a.created_block,a.backfilled,a.backfilled_through FROM addresses a \
+         JOIN (SELECT address_id FROM quotes WHERE created_at >= $4 \
+               UNION SELECT address_id FROM deposits WHERE chain_id=$1 AND block_time >= $5) hot \
+           ON hot.address_id=a.id \
+         WHERE a.chain_id=$1 AND a.id >= $2 AND ($3::uuid IS NULL OR a.id <> $3) \
+         ORDER BY a.id LIMIT 1001",
+    )
+    .bind(to_i64(chain_id, "hot address chain")?)
+    .bind(after.unwrap_or(Uuid::nil()))
+    .bind(after)
+    .bind(quoted_since)
+    .bind(deposited_since)
+    .fetch_all(pool)
+    .await?;
+    let more = records.len() > ADDRESS_PAGE_SIZE;
+    let addresses = records
+        .into_iter()
+        .take(ADDRESS_PAGE_SIZE)
+        .map(TryInto::try_into)
+        .collect::<Result<_, _>>()?;
+    Ok((addresses, more))
+}
 
 /// Reads a keyset page of all issued addresses, including retired and superseded addresses.
 /// The lookahead row is removed; `more` means the durable sweep must continue next round.

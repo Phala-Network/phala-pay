@@ -4,6 +4,9 @@
 environment: staging
 max_attached_pending_refunds: 1
 max_refund_attachments_per_day: 1
+discovery:
+  quote_window_hours: 24
+  deposit_window_days: 7
 public_origin: https://pay-api-staging.phala.com
 admin_key:
   id: admin/staging-v1

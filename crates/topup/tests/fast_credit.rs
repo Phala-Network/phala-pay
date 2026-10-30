@@ -77,6 +77,43 @@ const OP_STACK: Network = Network {
 };
 
 #[tokio::test]
+async fn cold_payment_skips_fast_discovery_but_hourly_coverage_credits_it() -> Result<()> {
+    run(&[], |chain| {
+        Box::pin(async move {
+            sqlx::query("UPDATE quotes SET created_at=now()-interval '2 days' WHERE address_id=$1")
+                .bind(chain.address_id)
+                .execute(&chain.pool)
+                .await?;
+            let tx = chain.pay(AMOUNT)?;
+            chain.anvil.mine(1)?;
+            ensure!(
+                chain.scan().await? == 0,
+                "cold payment entered the fast path"
+            );
+            ensure!(chain.count("SELECT count(*) FROM deposits").await? == 0);
+            chain.anvil.mine(FINALITY_DEPTH + 2)?;
+            topup::checkpoint::advance(&chain.pool, chain.chain_id, &chain.reader, &chain.reader)
+                .await?;
+            let covered =
+                coverage_once(&chain.pool, &chain.reader, &chain.reader, &chain.routes, 1).await?;
+            ensure!(covered.inserted == 1);
+            chain.settle().await?;
+            ensure!(chain.deposit(tx).await?.state == DepositState::Credited);
+            let verified: bool = sqlx::query_scalar(
+                "SELECT dual_verified_at IS NOT NULL FROM deposits WHERE address_id=$1",
+            )
+            .bind(chain.address_id)
+            .fetch_one(&chain.pool)
+            .await?;
+            ensure!(verified);
+            ensure!(chain.events("deposit.credited").await?.len() == 1);
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
 async fn a_depth_one_reorg_before_credit_changes_nothing() -> Result<()> {
     run(&[], |chain| {
         Box::pin(async move {
@@ -393,8 +430,17 @@ async fn payments_to_active_and_retired_deposit_addresses_are_credited_at_spot()
             let to_retired = chain.pay_to(retired_network.address, AMOUNT)?;
             let to_active = chain.pay_to(active_network.address, AMOUNT)?;
             chain.anvil.mine(1)?;
-            // The per-block scan covers deposit addresses, active and retired, like every address.
-            ensure!(chain.scan().await? == 2);
+            // Hourly dual coverage includes unquoted active and retired deposit addresses.
+            ensure!(chain.scan().await? == 0, "unquoted addresses start cold");
+            chain.anvil.mine(FINALITY_DEPTH + 2)?;
+            topup::checkpoint::advance(&chain.pool, chain.chain_id, &chain.reader, &chain.reader)
+                .await?;
+            ensure!(
+                coverage_once(&chain.pool, &chain.reader, &chain.reader, &chain.routes, 1)
+                    .await?
+                    .inserted
+                    == 2
+            );
             chain.settle().await?;
             for (tx, network) in [(to_retired, retired_network), (to_active, active_network)] {
                 let deposit = chain.deposit(tx).await?;
@@ -489,7 +535,16 @@ async fn a_treasury_change_moves_the_chains_address_and_the_old_address_still_cr
             let to_old = chain.pay_to(old_network.address, AMOUNT)?;
             let to_new = chain.pay_to(new_network.address, AMOUNT)?;
             chain.anvil.mine(1)?;
-            ensure!(chain.scan().await? == 2);
+            ensure!(chain.scan().await? == 0, "unquoted addresses start cold");
+            chain.anvil.mine(FINALITY_DEPTH + 2)?;
+            topup::checkpoint::advance(&chain.pool, chain.chain_id, &chain.reader, &chain.reader)
+                .await?;
+            ensure!(
+                coverage_once(&chain.pool, &chain.reader, &chain.reader, &chain.routes, 1)
+                    .await?
+                    .inserted
+                    == 2
+            );
             chain.settle().await?;
             for (tx, network) in [(to_old, old_network), (to_new, new_network)] {
                 let deposit = chain.deposit(tx).await?;
@@ -1098,7 +1153,7 @@ impl FastChain {
 
     /// One per-block scan, as the head loop runs on each new head.
     async fn head_scan(&self) -> Result<db::ScanCommit> {
-        Ok(fast_once(&self.pool, &self.reader, &self.routes).await?)
+        Ok(fast_once(&self.pool, &self.reader, &self.routes, Default::default()).await?)
     }
 
     /// Deposits one per-block scan records at the route's depth.

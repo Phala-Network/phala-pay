@@ -1706,6 +1706,48 @@ async fn service_indexes_resume_unrecorded_builds_and_round_trip() -> Result<()>
     .await
 }
 
+#[tokio::test]
+async fn discovery_indexes_resume_completed_builds_with_expand_only_compatibility() -> Result<()> {
+    let Some(database) = support::TestDatabase::create_with_migrations(false).await? else {
+        return Ok(());
+    };
+    let result = async {
+        let pool = &database.owner_pool;
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+        let mut previous = sqlx::migrate::Migrator::new(directory.as_path()).await?;
+        previous.migrations.to_mut().retain(|m| m.version < 20261106000000);
+        previous.run(pool).await?;
+        for sql in [
+            include_str!("../migrations/20261106000000_discovery_quotes.up.sql"),
+            include_str!("../migrations/20261106000001_discovery_deposits.up.sql"),
+        ] {
+            sqlx::query(sql).execute(pool).await?;
+        }
+        let objects = || async {
+            sqlx::query_as::<_, (String, i64, bool)>(
+                "SELECT c.relname,c.oid::bigint,i.indisvalid FROM pg_class c \
+                 JOIN pg_index i ON i.indexrelid=c.oid \
+                 WHERE c.relname IN ('quotes_discovery_activity_idx','deposits_discovery_activity_idx') \
+                 ORDER BY c.relname",
+            ).fetch_all(pool).await
+        };
+        let before = objects().await?;
+        ensure!(before.len() == 2 && before.iter().all(|(_, _, valid)| *valid));
+        db::migrate(pool).await?;
+        db::migrate(pool).await?;
+        ensure!(objects().await? == before, "completed discovery indexes were rebuilt");
+        let compatible: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM _sqlx_migrations m JOIN topup_migration_compatibility c \
+             ON c.version=m.version AND c.checksum=m.checksum \
+             WHERE m.version IN (20261106000000,20261106000001) AND m.success \
+             AND c.compatibility_floor <= 20261105000000",
+        ).fetch_one(pool).await?;
+        ensure!(compatible == 2, "discovery indexes raised the rollback floor");
+        Ok::<_, anyhow::Error>(())
+    }.await;
+    result.and(database.cleanup().await)
+}
+
 async fn legacy_migrations() -> Result<sqlx::migrate::Migrator> {
     let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
     let mut migrations = sqlx::migrate::Migrator::new(directory.as_path()).await?;

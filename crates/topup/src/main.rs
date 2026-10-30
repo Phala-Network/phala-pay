@@ -921,7 +921,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     });
     let scanner_pool = pool.clone();
     let scanner_routes = Arc::clone(&routes);
-    let scan_config = topup::scanner::ScanConfig;
+    let scan_config = config.discovery;
     let scanner_heads = finalized_heads.clone();
     tasks.spawn("scanner", |cancellation| async move {
         topup::scanner::run(

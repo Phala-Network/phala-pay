@@ -85,7 +85,8 @@ flowchart TB
    treasury. A quote reuses that network and opens its price window.
 3. The merchant recomputes the address from its own pins before showing it.
 4. A checkout transaction hint starts immediate verification; unhinted transfers are discovered
-   by the fixed five-minute read scan.
+   by the five-minute read scan for recent quote/deposit recipients, or hourly dual coverage for
+   cold addresses (about 70 minutes with healthy endpoints and caught-up coverage).
 5. It is recorded once its block reaches the confirmation (2 blocks on Ethereum, about 30 s after
    paying; 3 blocks on an OP-stack chain such as Base, about 7 s; or the account's stricter
    policy).

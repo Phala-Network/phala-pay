@@ -132,7 +132,7 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
     transfer(&anvil.rpc_url, token, other_quote, 7)?;
     transfer(&anvil.rpc_url, token, other_quote, 0)?;
 
-    fast_once(pool, &reader, &chain_routes).await?;
+    fast_once(pool, &reader, &chain_routes, Default::default()).await?;
     // Only non-zero transfers of the routed token are requested and stored.
     ensure!(pending_rows(pool).await? == 2);
     ensure!(
@@ -181,13 +181,13 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
         "{other}"
     );
 
-    let _again = fast_once(pool, &reader, &chain_routes).await?;
+    let _again = fast_once(pool, &reader, &chain_routes, Default::default()).await?;
     ensure!(pending_rows(pool).await? == 2);
 
     // A reorg that drops the transfers removes them from the pending view.
     revert(anvil, &snapshot)?;
     anvil.mine(8)?;
-    let reorged = fast_once(pool, &reader, &chain_routes).await?;
+    let reorged = fast_once(pool, &reader, &chain_routes, Default::default()).await?;
     ensure!(
         pending_rows(pool).await? == 0,
         "unexpected reorg scan {reorged:?}"
@@ -207,7 +207,7 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
             .context("window start")?,
     )?;
     transfer(&anvil.rpc_url, token, lock_address, 100)?;
-    fast_once(pool, &reader, &chain_routes).await?;
+    fast_once(pool, &reader, &chain_routes, Default::default()).await?;
     ensure!(pending_rows(pool).await? == 1);
     ensure!(
         outbox_rows(pool).await? == 0,
@@ -277,7 +277,7 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
     let dusted = api.lock("checkout-3", anvil).await?;
     transfer(&anvil.rpc_url, token, dusted, 1)?;
     transfer(&anvil.rpc_url, token, dusted, 100)?;
-    fast_once(pool, &reader, &chain_routes).await?;
+    fast_once(pool, &reader, &chain_routes, Default::default()).await?;
     for lock_ref in ["checkout-2", "checkout-3"] {
         let quote = api.quote(lock_ref).await?;
         let payment = &quote["payment"];

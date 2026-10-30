@@ -4,6 +4,7 @@ mod support;
 use alloy_primitives::{Address, B256, U256};
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
+use std::collections::BTreeSet;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicU64, Ordering},
@@ -37,6 +38,7 @@ struct Reader {
     logs: Vec<TransferLog>,
     receipt: Option<TransferLog>,
     error: bool,
+    fail_recipient: Option<Address>,
     header_error: bool,
     forged_header: bool,
     forged_at: Option<u64>,
@@ -58,6 +60,7 @@ impl Reader {
             logs: Vec::new(),
             receipt: None,
             error: false,
+            fail_recipient: None,
             header_error: false,
             forged_header: false,
             forged_at: None,
@@ -134,7 +137,11 @@ impl ChainReader for Reader {
             .lock()
             .unwrap()
             .push((addresses.to_vec(), from, to));
-        if self.error {
+        if self.error
+            || self
+                .fail_recipient
+                .is_some_and(|address| addresses.contains(&address))
+        {
             return Err(ChainError::Rpc("logs"));
         }
         Ok(self
@@ -275,6 +282,175 @@ async fn compat(database: &TestDatabase) -> Result<(i64, Option<DateTime<Utc>>)>
             .fetch_one(&database.app_pool)
             .await?,
     )
+}
+
+#[tokio::test]
+async fn hot_discovery_uses_any_recent_quote_and_seven_days_of_chain_deposit_activity() -> Result<()>
+{
+    with_database(|d| {
+        Box::pin(async move {
+            let now = Utc::now();
+            let quote_cutoff = now - chrono::Duration::hours(24);
+            let deposit_cutoff = now - chrono::Duration::days(7);
+            let hot_quote = address(d, 100).await?;
+            let cold = address(d, 100).await?;
+            let hot_deposit = address(d, 100).await?;
+            let old_deposit = address(d, 100).await?;
+            sqlx::query("UPDATE quotes SET created_at=$1").bind(quote_cutoff - chrono::Duration::seconds(1)).execute(&d.app_pool).await?;
+            // The cancelled quote fixture qualifies, including at the exact time boundary.
+            sqlx::query("UPDATE quotes SET created_at=$1 WHERE address_id=$2").bind(quote_cutoff).bind(hot_quote.id).execute(&d.app_pool).await?;
+            for (a, block_time) in [(&hot_deposit, deposit_cutoff), (&old_deposit, deposit_cutoff - chrono::Duration::seconds(1))] {
+                let address = db::list_scan_addresses(&d.app_pool, 1).await?.into_iter().find(|v| v.id == a.id).context("scan address")?;
+                let mut log = transfer(a, 150);
+                log.tx_hash = B256::from_slice(a.id.as_bytes().repeat(2).as_slice());
+                log.block_time = block_time;
+                db::insert_deposit(&d.app_pool, &provisional(log, &address)).await?;
+            }
+            let (page, more) = db::hot_address_page(&d.app_pool, 1, None, quote_cutoff, deposit_cutoff).await?;
+            let ids: BTreeSet<_> = page.iter().map(|a| a.id).collect();
+            ensure!(ids == BTreeSet::from([hot_quote.id, hot_deposit.id]) && !more);
+            // Ingestion happened today for both deposits; only the recent chain timestamp qualifies.
+            let later = db::hot_address_page(&d.app_pool, 1, None, quote_cutoff, deposit_cutoff + chrono::Duration::microseconds(1)).await?.0;
+            ensure!(later.iter().all(|a| a.id != hot_deposit.id));
+            // A new quote on the same address is visible immediately without a cache refresh.
+            sqlx::query("INSERT INTO quotes(id,account_id,livemode,customer_id,route,amount_atomic,price_scaled,credit_minor,expires_at,status,closed_at,route_version,settings_revision_id,terms,address_id,window_start) \
+                SELECT $1,account_id,livemode,customer_id,route,amount_atomic,price_scaled,credit_minor,expires_at,status,closed_at,route_version,settings_revision_id,terms,address_id,window_start FROM quotes WHERE address_id=$2")
+                .bind(Uuid::new_v4()).bind(cold.id).execute(&d.app_pool).await?;
+            let page = db::hot_address_page(&d.app_pool, 1, None, quote_cutoff, deposit_cutoff).await?.0;
+            ensure!(page.iter().any(|a| a.id == cold.id));
+            let mut read = Reader::new(200);
+            read.logs.push(transfer(&cold, 150));
+            scanner::initialize_chain(&d.app_pool, 1, &read, &read).await?;
+            let mut chain = chain();
+            chain.chain.confirmations = Confirmations::Depth(2);
+            ensure!(scanner::fast_once(&d.app_pool, &read, &chain, Default::default()).await?.inserted == 1);
+            ensure!(read.requests.lock().unwrap().iter().all(|(recipients,_,_)| !recipients.contains(&old_deposit.address)));
+            ensure!(marker(d, cold.id).await?.is_none(), "fast discovery published negative evidence");
+            let mut wider_read = Reader::new(300);
+            let mut log = transfer(&old_deposit, 250);
+            log.tx_hash = B256::repeat_byte(0xbb);
+            wider_read.logs.push(log);
+            let config = scanner::ScanConfig { quote_window_hours: 48, ..Default::default() };
+            ensure!(scanner::fast_once(&d.app_pool, &wider_read, &chain, config).await?.inserted == 1);
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn hot_discovery_pages_are_bounded_and_a_failed_page_does_not_advance_the_cursor()
+-> Result<()> {
+    with_database(|d| {
+        Box::pin(async move {
+            let cold = address(d, 100).await?;
+            sqlx::query("UPDATE quotes SET created_at=now()-interval '2 days'")
+                .execute(&d.app_pool)
+                .await?;
+            let customer_id =
+                sqlx::query_scalar("SELECT customer_id FROM quotes WHERE address_id=$1")
+                    .bind(cold.id)
+                    .fetch_one(&d.app_pool)
+                    .await?;
+            for i in 1..=1001_u64 {
+                seed::insert_address(
+                    &d.app_pool,
+                    &NewAddress {
+                        id: Uuid::new_v4(),
+                        customer_id,
+                        chain_id: 1,
+                        route: route().route,
+                        salt: B256::from(U256::from(i)),
+                        address: Address::from_word(U256::from(i).into()),
+                    },
+                )
+                .await?;
+            }
+            let last: String = sqlx::query_scalar(
+                "SELECT address FROM addresses WHERE id<>$1 ORDER BY id DESC LIMIT 1",
+            )
+            .bind(cold.id)
+            .fetch_one(&d.app_pool)
+            .await?;
+            let mut read = Reader::new(200);
+            scanner::initialize_chain(&d.app_pool, 1, &read, &read).await?;
+            let first: Uuid =
+                sqlx::query_scalar("SELECT id FROM addresses WHERE id<>$1 ORDER BY id LIMIT 1")
+                    .bind(cold.id)
+                    .fetch_one(&d.app_pool)
+                    .await?;
+            let first = db::get_address(&d.app_pool, first)
+                .await?
+                .context("first hot address")?;
+            read.logs.push(transfer(&first, 150));
+            db::commit_head_scan(
+                &d.app_pool,
+                1,
+                100,
+                200,
+                &[db::NewPendingTransfer {
+                    chain_id: 1,
+                    tx_hash: B256::repeat_byte(0xbb),
+                    receipt_log_index: 0,
+                    log_index: 0,
+                    block_number: 200,
+                    block_hash: hash(200),
+                    block_time: time(200),
+                    address_id: cold.id,
+                    asset_contract: route().asset.contract,
+                    from_address: Address::repeat_byte(0x44),
+                    amount_atomic: AtomicAmount::new(U256::from(1000)),
+                }],
+            )
+            .await?;
+            read.fail_recipient = Some(last.parse()?);
+            let mut chain = chain();
+            chain.chain.confirmations = Confirmations::Depth(2);
+            ensure!(
+                scanner::fast_once(&d.app_pool, &read, &chain, Default::default())
+                    .await
+                    .is_err()
+            );
+            ensure!(db::get_confirmed_cursor(&d.app_pool, 1).await?.is_none());
+            let count: i64 = sqlx::query_scalar("SELECT count(*) FROM deposits")
+                .fetch_one(&d.app_pool)
+                .await?;
+            ensure!(
+                count == 1,
+                "the completed page did not record its candidate"
+            );
+            read.requests.lock().unwrap().clear();
+            read.fail_recipient = None;
+            scanner::fast_once(&d.app_pool, &read, &chain, Default::default()).await?;
+            {
+                let requests = read.requests.lock().unwrap();
+                ensure!(
+                    requests.len() == 2 && requests[0].0.len() == 1000 && requests[1].0.len() == 1
+                );
+                ensure!(
+                    requests
+                        .iter()
+                        .all(|(recipients, _, _)| !recipients.contains(&cold.address))
+                );
+            }
+            ensure!(db::get_confirmed_cursor(&d.app_pool, 1).await? == Some(199));
+            let pending: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM pending_transfers WHERE address_id=$1")
+                    .bind(cold.id)
+                    .fetch_one(&d.app_pool)
+                    .await?;
+            ensure!(
+                pending == 1,
+                "hot discovery removed an unqueried cold pending view"
+            );
+            let count: i64 = sqlx::query_scalar("SELECT count(*) FROM deposits")
+                .fetch_one(&d.app_pool)
+                .await?;
+            ensure!(count == 1, "retry duplicated the committed page candidate");
+            Ok(())
+        })
+    })
+    .await
 }
 
 #[tokio::test]
@@ -908,7 +1084,7 @@ async fn coverage_with_transient_reversed_history(changed: Option<&'static str>)
             let concurrent = async {
                 started.notified().await;
                 let result = async {
-                    let fast = scanner::fast_once(&d.app_pool, &fast_read, &fast_chain).await?;
+                    let fast = scanner::fast_once(&d.app_pool, &fast_read, &fast_chain, Default::default()).await?;
                     ensure!(fast.inserted == 1, "fast scanner did not insert during RPC");
                     // A confirmation anomaly makes this transient detected row watcher-owned S.
                     sqlx::query("UPDATE deposits SET first_unresolved_at=now() WHERE id=$1")
@@ -1507,7 +1683,7 @@ async fn fast_and_n_minus_one_rows_are_reverified_even_if_both_logs_omit_them() 
             scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
             let mut fast_chain = chain();
             fast_chain.chain.confirmations = Confirmations::Depth(2);
-            scanner::fast_once(&d.app_pool, &read, &fast_chain).await?;
+            scanner::fast_once(&d.app_pool, &read, &fast_chain, Default::default()).await?;
             let marked: bool =
                 sqlx::query_scalar("SELECT dual_verified_at IS NOT NULL FROM deposits")
                     .fetch_one(&d.app_pool)
@@ -1581,7 +1757,7 @@ async fn progressed_unverified_mismatch_freezes_and_prevents_coverage_advance() 
         read.logs.push(log.clone());read.receipt=Some(log.clone());verify.receipt=Some(log);
         scanner::initialize_chain(&d.app_pool,1,&read,&verify).await?;
         let mut fast_chain=chain();fast_chain.chain.confirmations=topup_core::route::Confirmations::Depth(2);
-        scanner::fast_once(&d.app_pool,&read,&fast_chain).await?;
+        scanner::fast_once(&d.app_pool,&read,&fast_chain, Default::default()).await?;
         sqlx::query("UPDATE deposits SET state='rejected',reason='out_of_bounds',block_time=to_timestamp(101)").execute(&d.owner_pool).await?;
         read.logs.clear();
         ensure!(scanner::coverage_once(&d.app_pool,&read,&verify,&chain(),1).await.is_err());
@@ -1606,7 +1782,7 @@ async fn marked_reversed_revision_cannot_hide_an_unverified_current_revision() -
             scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
             let mut fast_chain = chain();
             fast_chain.chain.confirmations = Confirmations::Depth(2);
-            scanner::fast_once(&d.app_pool, &read, &fast_chain).await?;
+            scanner::fast_once(&d.app_pool, &read, &fast_chain, Default::default()).await?;
             sqlx::query("UPDATE deposits SET state='reversed',reason=NULL,dual_verified_at=now()")
                 .execute(&d.owner_pool)
                 .await?;

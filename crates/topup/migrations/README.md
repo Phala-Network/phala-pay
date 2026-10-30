@@ -38,6 +38,12 @@ maximum migration is `20261029030005`, the compatibility floor for these additio
 The `20261029040003` heartbeat timestamp index follows that protocol and floor, preserving
 `max(recorded_at)` and timestamp-ordered restore reads without assuming identity/time ordering.
 
+The `20261106000000`–`20261106000001` discovery activity indexes use the same concurrent
+build/retry protocol. Quote creation time and per-chain deposit block time bound the hot-set
+activity union; keyset address pages contain at most 1,000 addresses. Every state is eligible.
+These additions preserve the current compatibility floor and old reads/writes; binary rollback
+keeps the indexes and uses its retained configuration and full-address RPC budget.
+
 ## Roles and privileges
 
 `20261105000000_alerts` adds the platform's durable alert instances and list/retention indexes.

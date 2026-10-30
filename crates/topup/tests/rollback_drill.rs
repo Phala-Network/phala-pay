@@ -535,7 +535,7 @@ async fn published_image_round_trip() -> Result<()> {
             std::env::var("TOPUP_ROLLBACK_CONFIG").context("verified N-1 kit configuration required")?
         )?)?;
         let mut previous_config=current_config.clone();
-        for key in ["max_refund_attachments_per_day", "max_attached_pending_refunds_per_account"] {
+        for key in ["discovery", "max_refund_attachments_per_day", "max_attached_pending_refunds_per_account"] {
             if previous_schema.get(key).is_none() {
                 previous_config.as_object_mut().context("configuration object")?.remove(key);
             }

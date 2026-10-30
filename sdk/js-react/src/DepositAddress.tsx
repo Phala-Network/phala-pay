@@ -14,7 +14,6 @@ import {
   type DepositAddressPayment,
 } from "@phala/pay";
 import { CheckoutError, pollDelay } from "@phala/pay";
-import { formatWait } from "@phala/pay";
 import { depositAddressTransfer, type DepositAddressDetails } from "@phala/pay";
 import { rootProps, type Appearance } from "./appearance.js";
 import { Field } from "./Field.js";
@@ -31,8 +30,8 @@ export interface DepositAddressProps {
   asset?: string | undefined;
   /**
    * The `client_secret` of the same response. With `apiBase`, the component follows the
-   * address's payments and shows each one within about a block of arriving: received with its
-   * confirmations, then credited, and states each network's typical credit time. Display only;
+   * address's observed payments: received with their confirmations, then credited. Discovery
+   * time depends on recent quote/deposit activity; cold addresses use hourly coverage. Display only;
    * credit from your `deposit.credited` webhook.
    */
   clientSecret?: string | undefined;
@@ -128,7 +127,7 @@ export function DepositAddressContent({
       )}
       <p className="pp-message">
         Send {amount} on {name}. Other tokens and networks aren’t credited.{" "}
-        {creditMessage(network.chain_id, view)}
+        Credited at the market rate after confirmation.
       </p>
     </>
   );
@@ -235,25 +234,6 @@ function useClientView(
   }, [key, clientSecret, apiBase, interval]);
   // Another address starts without the previous one's view.
   return current.key === key && key !== "" ? current : { view: null, reconnecting: false };
-}
-
-/**
- * Seconds within which the service's discovery scan finds a transfer sent without a
- * transaction-hash hint, as this component never submits one: the server's `FAST_INTERVAL`
- * (crates/topup/src/scanner/mod.rs); change both together. The view's `typical_credit_seconds`
- * starts at confirmation (docs/integration.md, "Transaction-hash hints").
- */
-const DISCOVERY_SECONDS = 300;
-
-/**
- * When a payment on `chainId` is credited: the discovery scan, then `view`'s typical credit time,
- * for example "usually within about 6 minutes". Before the view is loaded it names no time.
- */
-function creditMessage(chainId: number, view: ClientDepositAddress | null): string {
-  const network = view?.networks.find((each) => each.chain_id === chainId);
-  return network === undefined
-    ? "Credited at the market rate after confirmation."
-    : `Credited at the market rate, usually within ${formatWait(DISCOVERY_SECONDS + network.typical_credit_seconds)}.`;
 }
 
 function paymentTone({ status }: DepositAddressPayment): "neutral" | "success" | "danger" {

@@ -570,8 +570,14 @@ The API and other chains continue. Both agreeing on unreviewed factory, implemen
 Multicall3 code freezes the chain; disagreement or unavailable code evidence only blocks readiness.
 
 **Fast discovery** runs on read every 300 seconds. It requests recipient-topic ERC-20 logs in
-chunks of 1,000 issued addresses, with no contract filter, and inserts routed, confirmed
-candidates as `detected` with NULL `dual_verified_at`. It advances only `confirmed_block`.
+chunks of 1,000 hot addresses: any quote created within 24 hours or any deposit whose chain
+block time is within seven days, across all states. Attested `discovery` settings configure
+both windows; indexed activity queries page at 1,000 addresses without an activity cache.
+Discovery uses no contract filter and inserts routed, confirmed
+candidates as `detected` with NULL `dual_verified_at`. Pending-view cleanup is scoped to the
+queried page. Only after every page succeeds does `confirmed_block` advance. Cold addresses stay
+in hourly dual coverage and remain hint-eligible; unhinted cold payments may take about 70 minutes
+with healthy endpoints and caught-up coverage. No negative evidence comes from the fast path.
 
 **Transaction-hash hints** can record positive transfers after both endpoints independently
 agree at the route's confirmation depth. They use the same receipt-position insertion identity
@@ -1501,10 +1507,11 @@ from fetched state, never from webhook order.
   token’s per-transfer limits from the account’s resolved `min_amount` (USD cents),
   `min_deposit_atomic`, and `max_deposit_atomic` at view time: "Send at least $5.00 and up to
   10,100 USDC per transfer on Ethereum. Other tokens and networks aren’t credited. Credited at the
-  market rate, usually within about 6 minutes."
-  The chosen network’s time is the 5-minute discovery scan plus its `typical_credit_seconds` in the
-  public view (the page submits no hint); until the view is loaded, "Credited at the market rate
-  after confirmation." Both minima apply independently. When the
+  market rate after confirmation."
+  The component submits no hint, and the public view does not identify hot-set membership.
+  Hot addresses use five-minute discovery; cold payments without hints can take about 70 minutes
+  under healthy, caught-up dual coverage, so the component promises no credit time.
+  Both minima apply independently. When the
   atomic minimum is positive, show both: "Send at least $5.00 and 10 USDC, up to 10,100 USDC
   per transfer on Ethereum." Omit a zero atomic minimum. Group token amounts in English,
   preserving every fractional digit. If any limit is missing or malformed, show "Send USDC on

@@ -37,11 +37,26 @@ Assumption: at least one endpoint is correct and synced.
 
 ### 2.1 Fast discovery (read only, every 300 s per payment chain)
 
-`eth_getBlockByNumber(latest)`, then one `eth_getLogs` per 1 000 issued addresses over
+The **hot set** is addresses with any quote created in the last 24 hours (all states), or any
+deposit whose chain `block_time` is within the last seven days (all states). The optional attested
+`discovery.quote_window_hours` and `discovery.deposit_window_days` configure those windows.
+Activity is queried afresh each round, so creating a quote makes its address eligible immediately.
+The SQL unions recent activity through time-leading indexes and reads keyset pages of at most
+1,000 addresses; it does not load the full historical address set.
+
+`eth_getBlockByNumber(latest)`, then one `eth_getLogs` per 1 000 hot addresses over
 `(fast cursor, latest]` with `topics: [[Transfer], null, [≤1000 recipients]]` (no `address`;
 ERC-20 layout decoded locally; routed tokens only). Transfers at or below the route's confirmation
 horizon are inserted as `detected` as today (`Evidence::Confirmed`, key
-`(chain, tx, receipt log index)`, `dual_verified_at` NULL); `cursors.confirmed_block` advances.
+`(chain, tx, receipt log index)`, `dual_verified_at` NULL). Candidate and pending-view writes commit
+per page, with pending cleanup scoped to that page's addresses. `cursors.confirmed_block` advances
+only after every page succeeds; a failed page is retried from the same cursor, with existing
+receipt-position deduplication. No address or dual coverage boundary advances here.
+
+Cold addresses remain in hourly dual coverage (§2.2), and hints (§2.3) work for any address.
+An unhinted payment without a recent quote or deposit can take about 70 minutes to be found,
+with healthy endpoints, an agreed checkpoint and caught-up coverage. Backlog/outages extend
+this target. R4 still requires both endpoints for every negative conclusion.
 
 ### 2.2 Finalized dual coverage (both endpoints, hourly per payment chain)
 
@@ -417,7 +432,7 @@ five-minute read discovery, ten-minute dual checkpoints, hourly dual coverage, s
 19,200-block catch-up, all seven six-hour custody routes, prices, deposits, hints, factory proofs,
 Safe proofs, attached refunds, unresolved finality stock and extra operations. It assumes every
 payment chain runs all day, one caught-up recipient chunk plus one lagging chunk, and all 1,000
-historical addresses.
+historical addresses treated as hot. No hot-set idle savings raise the approved capacity.
 
 The approved [parallel operating mode and limits](../../deploy/RPC.md#pilot-limits-and-operating-modes)
 run staging tests, including refunds, alongside production on the shared free quotas. D, factory
