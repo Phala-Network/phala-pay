@@ -1861,6 +1861,8 @@ request id becomes a metric label. Metrics wrap authentication, ingress/load-she
 read-only rejection, measuring time to response headers, including middleware and database/RPC
 waits; response-body streaming time is excluded. Buckets are 5, 10, 25, 50, 100, 250, 500 ms and
 1, 2.5, 5, 10, 30 s, plus infinity. Counters reset with the process.
+`topup_merchant_auth_shed_total` counts pre-authentication admission refusals without labels;
+these unsaved 503 responses can be retried with the same idempotency key after `Retry-After`.
 
 RPC operational alerts use the same Sentry integration, fingerprints, runbook links and
 repeat suppression as other alerts. Endpoint failures make only their chain or price feature

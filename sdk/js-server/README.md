@@ -103,6 +103,8 @@ Retries cover network/timeouts, 429, 500/502/503/504, and only `409 idempotency_
 bounded exponential jitter and Retry-After as a minimum. A delay that exceeds the remaining budget
 returns the last error immediately. Replayed errors, DELETE, cancellation and redirects do not
 retry. Redirects are refused. `close()` aborts outstanding requests without closing injected fetch.
+An unsaved `503 unavailable` from authentication admission uses this same retry policy and
+retains the original POST body and idempotency key.
 
 Set `upgradeTolerance: true` on the client or per call for backend work that can wait through a
 CVM upgrade. A maintenance 503, gateway 502/503/504 (even a non-JSON body), or network/attempt
