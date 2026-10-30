@@ -25,7 +25,7 @@ pub const ERROR_CODES: &[(&str, u16, &str)] = &[
     (
         "address_capacity_reached",
         422,
-        "The chain has reached its permanent pilot limit of 1,000 issued addresses, including retired and expired addresses. This is not retryable; the operator must upgrade the scanning/provider plan before issuing more.",
+        "The chain has reached its configured limit of historical issued addresses, including retired and expired addresses. This is not retryable; the operator must review capacity and the scanning/provider plan before issuing more.",
     ),
     (
         "chain_unavailable",

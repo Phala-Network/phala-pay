@@ -114,7 +114,9 @@ re-screening before resuming screening-dependent processing. Follow
 Keep `chain.sanctions_oracle` in retained configurations; current screening does not use it.
 
 Run the disposable local [rollback drill](../local/rollback-drill.sh) with the verified published
-N-1 image digest. The N worker uses a loopback-only SLS fixture in the test-support build; the
+N-1 image digest and its retained verified kit configuration (`topup.yaml`), in that order.
+The drill keeps the target's supported configuration fields and validates them with the N-1 binary.
+The N worker uses a loopback-only SLS fixture in the test-support build; the
 production build has fixed official endpoints. The CVM rehearsal resolves those URLs to a local
 TLS fixture using only its disposable Compose network and certificate. CI and the drill never
 fetch real OFAC data.

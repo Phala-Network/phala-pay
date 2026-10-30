@@ -412,6 +412,7 @@ impl Fixture {
             pool: self.pool.clone(),
             max_attached_pending_refunds: std::num::NonZeroU32::new(2)
                 .expect("positive refund limit"),
+            max_refund_attachments_per_day: 1,
             routes: Arc::new(
                 topup::routes::RouteSet::new(vec![self.route.clone()])
                     .map_err(anyhow::Error::msg)?,

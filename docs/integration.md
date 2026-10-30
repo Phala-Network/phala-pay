@@ -689,7 +689,8 @@ address = pay.deposit_addresses.create(client_reference_id="team-42",
   (`400 deposit_address_cap_exceeded`; ask the operator to raise it); no new address is issued
   while `quotes` is paused (`400 paused`), and a network frozen by reconciliation gets no new
   address until it is lifted.
-  The operator also enforces a permanent per-chain issued-address cap: 1,000 across all accounts
+  The operator also enforces a configured historical per-chain issued-address cap (`rpc[].max_issued_addresses`):
+  currently 1,000 across all accounts
   and modes on Phala's pilot, including retired and historical addresses. A first quote that
   issues a missing customer network and an address rotation consume it; at the cap these return
   `422 address_capacity_reached`, without `Retry-After`. This is not retryable: contact the

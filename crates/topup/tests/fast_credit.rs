@@ -200,7 +200,7 @@ async fn a_transaction_replaced_with_the_same_nonce_is_reversed_once() -> Result
             seed::set_treasury(&chain.pool,account.id,false,chain.chain_id,seed::FIXTURE_TREASURY).await?;
             let quotes: Arc<dyn topup::locks::QuoteProvider>=Arc::new(FixedQuotePrice);
             let (new_quote,_)=topup::locks::create(&chain.pool,&quotes,
-                &topup::client_secret::ClientSecretKey::ephemeral(),&account,&customer,&chain.route,
+                &topup::client_secret::ClientSecretKey::ephemeral(),&account,&customer,&chain.route, 1000,
                 topup_core::money::MinorAmount::new(90),&Default::default()).await?;
             let cut=new_quote.window_start;
             chain.anvil.mine(FINALITY_DEPTH + 2)?;
@@ -370,7 +370,7 @@ async fn payments_to_active_and_retired_deposit_addresses_are_credited_at_spot()
                 seed::FIXTURE_TREASURY,
             )
             .await?;
-            let chains = [deposit_addresses::ChainContracts::of(&chain.route)];
+            let chains = [deposit_addresses::ChainContracts::of(&chain.route, 1000)];
             let (retired, created) =
                 deposit_addresses::create(&chain.pool, &account, &customer, &chains, None).await?;
             ensure!(created);
@@ -444,7 +444,7 @@ async fn a_treasury_change_moves_the_chains_address_and_the_old_address_still_cr
                 seed::FIXTURE_TREASURY,
             )
             .await?;
-            let chains = [deposit_addresses::ChainContracts::of(&chain.route)];
+            let chains = [deposit_addresses::ChainContracts::of(&chain.route, 1000)];
             let (before, _) =
                 deposit_addresses::create(&chain.pool, &account, &customer, &chains, None).await?;
             let [old_network] = before.networks.as_slice() else {
@@ -902,6 +902,7 @@ impl FastChain {
             pool: pool.clone(),
             max_attached_pending_refunds: std::num::NonZeroU32::new(2)
                 .expect("positive refund limit"),
+            max_refund_attachments_per_day: 1,
             routes: route_set,
             maintenance_keys: Vec::new(),
             admin_key: VerificationKey::from_base64(
@@ -1456,6 +1457,7 @@ async fn wallet_paid_fixed_address_uses_one_lock_then_spot_and_requote_cuts_wind
                 &account,
                 &customer,
                 &chain.route,
+                1000,
                 topup_core::money::MinorAmount::new(90),
                 &metadata,
             )
@@ -1511,6 +1513,7 @@ async fn wallet_paid_fixed_address_uses_one_lock_then_spot_and_requote_cuts_wind
                 &account,
                 &customer,
                 &chain.route,
+                1000,
                 topup_core::money::MinorAmount::new(90),
                 &metadata,
             )

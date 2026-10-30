@@ -139,6 +139,12 @@ impl RouteSet {
     pub fn staging(&self) -> bool {
         self.environment == "staging"
     }
+    /// Historical issued-address cap; inline test routes retain the 1,000-address fixture limit.
+    pub fn max_issued_addresses(&self, chain: u64) -> u32 {
+        self.rpc
+            .get(&chain)
+            .map_or(1_000, |pair| pair.max_issued_addresses)
+    }
     /// All explicitly configured endpoints, including price-only chains.
     pub fn rpc(&self) -> &BTreeMap<u64, crate::chain_rpc::ChainRpc> {
         &self.rpc

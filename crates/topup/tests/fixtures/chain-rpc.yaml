@@ -1,5 +1,6 @@
 rpc:
   - chain_id: 1
+    max_issued_addresses: 1000
     read:
       id: ankr-ethereum
       url: "https://rpc.ankr.com/eth/{key}"

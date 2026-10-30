@@ -1,10 +1,11 @@
 # Address capacity
 
-**Trigger:** `TopupAddressCapacity` (warning at 700, critical at 900 addresses on one chain),
+**Trigger:** `TopupAddressCapacity` (warning at 70%, critical at 90% of a chain's configured cap;
+700/900 with the shipped 1,000-address caps),
 `RpcAddressCapacityWarning` / `RpcAddressCapacityCritical`, or `422 address_capacity_reached`.
 
-**Impact:** the pilot permits 1,000 issued addresses per chain, permanently, across all accounts
-and modes. Every historical address counts, including closed quotes and retired deposit addresses.
+**Impact:** `rpc[].max_issued_addresses` limits historical issued addresses per chain across all accounts
+and modes (every shipped configuration uses 1,000). Every historical address counts, including closed quotes and retired deposit addresses.
 At the cap, issuing a missing network returns this non-retryable error. Quotes reuse an existing
 customer network without consuming capacity. Existing addresses remain watched. Closing,
 cancelling, or retiring an address does not release capacity.
@@ -21,7 +22,7 @@ Read the admin-signed metrics snapshot and locate the affected chain:
 admin GET /v1/admin/metrics | rg 'topup_issued_address(s|_cap)'
 ```
 
-Compare `topup_issued_addresses{chain_id}` with `topup_issued_address_cap{chain_id}` (1,000).
+Compare `topup_issued_addresses{chain_id}` with `topup_issued_address_cap{chain_id}` (the configured cap).
 The Sentry alert's component is `chain:<chain_id>` and its observation is the historical count.
 Tell affected merchants to stop creating new addresses on that chain. Existing payments and
 credits continue subject to the ordinary readiness and freeze gates.
@@ -33,13 +34,17 @@ merchants. Both paths require an approved design, load measurements, tests and a
 configuration/release upgrade:
 
 - Move to paid RPC providers with sufficient quotas and reviewed limits, then revise the pilot's
-  address cap and request budget in that release. Buying a plan alone does not raise the code cap.
+  `rpc[].max_issued_addresses` and request budget through a reviewed configuration PR and attested
+  upgrade. Buying a plan alone does not change the configured cap.
 - Implement token-wide scanning or an indexer with equivalent independent verification and
   complete historical coverage, then revise the cap in that release.
 
 Never delete historical addresses or bypass the cap. Before upgrading, run the read-only
 [address capacity check](../README.md#rollback-compatibility) on a verified restore copy. It
-reports all per-chain counts and refuses a database already above 1,000.
+reports all per-chain counts and compares them with the **target** release configuration's caps.
+An unconfigured historical chain also fails closed. For rollback to a release with the fixed
+1,000-address limit, use its retained kit/check; once usage exceeds 1,000 that target is unsafe
+for new issuance. Keep the newer release as the rollback floor or follow restore/reconciliation.
 
 ## Done when
 

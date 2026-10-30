@@ -1002,7 +1002,8 @@ async fn apply(
         .find(|route| route.chain.chain_id == chain_id)
     {
         Some(route) => {
-            let chain = ChainContracts::of(route).with_treasury(treasury);
+            let chain = ChainContracts::of(route, routes.max_issued_addresses(chain_id))
+                .with_treasury(treasury);
             let moved = deposit_addresses::replace_networks(transaction, scope, chain).await?;
             if former.is_none() {
                 String::new()

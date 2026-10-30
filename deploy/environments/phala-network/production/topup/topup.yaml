@@ -3,6 +3,7 @@
 # request and a Deploy `upgrade`.
 environment: production
 max_attached_pending_refunds: 2
+max_refund_attachments_per_day: 1
 hints_per_day: 200
 quote_snapshots_per_day: 150
 public_origin: https://pay-api.phala.com
@@ -21,6 +22,7 @@ maintenance_keys:
 # BlockPI log requests use its measured free-tier range limit; see deploy/RPC.md for the budget.
 rpc:
   - chain_id: 1
+    max_issued_addresses: 1000
     read:
       id: ankr-mainnet
       url: "https://rpc.ankr.com/eth/{key}"
@@ -32,6 +34,7 @@ rpc:
       sealed_key: TOPUP_RPC_BLOCKPI_ETHEREUM_KEY
       max_log_blocks: 1000
   - chain_id: 8453
+    max_issued_addresses: 1000
     read:
       id: ankr-base-mainnet
       url: "https://rpc.ankr.com/base/{key}"

@@ -525,7 +525,7 @@ pub(crate) async fn lift_reconciliation_block(
 pub(crate) async fn metrics(
     State(state): State<AppState>,
 ) -> Result<([(header::HeaderName, &'static str); 1], String), ApiError> {
-    let durable = crate::observability::metrics::render_chain_reads(&state.pool)
+    let durable = crate::observability::metrics::render_chain_reads(&state.pool, &state.routes)
         .await
         .map_err(|error| {
             tracing::error!(%error,"chain read metrics refresh failed");

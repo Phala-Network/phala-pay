@@ -468,8 +468,9 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// aggregated; `topup run` refuses a chain where it is missing or differs.
 pub const MULTICALL3: Address = MULTICALL3_ADDRESS;
 /// Calls aggregated into one Multicall3 `eth_call`, bounding its calldata (about 200 bytes per
-/// call) and gas (a few thousand per view call) far below provider `eth_call` limits.
-pub const MULTICALL_CHUNK: usize = 200;
+/// call) and gas (a few thousand per view call). Startup/deploy preflight requires both endpoints
+/// to accept a complete chunk at canonical state pins.
+pub const MULTICALL_CHUNK: usize = 1_000;
 
 /// Alloy HTTP client for one RPC provider of one chain, shared by every consumer.
 ///

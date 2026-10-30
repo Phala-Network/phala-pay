@@ -122,8 +122,6 @@ pub async fn freeze(pool: &PgPool, chain: u64, check: &str) -> Result<(), sqlx::
     tx.commit().await
 }
 
-/// Permanent per-chain pilot cap, counting all historical quote and reusable addresses.
-pub const ISSUED_ADDRESS_CAP: i64 = 1_000;
 /// Outcome of admission while holding the per-chain issuance lock.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AddressAdmission {
@@ -145,14 +143,16 @@ pub async fn issued_address_count(pool: &PgPool, chain: u64) -> Result<i64, sqlx
 pub async fn admit_address(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     chain: u64,
+    max_issued_addresses: u32,
 ) -> Result<AddressAdmission, sqlx::Error> {
-    admit_addresses(tx, chain, 1).await
+    admit_addresses(tx, chain, 1, max_issued_addresses).await
 }
 /// Admit a batch atomically against the same chain boundary and pilot cap.
 pub async fn admit_addresses(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     chain: u64,
     additional: usize,
+    max_issued_addresses: u32,
 ) -> Result<AddressAdmission, sqlx::Error> {
     super::rpc::guard_in(tx, chain).await?;
     let boundary: Option<i64> =
@@ -172,7 +172,7 @@ pub async fn admit_addresses(
     Ok(
         if count
             .checked_add(additional)
-            .is_some_and(|total| total <= ISSUED_ADDRESS_CAP)
+            .is_some_and(|total| total <= i64::from(max_issued_addresses))
         {
             AddressAdmission::Admitted
         } else {

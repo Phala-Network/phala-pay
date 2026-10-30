@@ -1141,14 +1141,26 @@ Before upgrading to the read/verify pilot, run this check against a verified pre
 restore copy with PostgreSQL access (the production CVM exposes no database port):
 
 ```sh
-psql "$RESTORED_DATABASE_URL" -v ON_ERROR_STOP=1 -f deploy/check-address-capacity.sql
+target_config=$(topup config show "$TARGET_CONFIG")
+psql "$RESTORED_DATABASE_URL" -v ON_ERROR_STOP=1 -v config="$target_config" \
+  -f deploy/check-address-capacity.sql
 ```
 
-It reports every chain's historical issued-address count and the permanent 1,000-address cap,
-then refuses if any count is already over the cap. At exactly 1,000 the upgrade is safe, but new
+Use `topup` and the check script from the target release's verified kit, with `TARGET_CONFIG`
+pointing at that target's retained configuration. The check reports every historical count and
+`rpc[].max_issued_addresses`, and refuses counts above the configured cap or historical chains
+missing from that configuration. At exactly the cap the upgrade is safe, but new
 issuance returns `422 address_capacity_reached`. Review the
 [address capacity runbook](runbooks/address-capacity.md) at 70% and 90%. Preserve this output in
 the upgrade evidence; never delete rows to pass the check.
+
+Releases before configurable caps reject the new required keys. Render those targets with their
+retained configuration and kit; their capacity check still enforces 1,000. Once any chain exceeds
+1,000 addresses, those binaries can continue watching but cannot issue new addresses, so retain
+a release supporting the larger configured cap as the rollback floor. Required
+`max_refund_attachments_per_day` is likewise absent from old configs: keep the target's rolling
+refund budget and pending inventory within its approved limits. No capacity is raised by merely
+adding these keys.
 
 Before upgrade, preserve the verified N-1 deploy kit, image digests and configuration and a tested
 pre-upgrade recovery point. To roll back, verify N-1's release again, render its compose/config,

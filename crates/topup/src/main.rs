@@ -695,6 +695,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
         let state = topup::api::AppState {
             pool,
             max_attached_pending_refunds: config.max_attached_pending_refunds,
+            max_refund_attachments_per_day: config.max_refund_attachments_per_day,
             routes: Arc::new(routes),
             admin_key,
             maintenance_keys: config.maintenance_keys.clone(),
@@ -848,6 +849,7 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     let state = topup::api::AppState {
         pool: pool.clone(),
         max_attached_pending_refunds: config.max_attached_pending_refunds,
+        max_refund_attachments_per_day: config.max_refund_attachments_per_day,
         routes: Arc::clone(&routes),
         admin_key,
         maintenance_keys: config.maintenance_keys.clone(),

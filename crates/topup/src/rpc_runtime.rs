@@ -1,9 +1,12 @@
 //! Typed startup/deploy endpoint checks and bounded transport-readiness recovery.
 use crate::{db, routes::RouteSet};
 use alloy::eips::{BlockId, BlockNumberOrTag};
+use alloy::sol_types::SolCall as _;
 use alloy_primitives::{Address, Bytes, U256};
 use sqlx::PgPool;
-use topup_adapters::chain::evm::{ChainReader, EvmClient, FinalizedReader, MULTICALL3};
+use topup_adapters::chain::evm::{
+    ChainReader, EvmClient, FinalizedReader, MULTICALL_CHUNK, MULTICALL3,
+};
 
 /// Both endpoints of every route and price chain pass the real production request shapes.
 pub async fn preflight(routes: &RouteSet) -> Result<Vec<String>, String> {
@@ -114,6 +117,24 @@ async fn check_endpoint(
         if code.is_empty() {
             return Err(format!("chain {chain}: canonical Multicall3 code missing"));
         }
+        let tokens: std::collections::BTreeSet<_> = routes
+            .routes()
+            .iter()
+            .filter(|route| route.chain.chain_id == chain)
+            .map(|route| route.asset.contract)
+            .collect();
+        check_multicall(
+            client,
+            &tokens.into_iter().collect::<Vec<_>>(),
+            pin.ok_or("missing canonical pin")?,
+        )
+        .await
+        .map_err(|error| {
+            format!(
+                "{}: 1000-call custody aggregate: {error}",
+                client.endpoint().provider().unwrap_or_default()
+            )
+        })?;
         for route in routes.routes().iter().filter(|r| r.chain.chain_id == chain) {
             let decimals = client
                 .call(
@@ -181,6 +202,58 @@ async fn check_endpoint(
     }
     Ok(())
 }
+// Exercise the production custody reader with a complete chunk at each canonical pin.
+// Observation-only chains have no token routes; use Multicall3's native balance view there.
+async fn check_multicall(
+    client: &EvmClient,
+    tokens: &[Address],
+    pin: BlockId,
+) -> Result<(), String> {
+    let recipients: Vec<_> = (1..=MULTICALL_CHUNK)
+        .map(|i| u64::try_from(i).map(|i| Address::from_word(U256::from(i).into())))
+        .collect::<Result<_, _>>()
+        .map_err(|_| "multicall recipient overflow")?;
+    if tokens.is_empty() {
+        use alloy::providers::bindings::IMulticall3::{aggregate3Call, getEthBalanceCall};
+        let BlockId::Hash(hash) = pin else {
+            return Err("multicall requires a canonical hash".into());
+        };
+        let calls = recipients
+            .iter()
+            .map(|address| {
+                (
+                    MULTICALL3,
+                    getEthBalanceCall { addr: *address }.abi_encode().into(),
+                )
+            })
+            .collect();
+        let bytes = client
+            .multicall(calls, hash.block_hash)
+            .await
+            .map_err(|e| e.to_string())?;
+        let values = aggregate3Call::abi_decode_returns_validate(&bytes)
+            .map_err(|_| "invalid native balance aggregate")?;
+        if values.len() != MULTICALL_CHUNK
+            || values
+                .iter()
+                .any(|value| !value.success || value.returnData.len() != 32)
+        {
+            return Err("incomplete native balance aggregate".into());
+        }
+    } else {
+        for token in tokens {
+            let values = client
+                .token_balances(*token, &recipients, pin)
+                .await
+                .map_err(|e| e.to_string())?;
+            if values.len() != MULTICALL_CHUNK {
+                return Err("incomplete token balance aggregate".into());
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn check_coverage(
     client: &EvmClient,
     factory: Address,
@@ -277,6 +350,59 @@ mod recovery_tests {
     };
 
     #[tokio::test]
+    async fn preflight_requires_a_complete_thousand_call_aggregate_on_each_endpoint() {
+        use alloy::providers::bindings::IMulticall3::{Result as CallResult, aggregate3Call};
+        use alloy_primitives::B256;
+        for verify in [false, true] {
+            for outcome in ["ok", "reject", "short", "revert", "invalid"] {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let url = format!("http://{}", listener.local_addr().unwrap());
+                let node = Router::new().route("/", post(move |Json(body): Json<Value>| async move {
+                    assert!(body.is_object(), "no JSON-RPC batch");
+                    assert_eq!(body["method"], "eth_call");
+                    assert_eq!(body["params"][1], json!({"blockHash": B256::repeat_byte(1), "requireCanonical": true}));
+                    let tx = &body["params"][0];
+                    assert_eq!(tx["to"], json!(MULTICALL3));
+                    let input: Bytes = tx.get("input").or_else(|| tx.get("data")).unwrap().as_str().unwrap().parse().unwrap();
+                    let calls = aggregate3Call::abi_decode_validate(&input).unwrap().calls;
+                    assert_eq!(calls.len(), 1000);
+                    assert!(calls.iter().all(|call| !call.allowFailure));
+                    if outcome == "reject" {
+                        return Json(json!({"jsonrpc":"2.0", "id":body["id"], "error":{"code":-32000,"message":"gas limit exceeded"}}));
+                    }
+                    let count = if outcome == "short" {999} else {1000};
+                    let results = (0..count).map(|_| CallResult {
+                        success: outcome != "revert",
+                        returnData: if outcome == "invalid" {Bytes::new()} else {U256::ZERO.to_be_bytes::<32>().into()},
+                    }).collect::<Vec<_>>();
+                    Json(json!({"jsonrpc":"2.0", "id":body["id"], "result":Bytes::from(aggregate3Call::abi_encode_returns(&results))}))
+                }));
+                let server =
+                    tokio::spawn(async move { axum::serve(listener, node).await.unwrap() });
+                let mut client = EvmClient::new(&url).unwrap();
+                if verify {
+                    client = client.as_verify();
+                }
+                for tokens in [vec![Address::repeat_byte(2)], vec![]] {
+                    let result = check_multicall(
+                        &client,
+                        &tokens,
+                        BlockId::hash_canonical(B256::repeat_byte(1)),
+                    )
+                    .await;
+                    assert_eq!(
+                        result.is_ok(),
+                        outcome == "ok",
+                        "verify={verify}, outcome={outcome}: {result:?}"
+                    );
+                }
+                server.abort();
+                let _ = server.await;
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn preflight_coverage_uses_the_production_request_shapes() {
         use std::sync::Mutex;
         use topup_adapters::chain::evm::MAX_ADDRESSES_PER_REQUEST;
@@ -351,7 +477,11 @@ mod recovery_tests {
         let verify = Arc::new(EvmClient::new(&url).unwrap());
         read.latest_head().await.unwrap();
         verify.latest_head().await.unwrap();
-        let pair = crate::chain_rpc::ChainRpc { read, verify };
+        let pair = crate::chain_rpc::ChainRpc {
+            max_issued_addresses: 1000,
+            read,
+            verify,
+        };
         for _ in 0..4 {
             failed.store(true, Ordering::SeqCst);
             assert!(pair.read.latest_head().await.is_err());

@@ -665,6 +665,7 @@ pub(crate) async fn mark_refund_paid(
         &mut *transaction,
         &state.routes,
         state.max_attached_pending_refunds,
+        state.max_refund_attachments_per_day,
         merchant.scope,
         id,
         tx_hash,

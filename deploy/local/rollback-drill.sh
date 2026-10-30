@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # Published immutable N-1 workers -> current workers -> N-1 workers -> current workers.
 # Uses only a disposable PostgreSQL cluster, Anvil, verified local TLS and fixture KMS.
+# Usage: rollback-drill.sh VERIFIED_IMAGE VERIFIED_KIT_TOPUP_YAML
 set -euo pipefail
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 previous=${1:?verified published N-1 image digest required}
+previous_config=${2:?previous release config from its verified deploy kit required}
+[[ -s "$previous_config" ]] || { echo 'previous release config is missing' >&2; exit 64; }
+previous_config=$(realpath "$previous_config")
 [[ "$previous" =~ @sha256:[0-9a-f]{64}$ ]] || { echo 'N-1 must be an immutable published image' >&2; exit 64; }
 for tool in docker cargo anvil forge cast openssl; do command -v "$tool" >/dev/null || { echo "missing $tool" >&2; exit 1; }; done
 mkdir -p "$root/.task-tmp"
@@ -28,6 +32,7 @@ docker exec "$name" pg_isready -h 127.0.0.1 -U postgres >/dev/null
 port=$(docker port "$name" 5432/tcp | cut -d: -f2)
 cd "$root"
 export CI=true SQLX_OFFLINE=true TOPUP_ROLLBACK_IMAGE="$previous"
+export TOPUP_ROLLBACK_CONFIG="$previous_config"
 export OWNER_DATABASE_URL="postgres://postgres:drill@127.0.0.1:$port/postgres"
 export DATABASE_URL="postgres://topup_ci:topup_ci@127.0.0.1:$port/postgres"
 # The round trip submits a real hint-recorded deposit and interrupts an unmined in-memory task.

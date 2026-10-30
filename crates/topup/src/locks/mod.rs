@@ -332,6 +332,7 @@ pub async fn create(
     account: &Account,
     customer: &Customer,
     route: &RouteFile,
+    max_issued_addresses: u32,
     credit_minor: MinorAmount,
     metadata: &BTreeMap<String, String>,
 ) -> Result<(RateLock, String), RateLockError> {
@@ -351,9 +352,12 @@ pub async fn create(
         client_secrets,
         account,
         customer,
-        route,
-        &priced,
-        metadata,
+        Creation {
+            route,
+            max_issued_addresses,
+            priced: &priced,
+            metadata,
+        },
     )
     .await?;
     transaction.commit().await?;
@@ -457,7 +461,19 @@ fn quote_budget_exceeded(route: &RouteFile) -> RateLockError {
     RateLockError::PricingUnavailable
 }
 
-/// Creates the lock `priced` for `customer` of `account` in `transaction`, with its
+/// Priced quote inputs and the attested address admission limit for its route's chain.
+pub struct Creation<'a> {
+    /// The selected validated route.
+    pub route: &'a RouteFile,
+    /// Configured historical issued-address cap on the selected chain.
+    pub max_issued_addresses: u32,
+    /// Price and terms resolved before beginning the creation transaction.
+    pub priced: &'a PricedLock,
+    /// Merchant metadata carried by the new quote.
+    pub metadata: &'a BTreeMap<String, String>,
+}
+
+/// Creates the priced lock for `customer` of `account` in `transaction`, with its
 /// `client_secret`, after checking the customer's creation rate, the exposure caps, and the
 /// chain's treasury again; its window starts now.
 pub async fn create_in(
@@ -465,10 +481,14 @@ pub async fn create_in(
     client_secrets: &ClientSecretKey,
     account: &Account,
     customer: &Customer,
-    route: &RouteFile,
-    priced: &PricedLock,
-    metadata: &BTreeMap<String, String>,
+    creation: Creation<'_>,
 ) -> Result<(RateLock, String), RateLockError> {
+    let Creation {
+        route,
+        max_issued_addresses,
+        priced,
+        metadata,
+    } = creation;
     if customer.account_id != account.id || route.livemode != customer.livemode {
         return Err(RateLockError::NotFound);
     }
@@ -500,7 +520,10 @@ pub async fn create_in(
         &mut **transaction,
         account,
         customer,
-        &[crate::deposit_addresses::ChainContracts::of(route)],
+        &[crate::deposit_addresses::ChainContracts::of(
+            route,
+            max_issued_addresses,
+        )],
         None,
     )
     .await?;

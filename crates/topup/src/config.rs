@@ -31,6 +31,7 @@ use crate::rpc_provider::ProviderUrl;
 struct ConfigSpec {
     environment: String,
     max_attached_pending_refunds: NonZeroU32,
+    max_refund_attachments_per_day: u32,
     #[serde(default = "default_hints_per_day")]
     hints_per_day: i32,
     #[serde(default = "default_quote_snapshots_per_day")]
@@ -69,6 +70,8 @@ pub struct Config {
     pub environment: String,
     /// Required positive concurrency limit for attached-pending refunds in this deployment.
     pub max_attached_pending_refunds: NonZeroU32,
+    /// Required environment-wide attachment limit over a rolling 24 hours.
+    pub max_refund_attachments_per_day: u32,
     /// Atomic environment-wide hint task limit per UTC day (default 80).
     pub hints_per_day: i32,
     /// Atomic fresh quote snapshot limit per price chain and UTC day (default 60).
@@ -107,6 +110,7 @@ impl std::fmt::Debug for AdminKeySpec {
 struct ResolvedConfig<'a> {
     environment: &'a str,
     max_attached_pending_refunds: NonZeroU32,
+    max_refund_attachments_per_day: u32,
     hints_per_day: i32,
     quote_snapshots_per_day: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -133,6 +137,10 @@ impl Config {
         let spec: ConfigSpec =
             serde_saphyr::from_str(yaml).map_err(|error| format!("invalid YAML: {error}"))?;
         validate_daily_budgets(spec.hints_per_day, spec.quote_snapshots_per_day)?;
+        validate_capacity(
+            "max_refund_attachments_per_day",
+            spec.max_refund_attachments_per_day,
+        )?;
         if !is_name(&spec.environment, 64) {
             return Err(
                 "environment must be 1-64 lowercase letters, digits, `-`, or `_`, starting with a \
@@ -207,6 +215,7 @@ impl Config {
             sanctions: spec.sanctions,
             environment: spec.environment,
             max_attached_pending_refunds: spec.max_attached_pending_refunds,
+            max_refund_attachments_per_day: spec.max_refund_attachments_per_day,
             hints_per_day: spec.hints_per_day,
             quote_snapshots_per_day: spec.quote_snapshots_per_day,
             public_origin,
@@ -316,6 +325,7 @@ impl Config {
         serde_json::to_string_pretty(&ResolvedConfig {
             environment: &self.environment,
             max_attached_pending_refunds: self.max_attached_pending_refunds,
+            max_refund_attachments_per_day: self.max_refund_attachments_per_day,
             hints_per_day: self.hints_per_day,
             quote_snapshots_per_day: self.quote_snapshots_per_day,
             public_origin: self.public_origin.as_ref().map(ToString::to_string),
@@ -328,6 +338,13 @@ impl Config {
         .map(|json| json + "\n")
         .map_err(|error| format!("failed to write the configuration: {error}"))
     }
+}
+
+pub(crate) fn validate_capacity(name: &str, limit: u32) -> Result<(), String> {
+    if !(1..=1_000_000).contains(&limit) {
+        return Err(format!("{name} must be an integer from 1 to 1000000"));
+    }
+    Ok(())
 }
 
 fn default_hints_per_day() -> i32 {
@@ -393,8 +410,57 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         format!(
-            "environment: staging\nmax_attached_pending_refunds: 2\npublic_origin: {origin}\nadmin_key:\n  id: admin/staging-v1\n  public_key: {KEY}\n{providers}\nroutes:\n  -\n{route}\n"
+            "environment: staging\nmax_attached_pending_refunds: 2\nmax_refund_attachments_per_day: 1\npublic_origin: {origin}\nadmin_key:\n  id: admin/staging-v1\n  public_key: {KEY}\n{providers}\nroutes:\n  -\n{route}\n"
         )
+    }
+
+    #[test]
+    fn required_capacity_limits_validate_and_round_trip() {
+        let base = config(PROVIDERS, "https://pay.example");
+        for cap in [1, 1000, 50_000, 1_000_000] {
+            let yaml = base
+                .replace(
+                    "max_issued_addresses: 1000",
+                    &format!("max_issued_addresses: {cap}"),
+                )
+                .replace(
+                    "max_refund_attachments_per_day: 1",
+                    &format!("max_refund_attachments_per_day: {cap}"),
+                );
+            let parsed = Config::parse(&yaml).unwrap();
+            let round_trip = Config::parse(&parsed.resolved_json().unwrap()).unwrap();
+            assert_eq!(round_trip.rpc[0].max_issued_addresses, cap);
+            assert_eq!(round_trip.max_refund_attachments_per_day, cap);
+        }
+        for (name, current) in [
+            ("max_issued_addresses", "1000"),
+            ("max_refund_attachments_per_day", "1"),
+        ] {
+            let missing = base
+                .lines()
+                .filter(|line| !line.contains(name))
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(Config::parse(&missing).unwrap_err().contains(name));
+            for invalid in ["0", "-1", "1000001", "4294967296", "1.5", "null", "false"] {
+                let yaml =
+                    base.replace(&format!("{name}: {current}"), &format!("{name}: {invalid}"));
+                assert!(Config::parse(&yaml).is_err(), "{name}: {invalid}");
+            }
+        }
+        for yaml in [
+            include_str!("../../../deploy/environments/phala-network/production/topup/topup.yaml"),
+            include_str!("../../../deploy/environments/phala-network/staging/topup/topup.yaml"),
+        ] {
+            let parsed = Config::parse(yaml).unwrap();
+            assert_eq!(parsed.max_refund_attachments_per_day, 1);
+            assert!(
+                parsed
+                    .rpc
+                    .iter()
+                    .all(|rpc| rpc.max_issued_addresses == 1000)
+            );
+        }
     }
 
     #[test]

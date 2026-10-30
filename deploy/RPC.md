@@ -21,8 +21,13 @@ All pilot caps remain unchanged; a later increase needs a separately reviewed bu
 
 `topup.yaml` also requires the top-level positive integer `max_attached_pending_refunds`:
 production sets it to 2 and staging to 1. It atomically limits attached-pending refunds across
-all accounts and modes in that environment; one new attachment per rolling 24 hours remains
-a fixed admission limit. Missing, zero or negative values fail configuration validation.
+all accounts and modes in that environment. Required top-level `max_refund_attachments_per_day`
+sets the rolling 24-hour attachment allowance (including resolved refunds); all shipped configs
+use 1. Each `rpc` entry also requires `max_issued_addresses`; all shipped configs use 1,000. Both
+new limits accept integers from 1 to 1,000,000 and appear in `topup config show`. Missing or invalid
+limits fail configuration validation. Capacity increases still require a reviewed provider budget
+and attested configuration upgrade. Older rollback targets need their retained config without
+these keys and must fit their fixed address/refund limits.
 
 CI resolves the latest stable release other than the current ref as N-1 for rollback rehearsal.
 The rollback floor is v0.13.0; going below it requires [restore and reconciliation](RESTORE.md).
@@ -38,9 +43,15 @@ topup rpc check --config /etc/topup/topup.yaml
 
 `rpc check` independently validates both endpoints with typed identity, finalized transaction,
 receipt and log reads, the real coverage queries with 1,000 recipients, canonical state calls,
+and a full 1,000-call custody `aggregate3` on **each** endpoint, at both the agreed finalized hash
 and state at
 twice the observed finalized lag. Contract identity and the preflight boundary pin both
 endpoints at the lower finalized height and require matching header hash and timestamp.
+Each payment token uses the production `balanceOf` reader with 1,000 distinct synthetic
+recipients; observation-only chains use Multicall3 native balance views. Provider rejection,
+a reverted subcall, malformed output or fewer than 1,000 results fails preflight closed.
+Custody batches up to 1,000 calls per aggregate; smaller-provider limits require changing
+providers, not silently falling back to smaller batches.
 The receipt/log probe searches up to eight finalized blocks for a logged transaction. If none
 is found, it passes without a sample; all other endpoint checks remain required. A sample's
 receipt and log responses must agree, ignoring only optional `blockTimestamp` metadata. Deploy uses the
@@ -86,7 +97,7 @@ Both environments use Ankr read; production uses BlockPI verify, staging uses In
 |---|---:|---:|---|
 | Deposits handled/day, D | 115 | 20 | Operational |
 | Concurrent attached pending refunds, R | 2 | 1 | Atomic attachment admission |
-| New refund attachments/rolling 24 h, N | 1 | 1 | Atomic attachment admission |
+| New refund attachments/rolling 24 h, N | 1 | 1 | Atomic admission (`max_refund_attachments_per_day`) |
 | Unresolved finality stock/environment, S | 1 | 1 | Operational; pause affected-chain quotes and escalate above S |
 | New unresolved entries/environment/rolling 24 h | 1 | 1 | Operational; same stock stop rule |
 | Current slow-confirmation stock, L/environment | 1 | 1 | Operational; pause affected-chain quotes above the limit |
@@ -96,7 +107,7 @@ Both environments use Ankr read; production uses BlockPI verify, staging uses In
 | Factory receipt-verification instances/day | 150 | 20 | Operational |
 | Safe challenge/proof sets/day | 10 | 2 | Operational |
 | Extra RPC calls/endpoint/day | 150 | 150 | Operational reserve |
-| Historical issued addresses/payment chain | 1,000 | 1,000 | Permanent issuance cap |
+| Historical issued addresses/payment chain | 1,000 | 1,000 | Atomic admission (`rpc[].max_issued_addresses`) |
 
 D includes recovery work, not just payments made that day. Factory counts include historical
 re-verification, not only distinct transactions or newly committed events. Safe counts include
@@ -131,14 +142,19 @@ chain is caught up and the actual normal range is shorter. An Infura
 on that error. Extra requests must fit the reserve or
 be budgeted separately.
 
-For each payment chain with C custody routes, the shared Ankr and staging-only Infura costs are:
+Custody now uses 1,000-call chunks. With N issued addresses, its actual hourly cost is
+`24 × C × ceil(N / 1,000)` per day and endpoint. The approved tables and totals below deliberately
+retain the prior five-batch allowance (120C at N=1,000) as a conservative bound; the saving does
+not authorize higher capacity. For each payment chain with C custody routes, that retained
+Ankr and staging-only Infura budget is:
 
 ```text
 Fast discovery:      288 × (1 head + 1 logs) = 576 Ankr
 Checkpoint headers: 144 × 2 = 288 Ankr; 144 × 3 × 80 = 34,560 Infura
 Coverage headers:   24 × 2 = 48 calls per endpoint
 Coverage logs:      20 × 2 × 2 + 4 × 2 × 2 × ceil(19,200 / 3,000) = 192 per endpoint
-Hourly custody:     C × 24 × ceil(1,000 / 200) = 120C per endpoint
+Hourly custody:     C × 24 × ceil(1,000 / 1,000) = 24C per endpoint
+Retained allowance: 96C extra calls per endpoint; approved custody budget remains 120C
 
 Ankr:   576 + 288 + 48 + 192 + 120C = 1,104 + 120C
 Infura: (432 + 48)×80 + 192×255 + 120C×80 = 87,360 + 9,600C

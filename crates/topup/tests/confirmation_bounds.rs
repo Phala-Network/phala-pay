@@ -868,7 +868,7 @@ async fn slow_gauges_are_db_derived_once_only_and_keep_resolved_entries() -> Res
         let p=&ctx.app_pool;let first=fixture(p,Confirmations::Depth(2),1).await?;
         sqlx::query("UPDATE deposits SET first_slow_at=$2,confirm_head_checks=6 WHERE id=$1").bind(first.id).bind(first.due).execute(p).await?;
         let count=async |now| -> Result<(u64,u64)> {
-            let text=topup::observability::metrics::render_chain_reads_at(p,now).await?;
+            let text=topup::observability::metrics::render_chain_reads_at(p, &topup::routes::RouteSet::default(),now).await?;
             let value=|name|->Result<u64>{text.lines().find_map(|l|l.strip_prefix(&format!("{name}{{chain_id=\"1\"}} "))).context("gauge")?.parse().map_err(Into::into)};
             Ok((value("topup_confirmation_slow")?,value("topup_confirmation_slow_entries_24h")?))
         };
@@ -1002,7 +1002,7 @@ async fn old_terminal_proof_is_retired_on_s_and_only_fresh_watcher_evidence_is_r
             let cached: Option<Value> = sqlx::query_scalar("SELECT confirmation_terminal_evidence($1)")
                 .bind(f.id).fetch_one(p).await?;
             ensure!(cached.is_none(), "old proof survived S admission");
-            let gauges = topup::observability::metrics::render_chain_reads_at(p, f.due).await?;
+            let gauges = topup::observability::metrics::render_chain_reads_at(p, &topup::routes::RouteSet::default(), f.due).await?;
             ensure!(gauges.contains("topup_finality_unresolved{chain_id=\"1\"} 1"));
             ensure!(gauges.contains("topup_finality_unresolved_entries_24h{chain_id=\"1\"} 1"));
             ensure!(counts(&r) == [1,1], "first absent check methods");
@@ -1363,7 +1363,12 @@ async fn watcher_does_not_report_final_when_handoff_does_not_persist_terminal_ev
                     entry == Some(f.due),
                     "failed handoff did not enter S atomically"
                 );
-                let gauges = topup::observability::metrics::render_chain_reads_at(p, f.due).await?;
+                let gauges = topup::observability::metrics::render_chain_reads_at(
+                    p,
+                    &topup::routes::RouteSet::default(),
+                    f.due,
+                )
+                .await?;
                 ensure!(gauges.contains("topup_finality_unresolved{chain_id=\"1\"} 1"));
                 ensure!(gauges.contains("topup_finality_unresolved_entries_24h{chain_id=\"1\"} 1"));
                 let next = f.due + Duration::seconds(60);

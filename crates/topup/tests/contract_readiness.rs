@@ -153,7 +153,11 @@ async fn agreement_freezes_and_disagreement_or_unavailability_only_blocks_readin
             ensure!(topup::reconciler::chain_is_blocked(&d.app_pool, 1).await?);
             ensure!(!topup::reconciler::chain_is_blocked(&d.app_pool, 8453).await?);
             let mut tx = d.app_pool.begin().await?;
-            ensure!(db::chain_reads::admit_address(&mut tx, 1).await.is_err());
+            ensure!(
+                db::chain_reads::admit_address(&mut tx, 1, 1000)
+                    .await
+                    .is_err()
+            );
             tx.rollback().await?;
             Ok(())
         })
@@ -184,6 +188,7 @@ async fn audited_lift_refuses_before_a_passing_fresh_dual_check() -> Result<()> 
                     BTreeMap::from([(
                         1,
                         ChainRpc {
+                            max_issued_addresses: 1000,
                             read: a.client.clone(),
                             verify: b.client.clone(),
                         },
@@ -196,6 +201,7 @@ async fn audited_lift_refuses_before_a_passing_fresh_dual_check() -> Result<()> 
                 pool: d.app_pool.clone(),
                 max_attached_pending_refunds: std::num::NonZeroU32::new(2)
                     .expect("positive refund limit"),
+                max_refund_attachments_per_day: 1,
                 routes: routes.clone(),
                 admin_key: VerificationKey::from_base64(
                     "admin/test".into(),

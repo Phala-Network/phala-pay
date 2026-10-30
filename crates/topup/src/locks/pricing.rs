@@ -2256,6 +2256,7 @@ mod tests {
             BTreeMap::from([(
                 1,
                 crate::chain_rpc::ChainRpc {
+                    max_issued_addresses: 1000,
                     read: ra.client.clone(),
                     verify: rb.client.clone(),
                 },

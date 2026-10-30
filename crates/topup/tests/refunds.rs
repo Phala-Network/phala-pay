@@ -180,6 +180,63 @@ async fn refund_attachment_daily_cap_is_atomic_across_merchants_and_keeps_reserv
 }
 
 #[tokio::test]
+async fn configured_refund_daily_cap_admits_exactly_three_concurrent_attachments() -> Result<()> {
+    support::with_database(|database| {
+        Box::pin(async move {
+            let pool = &database.app_pool;
+            seed::initialize_dual_chain(pool, 1).await?;
+            let app = test_router_on_with_limits(
+                pool,
+                &SigningKey::from_bytes(&[43; 32]),
+                Arc::new(StaticScreener::Listing),
+                Arc::default(),
+                vec![route_fixture()],
+                std::num::NonZeroU32::new(5).unwrap(),
+                3,
+            );
+            let barrier = Arc::new(tokio::sync::Barrier::new(6));
+            let mut tasks = tokio::task::JoinSet::new();
+            for index in 0..5 {
+                let merchant =
+                    Merchant::seed(pool, &app, &format!("configured-cap-{index}")).await?;
+                let deposit = seed_rejected_deposit(pool, merchant.account.id, "cap", 100).await?;
+                let id = merchant.refund(deposit, "100").await?;
+                let barrier = barrier.clone();
+                tasks.spawn(async move {
+                    barrier.wait().await;
+                    let (status, body) = merchant
+                        .post(
+                            &format!("/v1/refunds/{id}/mark_paid"),
+                            mark_paid_body(REFUND_TX)?,
+                        )
+                        .await?;
+                    ensure!(
+                        status == StatusCode::OK
+                            || (status == StatusCode::UNPROCESSABLE_ENTITY
+                                && body["error"]["code"] == "refund_attachment_limit_exceeded"),
+                        "{body}"
+                    );
+                    anyhow::Ok(status == StatusCode::OK)
+                });
+            }
+            barrier.wait().await;
+            let mut admitted = 0;
+            while let Some(result) = tasks.join_next().await {
+                if result?? {
+                    admitted += 1;
+                }
+            }
+            ensure!(
+                admitted == 3,
+                "configured daily cap must be atomic across merchants"
+            );
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
 async fn refund_attachment_pending_cap_keeps_existing_checks_and_reservations() -> Result<()> {
     for limit in [1_usize, 2] {
         support::with_database(|database| {
@@ -1020,7 +1077,7 @@ async fn a_deposit_address_refund_is_paid_from_that_networks_own_treasury() -> R
         // The customer's deposit address on chain 1 over the fixture treasury; the account then
         // moves chain 1 to another treasury, which supersedes that network with a forwarder over
         // the new one. Both are still credited.
-        let chains = [ChainContracts::of(&route_fixture())];
+        let chains = [ChainContracts::of(&route_fixture(), 1000)];
         let current_treasury = Address::repeat_byte(0x7c);
         let (issued, _) =
             deposit_addresses::create(pool, &merchant.account, &customer, &chains, None).await?;
@@ -2916,9 +2973,30 @@ fn test_router_on_with_limit(
     routes: Vec<RouteFile>,
     max_attached_pending_refunds: std::num::NonZeroU32,
 ) -> Router {
+    test_router_on_with_limits(
+        pool,
+        admin_key,
+        screening,
+        client_reads,
+        routes,
+        max_attached_pending_refunds,
+        1,
+    )
+}
+
+fn test_router_on_with_limits(
+    pool: &sqlx::PgPool,
+    admin_key: &SigningKey,
+    screening: Arc<dyn DestinationScreener>,
+    client_reads: Arc<ClientReadLimiter>,
+    routes: Vec<RouteFile>,
+    max_attached_pending_refunds: std::num::NonZeroU32,
+    max_refund_attachments_per_day: u32,
+) -> Router {
     let state = AppState {
         pool: pool.clone(),
         max_attached_pending_refunds,
+        max_refund_attachments_per_day,
         routes: Arc::new(topup::routes::RouteSet::new(routes).expect("routes load")),
         maintenance_keys: Vec::new(),
         admin_key: VerificationKey::from_base64(

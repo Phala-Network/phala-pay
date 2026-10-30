@@ -84,6 +84,8 @@ impl Status {
 pub struct ChainContracts {
     /// EVM chain identifier.
     pub chain_id: u64,
+    /// Attested per-chain cap, counting all historical issued addresses.
+    pub max_issued_addresses: u32,
     /// Forwarder factory, at the same address on every chain.
     pub factory: EvmAddress,
     /// Forwarder implementation, at the same address on every chain.
@@ -93,9 +95,10 @@ pub struct ChainContracts {
 impl ChainContracts {
     /// The contracts of `route`'s chain.
     #[must_use]
-    pub const fn of(route: &RouteFile) -> Self {
+    pub const fn of(route: &RouteFile, max_issued_addresses: u32) -> Self {
         Self {
             chain_id: route.chain.chain_id,
+            max_issued_addresses,
             factory: route.chain.contracts.forwarder_factory,
             implementation: route.chain.contracts.implementation,
         }
@@ -106,6 +109,7 @@ impl ChainContracts {
     pub const fn with_treasury(self, treasury: EvmAddress) -> Chain {
         Chain {
             chain_id: self.chain_id,
+            max_issued_addresses: self.max_issued_addresses,
             factory: self.factory,
             implementation: self.implementation,
             treasury,
@@ -119,6 +123,8 @@ impl ChainContracts {
 pub struct Chain {
     /// EVM chain identifier.
     pub chain_id: u64,
+    /// Attested per-chain cap, counting all historical issued addresses.
+    pub max_issued_addresses: u32,
     /// Forwarder factory, at the same address on every chain.
     pub factory: EvmAddress,
     /// Forwarder implementation, at the same address on every chain.
@@ -746,7 +752,13 @@ async fn keep_network(
     if exists {
         return Ok(());
     }
-    match crate::db::chain_reads::admit_address(transaction, chain.chain_id).await? {
+    match crate::db::chain_reads::admit_address(
+        transaction,
+        chain.chain_id,
+        chain.max_issued_addresses,
+    )
+    .await?
+    {
         crate::db::chain_reads::AddressAdmission::Admitted => {}
         crate::db::chain_reads::AddressAdmission::NotReady => {
             return Err(DepositAddressError::ChainUnavailable);
@@ -1184,7 +1196,13 @@ pub async fn sync_networks(
         if restored > 0 {
             continue;
         }
-        match crate::db::chain_reads::admit_address(transaction, chain.chain_id).await? {
+        match crate::db::chain_reads::admit_address(
+            transaction,
+            chain.chain_id,
+            chain.max_issued_addresses,
+        )
+        .await?
+        {
             crate::db::chain_reads::AddressAdmission::Admitted => {}
             crate::db::chain_reads::AddressAdmission::NotReady => {
                 return Err(DepositAddressError::ChainUnavailable);
@@ -1303,7 +1321,14 @@ pub(crate) async fn replace_networks(
             new_addresses.push(address.clone());
         }
     }
-    match crate::db::chain_reads::admit_addresses(transaction, chain.chain_id, ids.len()).await? {
+    match crate::db::chain_reads::admit_addresses(
+        transaction,
+        chain.chain_id,
+        ids.len(),
+        chain.max_issued_addresses,
+    )
+    .await?
+    {
         crate::db::chain_reads::AddressAdmission::Admitted => {}
         crate::db::chain_reads::AddressAdmission::NotReady => {
             return Err(DepositAddressError::ChainUnavailable);

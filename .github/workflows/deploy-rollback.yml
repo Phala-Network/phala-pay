@@ -99,4 +99,4 @@ jobs:
       - name: Published N-1 → N → N-1 → N chain read rollback drill
         if: env.ROLLBACK_MODE == 'rollback'
         timeout-minutes: 30
-        run: deploy/local/rollback-drill.sh "$PREVIOUS_IMAGE"
+        run: deploy/local/rollback-drill.sh "$PREVIOUS_IMAGE" "$RUNNER_TEMP/previous-topup.yaml"

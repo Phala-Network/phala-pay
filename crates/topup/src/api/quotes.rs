@@ -226,9 +226,12 @@ pub(crate) async fn create_quote(
         state.client_reads.key(),
         &merchant.account,
         &customer,
-        route,
-        &priced,
-        &metadata,
+        locks::Creation {
+            route,
+            max_issued_addresses: state.routes.max_issued_addresses(route.chain.chain_id),
+            priced: &priced,
+            metadata: &metadata,
+        },
     )
     .await
     .map_err(map_error)?;
