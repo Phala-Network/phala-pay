@@ -24,7 +24,7 @@ pub const COVERAGE_INTERVAL: Duration = Duration::from_secs(3_600);
 pub const CONTRACT_RECOVERY_INTERVAL: Duration = Duration::from_secs(60);
 /// Inclusive normal round limit.
 pub const COVERAGE_LIMIT: u64 = 3_000;
-/// Every sixth round catches up at this inclusive limit.
+/// Backlogs above the normal limit catch up at this inclusive limit.
 pub const CATCHUP_LIMIT: u64 = 19_200;
 /// Activity windows for single-provider discovery; dual coverage always includes every address.
 #[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize)]
@@ -381,13 +381,12 @@ fn same_transfer_evidence(existing: &db::Deposit, deposit: &db::NewDeposit) -> b
         && existing.tx_nonce == Some(deposit.tx_nonce)
 }
 
-/// One bounded coverage round. Every sixth hourly round uses the approved six-hour catch-up bound.
+/// One bounded coverage round; a backlog above the normal bound uses the catch-up limit.
 pub async fn coverage_once<R: ChainReader, V: ChainReader>(
     pool: &PgPool,
     read: &R,
     verify: &V,
     routes: &ChainRoutes,
-    round: u64,
 ) -> Result<ScanStats, ScannerError> {
     let chain = routes.chain.chain_id;
     let cursor = match chain_reads::coverage(pool, chain).await? {
@@ -397,7 +396,7 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
     let checkpoint = chain_reads::checkpoint(pool, chain)
         .await?
         .ok_or(ScannerError::Disagreement)?;
-    let limit = if round.is_multiple_of(6) {
+    let limit = if checkpoint.number.saturating_sub(cursor.number) > COVERAGE_LIMIT {
         CATCHUP_LIMIT
     } else {
         COVERAGE_LIMIT
@@ -406,11 +405,18 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
     if end < cursor.number {
         return Err(ScannerError::Disagreement);
     }
-    let (a, b) = tokio::join!(read.header(end), verify.header(end));
-    let successful = [a.as_ref().ok(), b.as_ref().ok()];
-    let contradicts = |hash| successful.iter().flatten().any(|header| header.0 != hash);
-    if (end == checkpoint.number && contradicts(checkpoint.hash))
-        || (end == cursor.number && contradicts(cursor.hash))
+    // The checkpoint loop already verifies this immutable boundary on both endpoints.
+    let (a, b) = if end == checkpoint.number {
+        let header = (checkpoint.hash, checkpoint.time);
+        (Ok(header), Ok(header))
+    } else {
+        tokio::join!(read.header(end), verify.header(end))
+    };
+    if end == cursor.number
+        && [a.as_ref().ok(), b.as_ref().ok()]
+            .iter()
+            .flatten()
+            .any(|header| header.0 != cursor.hash)
     {
         chain_reads::freeze(pool, chain, "finalized_checkpoint_conflict").await?;
         tracing::error!(
@@ -450,6 +456,12 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
         })
         .min()
     {
+        // Address history can lag even while the global cursor is caught up.
+        let limit = if end.saturating_sub(start) > COVERAGE_LIMIT {
+            CATCHUP_LIMIT
+        } else {
+            COVERAGE_LIMIT
+        };
         ranges.push(Range {
             addresses: lagging,
             from: start,
@@ -915,12 +927,9 @@ pub async fn coverage_round<R: ChainReader, V: ChainReader>(
     read: &R,
     verify: &V,
     routes: &ChainRoutes,
-    round: u64,
 ) -> Result<ScanStats, ScannerError> {
-    match coverage_once(pool, read, verify, routes, round).await {
-        Err(ScannerError::SnapshotChanged) => {
-            coverage_once(pool, read, verify, routes, round).await
-        }
+    match coverage_once(pool, read, verify, routes).await {
+        Err(ScannerError::SnapshotChanged) => coverage_once(pool, read, verify, routes).await,
         result => result,
     }
 }
@@ -978,17 +987,15 @@ pub async fn coverage_loop<R: ChainReader, V: ChainReader>(
     let mut interval =
         tokio::time::interval_at(tokio::time::Instant::now() + stagger, COVERAGE_INTERVAL);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut round = 0_u64;
     loop {
         tokio::select! { _ = cancellation.cancelled() => break, _ = interval.tick() => {} }
         if !ready() {
             monitor.check_in(false);
             continue;
         }
-        round = round.saturating_add(1);
         let result = tokio::select! {
             _ = cancellation.cancelled() => break,
-            result = coverage_round(pool,readers.0,readers.1,chain,round) => result,
+            result = coverage_round(pool,readers.0,readers.1,chain) => result,
         };
         monitor.check_in(result.is_ok());
         match result {

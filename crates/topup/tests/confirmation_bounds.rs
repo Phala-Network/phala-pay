@@ -313,7 +313,10 @@ where
 }
 #[tokio::test]
 async fn coverage_method_counts_match_normal_and_catchup_budget() -> Result<()> {
-    for (round, windows) in [(1, 1), (6, 7)] {
+    // Persisted lag selects catch-up, independently of the process's round count.
+    // Normal coverage reaches the checkpoint and reuses its header; catch-up needs
+    // both its intermediate end and the lagging addresses' common-boundary header.
+    for (checkpoint, windows, headers) in [(3_000, 1, 0), (40_000, 7, 2)] {
         with_database(|d| {
             Box::pin(async move {
                 let pool = &d.app_pool;
@@ -359,8 +362,8 @@ async fn coverage_method_counts_match_normal_and_catchup_budget() -> Result<()> 
                     pool,
                     1,
                     db::chain_reads::Boundary {
-                        number: 40000,
-                        hash: hash(40000),
+                        number: checkpoint,
+                        hash: hash(checkpoint),
                         time: f.log.block_time,
                     },
                 )
@@ -368,7 +371,7 @@ async fn coverage_method_counts_match_normal_and_catchup_budget() -> Result<()> 
                 let state = Rpc {
                     chain: 1,
                     methods: Arc::new([AtomicU64::new(0), AtomicU64::new(0)]),
-                    heads: Arc::new([AtomicU64::new(40000), AtomicU64::new(40000)]),
+                    heads: Arc::new([AtomicU64::new(checkpoint), AtomicU64::new(checkpoint)]),
                     checks: Arc::new(Mutex::new([Vec::new(), Vec::new()])),
                     clock: Arc::new(AtomicU64::new(0)),
                     head_time: 0,
@@ -398,16 +401,16 @@ async fn coverage_method_counts_match_normal_and_catchup_budget() -> Result<()> 
                     let chains = topup::scanner::chain_routes(
                         &RouteSet::new(vec![f.route.clone()]).map_err(anyhow::Error::msg)?,
                     );
-                    topup::scanner::coverage_once(pool, &read, &verify, &chains[0], round).await?;
-                    // RPC.md's fixed coverage line: two boundary headers and two recipient
-                    // sets, each split into ceil(L/3000) windows with one Transfer query and
-                    // one factory query. This omitted unmarked deposit additionally needs one
-                    // receipt, header and transaction per endpoint.
-                    let expected = 2 + 2 * 2 * windows + 3;
+                    topup::scanner::coverage_once(pool, &read, &verify, &chains[0]).await?;
+                    // Two recipient sets, each split into ceil(L/3000) windows with one
+                    // Transfer and one factory query. Headers use the actual boundaries;
+                    // the retained RPC.md allowance is two. This omitted unmarked deposit
+                    // additionally needs one receipt, header and transaction per endpoint.
+                    let expected = headers + 2 * 2 * windows + 3;
                     for (endpoint, count) in state.methods.iter().enumerate() {
                         ensure!(
                             count.load(Ordering::SeqCst) == expected,
-                            "round {round} endpoint {endpoint}: expected {expected}, got {}",
+                            "checkpoint {checkpoint} endpoint {endpoint}: expected {expected}, got {}",
                             count.load(Ordering::SeqCst)
                         );
                     }

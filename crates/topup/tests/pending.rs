@@ -115,7 +115,7 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
     };
     let reader = FinalizedReader::new(Arc::new(EvmClient::new(&anvil.rpc_url)?));
     topup::checkpoint::advance(pool, CHAIN_ID, &reader, &reader).await?;
-    coverage_once(pool, &reader, &reader, &chain_routes, 1).await?;
+    coverage_once(pool, &reader, &reader, &chain_routes).await?;
 
     let lock_address = api.lock("checkout-1", anvil).await?;
     ensure!(
@@ -215,7 +215,7 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
     );
     anvil.mine(FINALITY_LAG)?;
     topup::checkpoint::advance(pool, CHAIN_ID, &reader, &reader).await?;
-    let finalized = coverage_once(pool, &reader, &reader, &chain_routes, 1).await?;
+    let finalized = coverage_once(pool, &reader, &reader, &chain_routes).await?;
     ensure!(
         finalized.inserted == 1,
         "unexpected finalized scan {finalized:?}"
@@ -271,7 +271,7 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
     transfer(&anvil.rpc_url, token, underpaid, 50)?;
     anvil.mine(FINALITY_LAG)?;
     topup::checkpoint::advance(pool, CHAIN_ID, &reader, &reader).await?;
-    coverage_once(pool, &reader, &reader, &chain_routes, 1).await?;
+    coverage_once(pool, &reader, &reader, &chain_routes).await?;
     transfer(&anvil.rpc_url, token, underpaid, 100)?;
     // Dust first, then the exact amount, both still pending.
     let dusted = api.lock("checkout-3", anvil).await?;
@@ -299,7 +299,7 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
     // qualifying one.
     anvil.mine(FINALITY_LAG)?;
     topup::checkpoint::advance(pool, CHAIN_ID, &reader, &reader).await?;
-    coverage_once(pool, &reader, &reader, &chain_routes, 1).await?;
+    coverage_once(pool, &reader, &reader, &chain_routes).await?;
     let underpayment: Uuid =
         sqlx::query_scalar("SELECT id FROM deposits WHERE address_id = $1 AND amount_atomic = 50")
             .bind(api.address_id(pool, "checkout-2").await?)
@@ -366,7 +366,7 @@ async fn run_scenario(database: &TestDatabase, anvil: &Anvil) -> Result<()> {
     transfer(&anvil.rpc_url, token, cancelled, 100)?;
     anvil.mine(FINALITY_LAG)?;
     topup::checkpoint::advance(pool, CHAIN_ID, &reader, &reader).await?;
-    coverage_once(pool, &reader, &reader, &chain_routes, 1).await?;
+    coverage_once(pool, &reader, &reader, &chain_routes).await?;
     topup::locks::expire_once(pool, &route_set).await?;
     let lock = api.quote("checkout-4").await?;
     ensure!(lock["status"] == "canceled", "unexpected {lock}");

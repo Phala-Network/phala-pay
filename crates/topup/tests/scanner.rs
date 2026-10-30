@@ -93,7 +93,12 @@ impl ChainReader for Reader {
     }
     async fn finalized_header(&self) -> Result<(FinalizedHead, B256), ChainError> {
         let head = self.finalized_head().await?;
-        Ok((head, hash(head.number)))
+        let hash = if self.forged_header || self.forged_at == Some(head.number) {
+            B256::ZERO
+        } else {
+            hash(head.number)
+        };
+        Ok((head, hash))
     }
     async fn latest_header(&self) -> Result<FinalizedHead, ChainError> {
         self.finalized_head().await
@@ -334,7 +339,7 @@ async fn new_issuance_ahead_of_global_coverage_is_scanned_on_the_next_round() ->
             reader.receipt = Some(post.clone());
         }
         topup::checkpoint::advance(&d.app_pool, 1, &read, &verify).await?;
-        let stats = scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
+        let stats = scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
         ensure!(stats.inserted == 1, "new issuance skipped its first post-start transfer: {stats:?}");
         ensure!(marker(d, address.id).await? == Some(200));
         let deposits: Vec<(i64, bool)> = sqlx::query_as(
@@ -375,7 +380,7 @@ async fn custody_new_token_route_includes_transfers_recorded_before_route_activa
                 reader.logs = vec![log.clone()];
                 reader.receipt = Some(log.clone());
             }
-            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
             let before: (String, Option<String>, bool) = sqlx::query_as(
                 "SELECT state,route,dual_verified_at IS NOT NULL FROM deposits WHERE address_id=$1",
             )
@@ -646,16 +651,17 @@ async fn compat_cursor_rebases_and_commits_only_the_common_dual_boundary() -> Re
         Box::pin(async move {
             let address = address(d, 100).await?;
             db::initialize_cursor(&d.app_pool, 1, 10000, time(10000)).await?;
-            let read = Reader::new(4000);
-            let mut verify = Reader::new(4000);
+            let read = Reader::new(40000);
+            let mut verify = Reader::new(40000);
             scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
             ensure!(
                 compat(d).await? == (99, Some(time(99))),
                 "old N-1 cursor was not rebased"
             );
-            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
-            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 2).await?;
-            ensure!(compat(d).await? == (4000, Some(time(4000))));
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
+            ensure!(compat(d).await? == (40000, Some(time(40000))));
             let mut reissue = d.app_pool.begin().await?;
             sqlx::query("UPDATE addresses SET created_block=10 WHERE id=$1")
                 .bind(address.id)
@@ -671,32 +677,32 @@ async fn compat_cursor_rebases_and_commits_only_the_common_dual_boundary() -> Re
                 "reissue did not atomically clear negative evidence"
             );
             ensure!(
-                compat(d).await? == (4000, Some(time(4000))),
+                compat(d).await? == (40000, Some(time(40000))),
                 "uncommitted reissue leaked"
             );
             reissue.commit().await?;
             ensure!(compat(d).await? == (9, None));
             // The partial backfill's common header must agree before any markers commit.
-            verify.forged_at = Some(3009);
+            verify.forged_at = Some(19209);
             ensure!(
-                scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 3)
+                scanner::coverage_once(&d.app_pool, &read, &verify, &chain())
                     .await
                     .is_err()
             );
             ensure!(marker(d, address.id).await?.is_none());
             ensure!(compat(d).await? == (9, None));
             verify.forged_at = None;
-            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 3).await?;
-            ensure!(marker(d, address.id).await? == Some(3009));
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
+            ensure!(marker(d, address.id).await? == Some(19209));
             ensure!(
                 db::chain_reads::coverage(&d.app_pool, 1)
                     .await?
                     .unwrap()
                     .number
-                    == 4000
+                    == 40000
             );
             ensure!(
-                compat(d).await? == (3009, Some(time(3009))),
+                compat(d).await? == (19209, Some(time(19209))),
                 "partial history authorized the distant chain boundary"
             );
             // N-1 may move its cursor while N is rolled back; startup must repair it again.
@@ -707,11 +713,12 @@ async fn compat_cursor_rebases_and_commits_only_the_common_dual_boundary() -> Re
             .await?;
             scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
             ensure!(
-                compat(d).await? == (3009, None),
+                compat(d).await? == (19209, None),
                 "existing coverage did not repair an N-1 cursor"
             );
-            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 4).await?;
-            ensure!(compat(d).await? == (4000, Some(time(4000))));
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
+            ensure!(compat(d).await? == (40000, Some(time(40000))));
             Ok(())
         })
     })
@@ -892,7 +899,7 @@ async fn ordinary_coverage_uses_the_published_checkpoint_without_advancing_it() 
                 *read.finalized_reads.lock().unwrap(),
                 *verify.finalized_reads.lock().unwrap(),
             );
-            let stats = scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 6).await?;
+            let stats = scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
             ensure!(stats.finalized == 4_000 && stats.cursor == 4_000);
             ensure!(
                 reads
@@ -902,7 +909,7 @@ async fn ordinary_coverage_uses_the_published_checkpoint_without_advancing_it() 
                     )
             );
             topup::checkpoint::advance(&d.app_pool, 1, &read, &verify).await?;
-            let stats = scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 12).await?;
+            let stats = scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
             ensure!(stats.finalized == 10_000 && stats.cursor == 10_000);
             Ok(())
         })
@@ -923,12 +930,12 @@ async fn first_round_caps_future_creation_at_the_agreed_checkpoint() -> Result<(
                 ensure!(reader.header_reads.lock().unwrap().contains(&100));
                 ensure!(!reader.header_reads.lock().unwrap().contains(&9999));
             }
-            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
             ensure!(marker(d, address.id).await?.is_none());
             read.head = 10100;
             verify.head = 10100;
             topup::checkpoint::advance(&d.app_pool, 1, &read, &verify).await?;
-            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 6).await?;
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
             ensure!(
                 marker(d, address.id).await? == Some(10100),
                 "future address coverage stalled"
@@ -944,16 +951,16 @@ async fn canonical_records_beyond_the_round_are_deferred_then_updated() -> Resul
     with_database(|d| {
         Box::pin(async move {
             let address = address(d, 100).await?;
-            let mut read = Reader::new(10000);
-            let mut verify = Reader::new(10000);
+            let mut read = Reader::new(40_000);
+            let mut verify = Reader::new(40_000);
             scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
             let scan_address = db::list_scan_addresses(&d.app_pool, 1).await?.remove(0);
             let old = transfer(&address, 100);
             db::commit_confirmed_scan(&d.app_pool, 1, &[provisional(old, &scan_address)], 100)
                 .await?;
-            read.receipt = Some(transfer(&address, 4000));
+            read.receipt = Some(transfer(&address, 25000));
             verify.receipt = read.receipt.clone();
-            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
             let row: (i64, bool) =
                 sqlx::query_as("SELECT block_number,dual_verified_at IS NOT NULL FROM deposits")
                     .fetch_one(&d.app_pool)
@@ -964,13 +971,16 @@ async fn canonical_records_beyond_the_round_are_deferred_then_updated() -> Resul
             );
             // The stored block is now below the next range. Rediscovery in that range
             // admits the identity as a union candidate; coverage must not rescan old rows.
-            read.logs.push(transfer(&address, 4000));
-            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 2).await?;
+            read.logs.push(transfer(&address, 25000));
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
             let row: (i64, bool) =
                 sqlx::query_as("SELECT block_number,dual_verified_at IS NOT NULL FROM deposits")
                     .fetch_one(&d.app_pool)
                     .await?;
-            ensure!(row == (4000, true), "existing identity kept stale evidence");
+            ensure!(
+                row == (25000, true),
+                "existing identity kept stale evidence"
+            );
             Ok(())
         })
     })
@@ -989,7 +999,7 @@ async fn coverage_requeries_fast_inserts_after_taking_the_chain_lock() -> Result
         let scan_address=db::list_scan_addresses(&d.app_pool,1).await?.remove(0);
         let stale=provisional(transfer(&address,101),&scan_address);
         let chain=chain();
-        let coverage=scanner::coverage_once(&d.app_pool,&read,&verify,&chain,1);
+        let coverage=scanner::coverage_once(&d.app_pool,&read,&verify,&chain);
         let fast=async {
             started.notified().await;
             let mut tx=d.app_pool.begin().await?;
@@ -1015,7 +1025,7 @@ async fn coverage_requeries_fast_inserts_after_taking_the_chain_lock() -> Result
         ensure!(row==(101,false), "invalidated round changed the concurrent fast insert");
         ensure!(marker(d,address.id).await?.is_none(), "invalidated round published coverage");
         read.logs_gate = None;
-        scanner::coverage_once(&d.app_pool,&read,&verify,&chain,2).await?;
+        scanner::coverage_once(&d.app_pool,&read,&verify,&chain).await?;
         let row:(i64,bool)=sqlx::query_as("SELECT block_number,dual_verified_at IS NOT NULL FROM deposits").fetch_one(&d.app_pool).await?;
         ensure!(row==(100,true), "concurrent fast insertion escaped dual verification");
         Ok(())
@@ -1071,7 +1081,7 @@ async fn reversal_during_coverage_rpc_discards_the_snapshot_without_reinserting(
                 finality_verify,
             );
             let chain = chain();
-            let coverage = scanner::coverage_once(&d.app_pool, &read, &verify, &chain, 1);
+            let coverage = scanner::coverage_once(&d.app_pool, &read, &verify, &chain);
             let reversal = async {
                 started.notified().await;
                 let result = watch.watch_once(1).await;
@@ -1119,7 +1129,7 @@ async fn reversal_during_coverage_rpc_discards_the_snapshot_without_reinserting(
             verify.receipt = None;
             read.logs.clear();
             read.logs.push(transfer(&address, 100));
-            scanner::coverage_once(&d.app_pool, &read, &verify, &chain, 2).await?;
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain).await?;
             ensure!(
                 *read.receipt_reads.lock().unwrap() == 2
                     && *verify.receipt_reads.lock().unwrap() == 2,
@@ -1222,7 +1232,7 @@ async fn coverage_with_transient_reversed_history(changed: Option<&'static str>)
                 d.app_pool.clone(), Arc::new(routes()), 1, finality_read, finality_verify,
             );
             let chain = chain();
-            let coverage = scanner::coverage_once(&d.app_pool, &read, &verify, &chain, 1);
+            let coverage = scanner::coverage_once(&d.app_pool, &read, &verify, &chain);
             let concurrent = async {
                 started.notified().await;
                 let result = async {
@@ -1292,7 +1302,7 @@ async fn changed_address_snapshot_retries_once_immediately_with_fresh_logs() -> 
                 scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
                 read.logs_gate = Some((started.clone(), resume.clone()));
                 let chain = chain();
-                let coverage = scanner::coverage_round(&d.app_pool, &read, &verify, &chain, 1);
+                let coverage = scanner::coverage_round(&d.app_pool, &read, &verify, &chain);
                 let issuance = async {
                     for attempt in 0..2 {
                         started.notified().await;
@@ -1376,7 +1386,7 @@ async fn slow_rpc_does_not_hold_chain_lock_during_initialization_or_coverage() -
                     if initializing {
                         scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
                     } else {
-                        scanner::coverage_once(&d.app_pool, &read, &verify, &chain, 1).await?;
+                        scanner::coverage_once(&d.app_pool, &read, &verify, &chain).await?;
                     }
                     Ok::<_, anyhow::Error>(())
                 };
@@ -1453,7 +1463,7 @@ async fn changed_provisional_recipient_reverses_before_successor_coverage() -> R
                         .execute(&d.app_pool)
                         .await?;
                     ensure!(
-                        scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1)
+                        scanner::coverage_once(&d.app_pool, &read, &verify, &chain())
                             .await
                             .is_err()
                     );
@@ -1468,7 +1478,7 @@ async fn changed_provisional_recipient_reverses_before_successor_coverage() -> R
                     );
                     return Ok(());
                 }
-                scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
+                scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
                 let id = topup_core::identity::deposit_id(1, old.tx_hash, 0);
                 let original_row = db::get_deposit(&d.app_pool, id).await?.unwrap();
                 ensure!(original_row.state == topup_core::deposit::DepositState::Reversed);
@@ -1485,7 +1495,7 @@ async fn changed_provisional_recipient_reverses_before_successor_coverage() -> R
                 let mut verify = Reader::new(201);
                 read.receipt = Some(canonical.clone());
                 verify.receipt = Some(canonical);
-                scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 2).await?;
+                scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
                 let marked: bool = sqlx::query_scalar(
                     "SELECT dual_verified_at IS NOT NULL FROM deposits WHERE id=$1",
                 )
@@ -1543,7 +1553,7 @@ async fn recipient_successor_and_coverage_commit_atomically_before_expiry_or_can
                 let resume = Arc::new(Notify::new());
                 read.receipt_gate = Some((started.clone(),resume.clone()));
                 let chain = chain();
-                let coverage = scanner::coverage_once(&d.app_pool,&read,&verify,&chain,1);
+                let coverage = scanner::coverage_once(&d.app_pool,&read,&verify,&chain);
                 let during_rpc = async {
                     started.notified().await;
                     let closed = topup::locks::expire_once(&d.app_pool,&routes()).await;
@@ -1607,7 +1617,7 @@ async fn n_minus_one_unmarked_reversed_revision_does_not_freeze_its_successor() 
                 read.logs.push(canonical.clone());
                 read.receipt = Some(canonical.clone());
                 verify.receipt = Some(canonical);
-                scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
+                scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
                 let frozen: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM reconciliation_blocks)")
                     .fetch_one(&d.app_pool).await?;
                 ensure!(!frozen, "N-1 reversed history froze the current successor");
@@ -1630,11 +1640,11 @@ async fn first_scan_includes_creation_and_all_boundaries_end_at_scanned_e() -> R
     with_database(|d| {
         Box::pin(async move {
             let address = address(d, 100).await?;
-            let read = Reader::new(10000);
-            let verify = Reader::new(10000);
+            let read = Reader::new(30000);
+            let verify = Reader::new(30000);
             let start = scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
             ensure!(start.number == 99);
-            let pending: Vec<_> = [3099, 3100]
+            let pending: Vec<_> = [19299, 19300]
                 .into_iter()
                 .map(|number| {
                     let log = transfer(&address, number);
@@ -1653,28 +1663,28 @@ async fn first_scan_includes_creation_and_all_boundaries_end_at_scanned_e() -> R
                     }
                 })
                 .collect();
-            db::commit_head_scan(&d.app_pool, 1, 100, 10000, &pending).await?;
-            let result = scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
-            ensure!(result.cursor == 3099 && result.finalized == 10000);
+            db::commit_head_scan(&d.app_pool, 1, 100, 30000, &pending).await?;
+            let result = scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
+            ensure!(result.cursor == 19299 && result.finalized == 30000);
             let coverage = db::chain_reads::coverage(&d.app_pool, 1).await?.unwrap();
             ensure!(
-                coverage.number == 3099
-                    && coverage.hash == hash(3099)
-                    && coverage.time == time(3099)
+                coverage.number == 19299
+                    && coverage.hash == hash(19299)
+                    && coverage.time == time(19299)
             );
             let compat: (i64, DateTime<Utc>) = sqlx::query_as(
                 "SELECT scanned_block,scanned_block_time FROM cursors WHERE chain_id=1",
             )
             .fetch_one(&d.app_pool)
             .await?;
-            ensure!(compat == (3099, time(3099)));
-            ensure!(marker(d, address.id).await? == Some(3099));
+            ensure!(compat == (19299, time(19299)));
+            ensure!(marker(d, address.id).await? == Some(19299));
             let pending_blocks: Vec<i64> = sqlx::query_scalar(
                 "SELECT block_number FROM pending_transfers ORDER BY block_number",
             )
             .fetch_all(&d.app_pool)
             .await?;
-            ensure!(pending_blocks == vec![3100]);
+            ensure!(pending_blocks == vec![19300]);
             for reader in [&read, &verify] {
                 ensure!(
                     reader
@@ -1682,7 +1692,7 @@ async fn first_scan_includes_creation_and_all_boundaries_end_at_scanned_e() -> R
                         .lock()
                         .unwrap()
                         .iter()
-                        .any(|(_, from, to)| *from == 100 && *to == 3099)
+                        .any(|(_, from, to)| *from == 100 && *to == 19299)
                 );
             }
             Ok(())
@@ -1744,13 +1754,13 @@ async fn union_records_an_omitted_log_once_and_marks_complete_evidence() -> Resu
             verify.logs.push(log);
             scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
             ensure!(
-                scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1)
+                scanner::coverage_once(&d.app_pool, &read, &verify, &chain())
                     .await?
                     .inserted
                     == 1
             );
             ensure!(
-                scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 2)
+                scanner::coverage_once(&d.app_pool, &read, &verify, &chain())
                     .await?
                     .inserted
                     == 0
@@ -1787,7 +1797,7 @@ async fn request_error_or_evidence_disagreement_never_commits_coverage() -> Resu
                     time(100)
                 };
                 ensure!(
-                    scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1)
+                    scanner::coverage_once(&d.app_pool, &read, &verify, &chain())
                         .await
                         .is_err()
                 );
@@ -1837,7 +1847,7 @@ async fn fast_and_n_minus_one_rows_are_reverified_even_if_both_logs_omit_them() 
                 .execute(&d.owner_pool)
                 .await?;
             if omitted { read.logs.clear(); }
-            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
             let row: (i64, DateTime<Utc>, String, bool) = sqlx::query_as(
                 "SELECT block_number,block_time,tx_nonce::text,dual_verified_at IS NOT NULL FROM deposits",
             )
@@ -1871,8 +1881,8 @@ async fn coverage_leaves_out_of_range_s_and_l_deposits_to_their_claim_schedule()
             let before: (Option<DateTime<Utc>>, Option<DateTime<Utc>>, DateTime<Utc>) = sqlx::query_as(
                 "SELECT first_unresolved_at,first_slow_at,finality_check_at FROM deposits")
                 .fetch_one(&d.app_pool).await?;
-            for round in [1, 2] {
-                scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), round).await?;
+            for _ in 0..2 {
+                scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
             }
             for endpoint in [&read, &verify] {
                 ensure!(*endpoint.receipt_reads.lock().unwrap() == 0, "coverage read an out-of-range {lane} deposit");
@@ -1902,7 +1912,7 @@ async fn progressed_unverified_mismatch_freezes_and_prevents_coverage_advance() 
         scanner::fast_once(&d.app_pool,&read,&fast_chain, Default::default()).await?;
         sqlx::query("UPDATE deposits SET state='rejected',reason='out_of_bounds',block_time=to_timestamp(101)").execute(&d.owner_pool).await?;
         read.logs.clear();
-        ensure!(scanner::coverage_once(&d.app_pool,&read,&verify,&chain(),1).await.is_err());
+        ensure!(scanner::coverage_once(&d.app_pool,&read,&verify,&chain()).await.is_err());
         let check:String=sqlx::query_scalar("SELECT check_name FROM reconciliation_blocks WHERE chain_id=1").fetch_one(&d.app_pool).await?;
         ensure!(check=="unverified_evidence_mismatch");
         ensure!(db::chain_reads::coverage(&d.app_pool,1).await?.unwrap().number==99);
@@ -1962,7 +1972,7 @@ async fn marked_reversed_revision_cannot_hide_an_unverified_current_revision() -
                 .execute(&d.owner_pool)
                 .await?;
             ensure!(
-                scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1)
+                scanner::coverage_once(&d.app_pool, &read, &verify, &chain())
                     .await
                     .is_err()
             );
@@ -1987,97 +1997,199 @@ async fn marked_reversed_revision_cannot_hide_an_unverified_current_revision() -
 #[tokio::test]
 async fn lowered_creation_clears_marker_and_backfills_before_quote_expiry() -> Result<()> {
     with_database(|d|Box::pin(async move {
-        let address=address(d,100).await?;let read=Reader::new(4000);let verify=Reader::new(4000);
+        let address=address(d,100).await?;let read=Reader::new(40000);let verify=Reader::new(40000);
         scanner::initialize_chain(&d.app_pool,1,&read,&verify).await?;
-        scanner::coverage_once(&d.app_pool,&read,&verify,&chain(),1).await?;
-        scanner::coverage_once(&d.app_pool,&read,&verify,&chain(),2).await?;
+        scanner::coverage_once(&d.app_pool,&read,&verify,&chain()).await?;
+        scanner::coverage_once(&d.app_pool,&read,&verify,&chain()).await?;
+        scanner::coverage_once(&d.app_pool,&read,&verify,&chain()).await?;
         sqlx::query("UPDATE addresses SET created_block=10 WHERE id=$1").bind(address.id).execute(&d.app_pool).await?;
         ensure!(marker(d,address.id).await?.is_none());
         sqlx::query("UPDATE quotes SET status='open',closed_at=NULL,exposure_reserved=true,expires_at=to_timestamp(200) WHERE id=(SELECT quote_id FROM addresses WHERE id=$1)").bind(address.id).execute(&d.app_pool).await?;
         ensure!(topup::locks::expire_once(&d.app_pool,&routes()).await?==0);
-        let partial=scanner::coverage_once(&d.app_pool,&read,&verify,&chain(),3).await?;
-        ensure!(partial.backfilled_addresses==0 && marker(d,address.id).await?==Some(3009));
+        let partial=scanner::coverage_once(&d.app_pool,&read,&verify,&chain()).await?;
+        ensure!(partial.backfilled_addresses==0 && marker(d,address.id).await?==Some(19209));
         ensure!(topup::locks::expire_once(&d.app_pool,&routes()).await?==0);
-        scanner::coverage_once(&d.app_pool,&read,&verify,&chain(),4).await?;
-        ensure!(marker(d,address.id).await?==Some(4000));
+        scanner::coverage_once(&d.app_pool,&read,&verify,&chain()).await?;
+        scanner::coverage_once(&d.app_pool,&read,&verify,&chain()).await?;
+        ensure!(marker(d,address.id).await?==Some(40000));
         ensure!(topup::locks::expire_once(&d.app_pool,&routes()).await?==1);
-        ensure!(read.requests.lock().unwrap().iter().any(|(_,from,to)|*from==10 && *to==3009));
-        ensure!(verify.requests.lock().unwrap().iter().any(|(_,from,to)|*from==10 && *to==3009));
-        Ok(())
-    })).await
-}
-
-async fn assert_coverage_boundary_conflict(
-    stored_coverage_conflict: bool,
-    forged_read: bool,
-    forged_verify: bool,
-    peer_error: bool,
-) -> Result<()> {
-    with_database(|d| Box::pin(async move {
-        let mut read = Reader::new(100);
-        let mut verify = Reader::new(100);
-        scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
-        let address = address(d, 100).await?;
-        if stored_coverage_conflict {
-            // Keep distinct checkpoint and coverage hashes at the same height. When both
-            // endpoints return the forged hash, only the coverage guard can catch it.
-            sqlx::query("UPDATE chain_coverage SET through_block=100,through_hash=$1,through_time=$2 WHERE chain_id=1")
-                .bind(format!("{:#x}", hash(100))).bind(time(100)).execute(&d.app_pool).await?;
-            sqlx::query("UPDATE chain_checkpoints SET block_hash=$1 WHERE chain_id=1")
-                .bind(format!("{:#x}", B256::ZERO)).execute(&d.app_pool).await?;
-        }
-        if !stored_coverage_conflict {
-            // Keep coverage below the checkpoint, so this fixture independently proves
-            // the checkpoint guard rather than also triggering the coverage guard.
-            sqlx::query("UPDATE chain_coverage SET through_block=99,through_hash=$1,through_time=$2 WHERE chain_id=1")
-                .bind(format!("{:#x}", hash(99))).bind(time(99)).execute(&d.app_pool).await?;
-            sqlx::query("UPDATE cursors SET scanned_block=99,scanned_block_time=$1 WHERE chain_id=1")
-                .bind(time(99)).execute(&d.app_pool).await?;
-        }
-        let before = db::chain_reads::coverage(&d.app_pool, 1).await?;
-        let cursor: (i64, Option<DateTime<Utc>>) = sqlx::query_as("SELECT scanned_block,scanned_block_time FROM cursors WHERE chain_id=1").fetch_one(&d.app_pool).await?;
-        let marker_before = marker(d, address.id).await?;
-        sqlx::query("UPDATE quotes SET status='open',closed_at=NULL,exposure_reserved=true,expires_at=to_timestamp(100) WHERE id=(SELECT quote_id FROM addresses WHERE id=$1)").bind(address.id).execute(&d.app_pool).await?;
-        read.forged_at = forged_read.then_some(100);
-        verify.forged_at = forged_verify.then_some(100);
-        read.header_error = peer_error && !forged_read;
-        verify.header_error = peer_error && !forged_verify;
-        ensure!(matches!(scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await, Err(scanner::ScannerError::Disagreement)));
-        let reason: String = sqlx::query_scalar("SELECT check_name FROM reconciliation_blocks WHERE chain_id=1").fetch_one(&d.app_pool).await?;
-        ensure!(reason == "finalized_checkpoint_conflict");
-        ensure!(db::chain_reads::coverage(&d.app_pool, 1).await? == before);
-        let after: (i64, Option<DateTime<Utc>>) = sqlx::query_as("SELECT scanned_block,scanned_block_time FROM cursors WHERE chain_id=1").fetch_one(&d.app_pool).await?;
-        ensure!(after == cursor && marker(d, address.id).await? == marker_before);
-        ensure!(read.requests.lock().unwrap().is_empty() && verify.requests.lock().unwrap().is_empty(), "conflict must freeze before reading logs");
-        ensure!(topup::locks::expire_once(&d.app_pool, &routes()).await? == 0);
-        let reservation: (String, bool) = sqlx::query_as("SELECT status,exposure_reserved FROM quotes WHERE id=(SELECT quote_id FROM addresses WHERE id=$1)").bind(address.id).fetch_one(&d.app_pool).await?;
-        ensure!(reservation == ("open".to_owned(), true));
+        ensure!(read.requests.lock().unwrap().iter().any(|(_,from,to)|*from==10 && *to==19209));
+        ensure!(verify.requests.lock().unwrap().iter().any(|(_,from,to)|*from==10 && *to==19209));
         Ok(())
     })).await
 }
 
 #[tokio::test]
-async fn dual_agreed_coverage_boundary_conflict_freezes_before_any_publication() -> Result<()> {
-    for stored_coverage_conflict in [false, true] {
-        assert_coverage_boundary_conflict(stored_coverage_conflict, true, true, false).await?;
-    }
-    Ok(())
+async fn stored_coverage_conflict_with_checkpoint_freezes_before_publication() -> Result<()> {
+    with_database(|d| {
+        Box::pin(async move {
+            let read = Reader::new(100);
+            let verify = Reader::new(100);
+            scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+            let address = address(d, 100).await?;
+            sqlx::query("UPDATE chain_coverage SET through_hash=$1 WHERE chain_id=1")
+                .bind(format!("{:#x}", B256::ZERO))
+                .execute(&d.owner_pool)
+                .await?;
+            let before = db::chain_reads::coverage(&d.app_pool, 1).await?;
+            ensure!(matches!(
+                scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await,
+                Err(scanner::ScannerError::Disagreement)
+            ));
+            ensure!(db::chain_reads::coverage(&d.app_pool, 1).await? == before);
+            ensure!(marker(d, address.id).await?.is_none());
+            ensure!(read.requests.lock().unwrap().is_empty());
+            ensure!(verify.requests.lock().unwrap().is_empty());
+            ensure!(topup::reconciler::chain_is_blocked(&d.app_pool, 1).await?);
+            Ok(())
+        })
+    })
+    .await
 }
 
 #[tokio::test]
-async fn single_endpoint_coverage_boundary_conflict_freezes_before_disagreement() -> Result<()> {
-    for stored_coverage_conflict in [false, true] {
-        for (forged_read, forged_verify) in [(true, false), (false, true)] {
-            assert_coverage_boundary_conflict(
-                stored_coverage_conflict,
-                forged_read,
-                forged_verify,
-                false,
-            )
-            .await?;
-        }
-    }
-    Ok(())
+async fn checkpoint_pins_the_ahead_endpoint_and_reuses_equal_height_headers() -> Result<()> {
+    with_database(|d| {
+        Box::pin(async move {
+            for (chain, a, b) in [(1, 100, 90), (2, 90, 100), (3, 100, 100)] {
+                let read = Reader::new(a);
+                let verify = Reader::new(b);
+                let boundary =
+                    topup::checkpoint::advance(&d.app_pool, chain, &read, &verify).await?;
+                ensure!(boundary.number == a.min(b) && boundary.hash == hash(a.min(b)));
+                ensure!(boundary.time == time(a.min(b)));
+                ensure!(*read.finalized_reads.lock().unwrap() == 1);
+                ensure!(*verify.finalized_reads.lock().unwrap() == 1);
+                ensure!(*read.header_reads.lock().unwrap() == if a > b { vec![b] } else { vec![] });
+                ensure!(
+                    *verify.header_reads.lock().unwrap() == if b > a { vec![a] } else { vec![] }
+                );
+            }
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn pinned_finalized_hash_conflict_freezes_in_either_lag_direction() -> Result<()> {
+    with_database(|d| {
+        Box::pin(async move {
+            for (chain, a, b) in [(1, 100, 90), (2, 90, 100), (3, 100, 100)] {
+                let mut read = Reader::new(a);
+                let mut verify = Reader::new(b);
+                if a > b {
+                    read.forged_at = Some(b);
+                } else {
+                    verify.forged_at = Some(a);
+                }
+                ensure!(matches!(
+                    topup::checkpoint::advance(&d.app_pool, chain, &read, &verify).await,
+                    Err(scanner::ScannerError::Disagreement)
+                ));
+                ensure!(
+                    db::chain_reads::checkpoint(&d.app_pool, chain)
+                        .await?
+                        .is_none()
+                );
+                ensure!(topup::reconciler::chain_is_blocked(&d.app_pool, chain).await?);
+            }
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn coverage_uses_durable_lag_after_restart_and_reuses_the_checkpoint_header() -> Result<()> {
+    with_database(|d| {
+        Box::pin(async move {
+            address(d, 100).await?;
+            let read = Reader::new(40_000);
+            let verify = Reader::new(40_000);
+            scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+            let first = scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
+            ensure!(first.cursor == 19_299 && first.work_remaining);
+            // New reader instances model a process restart; durable lag still selects catch-up.
+            let read = Reader::new(40_000);
+            let verify = Reader::new(40_000);
+            let second = scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
+            ensure!(second.cursor == 38_499 && second.work_remaining);
+            for endpoint in [&read, &verify] {
+                ensure!(*endpoint.header_reads.lock().unwrap() == vec![38_499]);
+                endpoint.header_reads.lock().unwrap().clear();
+            }
+            let last = scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
+            ensure!(last.cursor == 40_000 && !last.work_remaining);
+            for endpoint in [&read, &verify] {
+                ensure!(
+                    endpoint.header_reads.lock().unwrap().is_empty(),
+                    "reread stored checkpoint"
+                );
+            }
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn caught_up_cursor_does_not_throttle_reissued_address_catch_up() -> Result<()> {
+    with_database(|d| {
+        Box::pin(async move {
+            let read = Reader::new(50_000);
+            let verify = Reader::new(50_000);
+            scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+            let address = address(d, 40_000).await?;
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
+            sqlx::query("UPDATE addresses SET created_block=100 WHERE id=$1")
+                .bind(address.id)
+                .execute(&d.app_pool)
+                .await?;
+            for endpoint in [&read, &verify] {
+                endpoint.requests.lock().unwrap().clear();
+            }
+            let stats = scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
+            ensure!(stats.cursor == 50_000 && marker(d, address.id).await? == Some(19_299));
+            ensure!(compat(d).await? == (19_299, Some(time(19_299))));
+            for endpoint in [&read, &verify] {
+                ensure!(
+                    *endpoint.requests.lock().unwrap()
+                        == vec![(vec![address.address], 100, 19_299)]
+                );
+            }
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn intermediate_coverage_header_disagreement_does_not_commit() -> Result<()> {
+    with_database(|d| {
+        Box::pin(async move {
+            let address = address(d, 100).await?;
+            let read = Reader::new(40_000);
+            let mut verify = Reader::new(40_000);
+            scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+            verify.forged_at = Some(19_299);
+            ensure!(matches!(
+                scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await,
+                Err(scanner::ScannerError::Disagreement)
+            ));
+            ensure!(
+                db::chain_reads::coverage(&d.app_pool, 1)
+                    .await?
+                    .unwrap()
+                    .number
+                    == 99
+            );
+            ensure!(marker(d, address.id).await?.is_none());
+            ensure!(read.requests.lock().unwrap().is_empty());
+            Ok(())
+        })
+    })
+    .await
 }
 
 #[tokio::test]
@@ -2121,7 +2233,7 @@ async fn lagging_chunk_is_bounded_and_never_bulk_marks_unscanned_addresses() -> 
         }
         let read=Reader::new(4000);let verify=Reader::new(4000);
         scanner::initialize_chain(&d.app_pool,1,&read,&verify).await?;
-        scanner::coverage_once(&d.app_pool,&read,&verify,&chain(),1).await?;
+        scanner::coverage_once(&d.app_pool,&read,&verify,&chain()).await?;
         let marked:i64=sqlx::query_scalar("SELECT count(*) FROM addresses WHERE dual_covered_through IS NOT NULL").fetch_one(&d.app_pool).await?;
         ensure!(marked==1000);
         ensure!(read.requests.lock().unwrap().iter().all(|(addresses,_,_)|addresses.len()<=1000));
@@ -2149,7 +2261,7 @@ async fn marked_deposits_are_skipped_but_existing_factory_records_are_always_rev
             read.receipt = Some(log.clone());
             verify.receipt = Some(log.clone());
             scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
-            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
             let event = FactoryLog {
                 tx_hash: B256::repeat_byte(0xbb),
                 log_index: 3,
@@ -2186,7 +2298,7 @@ async fn marked_deposits_are_skipped_but_existing_factory_records_are_always_rev
             let before = *read.receipt_reads.lock().unwrap();
             verify.factory.as_mut().unwrap().origin.1 += 1;
             ensure!(
-                scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 2)
+                scanner::coverage_once(&d.app_pool, &read, &verify, &chain())
                     .await
                     .is_err()
             );
@@ -2196,7 +2308,7 @@ async fn marked_deposits_are_skipped_but_existing_factory_records_are_always_rev
                     && *verify.factory_reads.lock().unwrap() == 1
             );
             verify.factory = read.factory.clone();
-            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 3).await?;
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
             ensure!(*read.receipt_reads.lock().unwrap() == before);
             let expected = BTreeSet::from([(log.tx_hash, log.block_hash, log.log_index)]);
             ensure!(read.exclusions.lock().unwrap().last() == Some(&expected));
@@ -2214,7 +2326,7 @@ async fn marked_deposits_are_skipped_but_existing_factory_records_are_always_rev
             read.factory.as_mut().unwrap().logs.clear();
             verify.factory = read.factory.clone();
             ensure!(
-                scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 4)
+                scanner::coverage_once(&d.app_pool, &read, &verify, &chain())
                     .await
                     .is_err()
             );
@@ -2263,16 +2375,6 @@ async fn previous_checkpoint_is_rechecked_on_each_endpoint_before_a_new_checkpoi
         })
     })
     .await
-}
-
-#[tokio::test]
-async fn coverage_boundary_conflict_freezes_even_when_peer_errors() -> Result<()> {
-    for coverage in [false, true] {
-        for (read, verify) in [(true, false), (false, true)] {
-            assert_coverage_boundary_conflict(coverage, read, verify, true).await?;
-        }
-    }
-    Ok(())
 }
 
 #[tokio::test]
@@ -2341,7 +2443,7 @@ async fn identical_dual_factory_logs_skip_receipts_and_disagreement_falls_back()
             read.factory_events = vec![event.clone()];
             verify.factory_events = read.factory_events.clone();
             scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
-            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1).await?;
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
             ensure!(*read.factory_reads.lock().unwrap() == 0);
             ensure!(*verify.factory_reads.lock().unwrap() == 0);
             ensure!(
@@ -2366,7 +2468,7 @@ async fn identical_dual_factory_logs_skip_receipts_and_disagreement_falls_back()
             };
             read.factory = Some(receipt.clone());
             verify.factory = Some(receipt);
-            scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 2).await?;
+            scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
             ensure!(*read.factory_reads.lock().unwrap() == 1);
             ensure!(*verify.factory_reads.lock().unwrap() == 1);
             ensure!(marker(d, address.id).await? == Some(200));

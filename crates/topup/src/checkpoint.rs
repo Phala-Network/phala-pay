@@ -28,12 +28,17 @@ pub async fn advance<R: ChainReader, V: ChainReader>(
         a?;
         b?;
     }
-    let ((a, ah), b) = tokio::try_join!(read.finalized_header(), verify.finalized_head())?;
-    if a.number > b.number {
-        return Err(crate::scanner::ScannerError::Disagreement);
-    }
-    let bh = verify.header(a.number).await?;
-    if ah != bh.0 || bh.1 != a.time {
+    let ((a, ah), (b, bh)) = tokio::try_join!(read.finalized_header(), verify.finalized_header())?;
+    // A height difference is normal endpoint lag. Only the ahead endpoint needs a pin read.
+    let number = a.number.min(b.number);
+    let (a, b) = if a.number > number {
+        (read.header(number).await?, (bh, b.time))
+    } else if b.number > number {
+        ((ah, a.time), verify.header(number).await?)
+    } else {
+        ((ah, a.time), (bh, b.time))
+    };
+    if a != b {
         chain_reads::freeze(pool, chain, "finalized_checkpoint_conflict").await?;
         tracing::error!(
             tags.alert = "TopupFinalizedCheckpointConflict",
@@ -43,9 +48,9 @@ pub async fn advance<R: ChainReader, V: ChainReader>(
         return Err(crate::scanner::ScannerError::Disagreement);
     }
     let boundary = Boundary {
-        number: a.number,
-        hash: ah,
-        time: a.time,
+        number,
+        hash: a.0,
+        time: a.1,
     };
     chain_reads::advance_checkpoint(pool, chain, boundary).await?;
     chain_reads::checkpoint(pool, chain)

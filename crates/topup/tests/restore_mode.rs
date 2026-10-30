@@ -2716,7 +2716,7 @@ impl Pipeline {
             .next()
             .context("the chain's routes")?;
         Ok(
-            coverage_once(&harness.pool, &self.chain, &self.chain, &routes, 1)
+            coverage_once(&harness.pool, &self.chain, &self.chain, &routes)
                 .await?
                 .inserted,
         )

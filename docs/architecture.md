@@ -600,13 +600,16 @@ limits of 3/minute and 10/day, a hard daily cap of 80 tasks per environment per 
 at most four tasks in flight. See the operator [API admission limits](configuration.md#api-admission-limits).
 
 **Agreed checkpoints** are checked and published independently every 600 seconds, only after
-both sources agree on the new finalized boundary and retain the previous checkpoint's hash.
+both sources agree at the lower finalized height and retain the previous checkpoint's hash.
+Only the ahead endpoint needs a numbered pin read; equal-height finalized headers are reused.
 A conflict freezes the chain; finality, reversal and refunds consume these published advances.
 
 **Finalized dual coverage** runs every 3,600 seconds, staggered by chain, using the stored
 checkpoint without repeating its advance. Coverage ends at `e = min(checkpoint, cursor + L)`,
-with `L = 3,000`, or 19,200 every sixth round (six-hour catch-up). Both endpoints must agree on
-`e`'s hash and time. The coverage-lag warning is two hours.
+with `L = 19,200` when persisted cursor lag exceeds 3,000 blocks, otherwise `L = 3,000`. Lagging address history selects its bound from its own backlog to `e`,
+independently of the global cursor.
+The stored checkpoint supplies `e`'s hash/time when equal; intermediate boundaries require fresh
+agreement on both endpoints. The coverage-lag warning is two hours.
 Addresses with `dual_covered_through >= cursor` join the forward scan `(cursor, e]`, filtering
 at their own discovery start and marker plus one. This includes a new issuance whose empty
 prefix is ahead of global coverage, without an extra backfill round. At most 1,000 lagging addresses backfill from their own
@@ -1925,7 +1928,7 @@ work tallies remain manual; rolling accounting needs a real time-series collecto
 |---|---|---|
 | API availability | 99.9% successful `/healthz` probes over 30 days is the target; the pilot's manual `pilot_watch` checks do not measure continuous availability. Authenticated API diagnostic error ratio is 5xx / (2xx + 3xx + 5xx). | Failed manual health checks require immediate triage; missed Crons check-ins page. Inspect load-shed and 5xx request counts on demand. |
 | API latency | During an observed interval, p95 successful GET/HEAD response headers ≤ 250 ms and POST ≤ 1 s. Use HTTP histogram bucket deltas for matched routes; exclude admin reports/attestation and intentional waits. | This percentile is a diagnostic target with no automatic alert; investigate an external-health or worker incident using snapshots. |
-| RPC evidence availability | Every configured read/verify pair is ready; three consecutive request failures make its endpoint not-ready, and recovery probes run at most every 30 s. Infura 402 remains unavailable until UTC midnight. | `TopupRpcEndpointUnavailable` after five minutes; `TopupRpcDisagreement` and chain freezes require immediate triage. Address capacity warns at 70% and 90%. |
+| RPC evidence availability | Every configured read/verify pair is ready; three consecutive request failures make its endpoint not-ready, and recovery probes run at most every five minutes. Infura 402 remains unavailable until UTC midnight. | `TopupRpcEndpointUnavailable` after five minutes; `TopupRpcDisagreement` and chain freezes require immediate triage. Address capacity warns at 70% and 90%. |
 | Deposit progress | For unpaused, supported deposits, target 99% leaving `detected` and `confirmed` within 30 minutes after satisfying the configured confirmation policy (for example `depth2`, `depth3`, or `finalized`), rather than starting all clocks at finalization. Review the policy, daily report ages and deposit timelines; this target is not a measured percentile. | Route age alerts and scanner/finality Crons identify stalled work. Sanctions holds alert after the configured confirmation window. Fast and coverage scanner monitors expect 5-minute and 60-minute check-ins with 2-minute margins; checkpoints publish independently every 10 minutes. This is not an automatically computed percentile. |
 | Reconciliation and backup | Every scheduled reconciliation succeeds before its next round; backup success marker age ≤ 2 minutes. Inspect Sentry Crons and the daily report. | Existing reconciliation and backup monitors alert; backup requires three stale observations to avoid restart noise. |
 

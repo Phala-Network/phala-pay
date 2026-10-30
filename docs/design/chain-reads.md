@@ -87,9 +87,11 @@ the lowered start minus one, never the original live-issuance checkpoint.
 Each round, staggered per chain:
 
 1. Read the published checkpoint `t` from the independent ten-minute loop (§2.5), without
-   repeating its RPC checks. Range end `e = min(t, c + L)`, `L` = 3 000 blocks, or 19 200 on
-   every sixth round (six-hour catch-up; §5.2 budgets it). Read the header of `e` on both
-   endpoints (hash and time must agree).
+   repeating its RPC checks. Range end `e = min(t, c + L)`, `L` = 19 200 blocks when
+   `t-c > 3 000`, otherwise 3 000. Reuse the checkpoint header when `e=t`; otherwise read the
+   header of `e` on both endpoints (hash and time must agree). Durable lag selects catch-up
+   immediately after a restart. Lagging address history independently uses 19 200 when
+   `e - start > 3 000`, otherwise 3 000, so a caught-up global cursor never throttles backfill.
 2. Snapshot address sets after step 1: forward set C with `dual_covered_through >= c`;
    lagging set G = at most 1 000 addresses
    with `dual_covered_through IS NULL OR < c`, oldest progress first (new addresses, reissued

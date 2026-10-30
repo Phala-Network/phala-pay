@@ -1158,7 +1158,7 @@ async fn frozen_chain_gates_startup_pumps_and_scanner() -> Result<()> {
         ensure!(reason.as_deref() == Some("chain_frozen"));
 
         let scanner_routes = topup::scanner::chain_routes(&*route_set(route)?);
-        ensure!(topup::scanner::coverage_once(&pool, &UnreachableReader, &UnreachableReader, &scanner_routes[0], 1).await.is_err());
+        ensure!(topup::scanner::coverage_once(&pool, &UnreachableReader, &UnreachableReader, &scanner_routes[0]).await.is_err());
         Ok(())
     })
     .await

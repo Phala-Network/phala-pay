@@ -95,7 +95,7 @@ async fn cold_payment_skips_fast_discovery_but_hourly_coverage_credits_it() -> R
             topup::checkpoint::advance(&chain.pool, chain.chain_id, &chain.reader, &chain.reader)
                 .await?;
             let covered =
-                coverage_once(&chain.pool, &chain.reader, &chain.reader, &chain.routes, 1).await?;
+                coverage_once(&chain.pool, &chain.reader, &chain.reader, &chain.routes).await?;
             ensure!(covered.inserted == 1);
             chain.settle().await?;
             ensure!(chain.deposit(tx).await?.state == DepositState::Credited);
@@ -293,7 +293,7 @@ async fn a_transaction_replaced_with_the_same_nonce_is_reversed_once() -> Result
             run_checked("cast", &["rpc", "evm_increaseTime", "60", "--rpc-url", &chain.anvil.rpc_url], None)?;
             chain.anvil.mine(FINALITY_DEPTH + 2)?;
             topup::checkpoint::advance(&chain.pool, chain.chain_id, &chain.reader, &chain.reader).await?;
-            coverage_once(&chain.pool,&chain.reader,&chain.reader,&chain.routes,1).await?;
+            coverage_once(&chain.pool,&chain.reader,&chain.reader,&chain.routes).await?;
             ensure!(topup::locks::expire_once(&chain.pool,&RouteSet::new(vec![chain.route.clone()]).unwrap()).await?==1);
             ensure!(chain.events("quote.expired").await?.len()==1);
 
@@ -436,7 +436,7 @@ async fn payments_to_active_and_retired_deposit_addresses_are_credited_at_spot()
             topup::checkpoint::advance(&chain.pool, chain.chain_id, &chain.reader, &chain.reader)
                 .await?;
             ensure!(
-                coverage_once(&chain.pool, &chain.reader, &chain.reader, &chain.routes, 1)
+                coverage_once(&chain.pool, &chain.reader, &chain.reader, &chain.routes)
                     .await?
                     .inserted
                     == 2
@@ -540,7 +540,7 @@ async fn a_treasury_change_moves_the_chains_address_and_the_old_address_still_cr
             topup::checkpoint::advance(&chain.pool, chain.chain_id, &chain.reader, &chain.reader)
                 .await?;
             ensure!(
-                coverage_once(&chain.pool, &chain.reader, &chain.reader, &chain.routes, 1)
+                coverage_once(&chain.pool, &chain.reader, &chain.reader, &chain.routes)
                     .await?
                     .inserted
                     == 2
@@ -665,7 +665,7 @@ async fn an_op_stack_unsafe_head_reorg_reverses_the_credit_and_credits_the_repla
             topup::checkpoint::advance(&chain.pool, chain.chain_id, &chain.reader, &chain.reader)
                 .await?;
             let stats =
-                coverage_once(&chain.pool, &chain.reader, &chain.reader, &chain.routes, 1).await?;
+                coverage_once(&chain.pool, &chain.reader, &chain.reader, &chain.routes).await?;
             ensure!(
                 stats.inserted == 0,
                 "known replacement must be idempotent: {stats:?}"
@@ -981,7 +981,7 @@ impl FastChain {
         .0;
         let reader = reader(&anvil.rpc_url)?;
         // The finalized scanner's first pass writes the cursor the fast scan starts above.
-        coverage_once(&pool, &reader, &reader, &routes, 1).await?;
+        coverage_once(&pool, &reader, &reader, &routes).await?;
         let chain = Self {
             anvil,
             chain_id,
