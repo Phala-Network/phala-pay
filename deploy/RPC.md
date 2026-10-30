@@ -207,6 +207,12 @@ header. At equal heights each endpoint costs `144 × 2 = 288` calls/day; with he
 one call to the ahead endpoint per round (at most 144/day, charged to the recovery reserve).
 Coverage reuses the published checkpoint's hash/time when `e` reaches it; intermediate `e`
 still costs one header per endpoint. A lagging common address boundary adds another pair.
+For one caught-up and one lagging recipient set, a normal range ending at the checkpoint
+with a shared common boundary uses four log calls and no boundary headers per endpoint;
+a full 19,200-block intermediate catch-up range uses `2 × 2 × 7 = 28` log calls plus at most
+two boundary headers on 3,000-block endpoints. Resolving an omitted unmarked deposit adds
+three cold evidence methods. These are the integration-test bounds; a restarted process
+selects the same catch-up range from persisted lag.
 Thus caught-up coverage saves 48 header calls/endpoint/day against the retained allowance
 above, and equal-height checkpoints save 144 verify calls/day. Those savings authorize no cap
 increase. The retained tables price the prior scheduled catch-up allowance; adaptive recovery
