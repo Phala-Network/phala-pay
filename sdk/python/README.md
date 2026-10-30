@@ -193,6 +193,8 @@ failures are wrapped in `TransportError` with `network` or `timeout`; Python int
 Malformed success responses raise `ResponseValidationError` with status and request ID. Error and
 object diagnostics redact API keys and checkout client secrets. Context cleanup closes the client
 pool and leaves injected transports open.
+An unsaved `503 unavailable` from authentication admission uses this same retry policy and
+retains the original POST body and idempotency key.
 
 For backend work that can wait through a planned upgrade, opt in at construction or per call:
 

@@ -225,6 +225,7 @@ def test_post_replay_freezes_body_and_generates_one_uuid_per_invocation(
     requests: list[httpx.Request] = []
     metadata = {"order": "original"}
     keys: list[str] = []
+    clock = Clock()
 
     def new_uuid() -> uuid.UUID:
         value = uuid.UUID(int=len(keys) + 1)
@@ -236,9 +237,13 @@ def test_post_replay_freezes_body_and_generates_one_uuid_per_invocation(
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         metadata["order"] = "changed"
-        return error(503) if len(requests) == 1 else httpx.Response(200, json=_quote())
+        return (
+            error(503, **{"retry-after": "1"})
+            if len(requests) == 1
+            else httpx.Response(200, json=_quote())
+        )
 
-    with pay(handler, sleep=lambda _: None) as client:
+    with pay(handler, clock=clock, sleep=clock.sleep) as client:
         for _ in range(2):
             metadata["order"] = "original"
             client.quotes.create(
@@ -249,6 +254,7 @@ def test_post_replay_freezes_body_and_generates_one_uuid_per_invocation(
                 metadata=metadata,
             )
     assert len(keys) == 2
+    assert clock.delays == [1]
     assert requests[0].content == requests[1].content
     assert json.loads(requests[1].content)["metadata"] == {"order": "original"}
     assert requests[0].headers["idempotency-key"] == requests[1].headers["idempotency-key"]

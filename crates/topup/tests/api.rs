@@ -134,6 +134,16 @@ async fn pre_auth_database_gate_bounds_bearer_work_and_preserves_other_requests(
                     ensure!(response_json(response).await?["error"]["code"] == "api_key_invalid");
                 }
             }
+            let metrics = topup::observability::metrics::render(pool)?;
+            let shed: u64 = metrics
+                .lines()
+                .find_map(|line| line.strip_prefix("topup_merchant_auth_shed_total "))
+                .context("missing authentication admission metric")?
+                .parse()?;
+            ensure!(
+                shed >= 2,
+                "both Bearer entry points must report load shedding"
+            );
             let view = support::client_quote(&app, &secret).await?;
             ensure!(view["id"] == topup::locks::quote_id(quote));
             ensure!(

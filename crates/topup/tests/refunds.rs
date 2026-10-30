@@ -195,6 +195,7 @@ async fn configured_refund_daily_cap_admits_exactly_three_concurrent_attachments
                 3,
             );
             let barrier = Arc::new(tokio::sync::Barrier::new(6));
+            let auth_shed = Arc::new(Notify::new());
             let mut tasks = tokio::task::JoinSet::new();
             for index in 0..5 {
                 let merchant =
@@ -202,24 +203,70 @@ async fn configured_refund_daily_cap_admits_exactly_three_concurrent_attachments
                 let deposit = seed_rejected_deposit(pool, merchant.account.id, "cap", 100).await?;
                 let id = merchant.refund(deposit, "100").await?;
                 let barrier = barrier.clone();
+                let auth_shed = auth_shed.clone();
                 tasks.spawn(async move {
                     barrier.wait().await;
-                    let (status, body) = merchant
-                        .post(
-                            &format!("/v1/refunds/{id}/mark_paid"),
-                            mark_paid_body(REFUND_TX)?,
-                        )
-                        .await?;
-                    ensure!(
-                        status == StatusCode::OK
-                            || (status == StatusCode::UNPROCESSABLE_ENTITY
-                                && body["error"]["code"] == "refund_attachment_limit_exceeded"),
-                        "{body}"
-                    );
-                    anyhow::Ok(status == StatusCode::OK)
+                    let key = format!("admission-contention-{index}");
+                    for attempt in 0..4 {
+                        let response = merchant
+                            .app
+                            .clone()
+                            .oneshot(support::merchant_request_with_key(
+                                Method::POST,
+                                &format!("/v1/refunds/{id}/mark_paid"),
+                                mark_paid_body(REFUND_TX)?,
+                                &merchant.key,
+                                &key,
+                            ))
+                            .await?;
+                        let status = response.status();
+                        let replayed = response.headers().contains_key("idempotent-replayed");
+                        let retry_after = response.headers().get("retry-after").cloned();
+                        let body = response_json(response).await?;
+                        if status == StatusCode::SERVICE_UNAVAILABLE
+                            && body["error"]["code"] == "unavailable"
+                        {
+                            ensure!(
+                                !replayed && attempt < 3,
+                                "unsaved overload did not recover: {body}"
+                            );
+                            ensure!(retry_after.as_ref().is_some_and(|value| value == "1"));
+                            auth_shed.notify_one();
+                            tokio::time::sleep(StdDuration::from_secs(1)).await;
+                            continue;
+                        }
+                        ensure!(
+                            status == StatusCode::OK
+                                || (status == StatusCode::UNPROCESSABLE_ENTITY
+                                    && body["error"]["code"] == "refund_attachment_limit_exceeded"),
+                            "{body}"
+                        );
+                        return anyhow::Ok(status == StatusCode::OK);
+                    }
+                    anyhow::bail!("refund attachment exceeded its bounded attempts")
                 });
             }
+            // Four authentication slots on this eight-connection pool deliberately shed the
+            // fifth HTTP request after 250 ms. Prove it happens before idempotency/admission,
+            // then recover like the official SDKs, keeping the same key on every attempt.
+            let mut lock = database.owner_pool.begin().await?;
+            sqlx::query("LOCK TABLE restores IN ACCESS EXCLUSIVE MODE")
+                .execute(&mut *lock)
+                .await?;
             barrier.wait().await;
+            tokio::time::timeout(StdDuration::from_secs(5), auth_shed.notified())
+                .await
+                .context("the saturated authentication gate did not shed a request")?;
+            ensure!(
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT count(*) FROM idempotency_keys WHERE key LIKE 'admission-contention-%'"
+                )
+                .fetch_one(&database.owner_pool)
+                .await?
+                    == 0,
+                "auth overload must not save an idempotency result"
+            );
+            lock.rollback().await?;
             let mut admitted = 0;
             while let Some(result) = tasks.join_next().await {
                 if result?? {

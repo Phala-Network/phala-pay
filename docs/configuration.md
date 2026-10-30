@@ -31,6 +31,12 @@ checksum-invalid keys return `401` before taking a slot. Anonymous `client_secre
 their own slots; `/healthz` and admin authentication do not use this gate. The service admission
 limits are built in, with no new configuration setting.
 
+Authentication shedding increments the label-free `topup_merchant_auth_shed_total` counter.
+These 503 responses precede idempotency admission and do not save a result. Retry after the
+advertised delay with the same `Idempotency-Key` and body; both official server SDKs already do
+this within their bounded retry policy. Repeated shedding calls for checking database latency,
+pool pressure and request concurrency before adjusting capacity.
+
 Topup's private `--proxy-protocol-bind ADDR` listener (8082 in the shipped compose) is enabled
 with gateway PROXY on 443; restore-check and the template leave it off.
 It requires a PROXY v2 header on every connection,

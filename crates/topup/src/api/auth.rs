@@ -129,7 +129,11 @@ pub(super) async fn authenticate_merchant(
     let authenticated = {
         let _slot = match tokio::time::timeout(SLOT_WAIT, auth.slots.acquire()).await {
             Ok(Ok(slot)) => slot,
-            Ok(Err(_)) | Err(_) => return ApiError::database_busy().into_response(),
+            Ok(Err(_)) | Err(_) => {
+                crate::observability::metrics::merchant_auth_shed();
+                tracing::debug!("merchant authentication admission shed a request");
+                return ApiError::database_busy().into_response();
+            }
         };
         match crate::restore_mode::is_frozen(&state.pool).await {
             Ok(false) => {}

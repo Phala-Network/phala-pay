@@ -127,20 +127,22 @@ describe("merchant transport", () => {
         expect(new Set(keys).size).toBe(1);
       }
     });
-  it("freezes serialized body and explicit key before first attempt", async () => {
+  it("retries unsaved auth overload with the frozen body and explicit key", async () => {
     const params = { metadata: { order: "first" } };
     const fetch = vi
       .fn<typeof globalThis.fetch>()
       .mockImplementationOnce(() => {
         params.metadata.order = "changed";
-        return Promise.resolve(errorResponse());
+        return Promise.resolve(errorResponse(503, "unavailable", { "retry-after": "1" }));
       })
       .mockResolvedValueOnce(jsonResponse({ ok: true }));
     const promise = transport(fetch).request("POST", "/v1/quotes", params, {
       idempotencyKey: "order-42",
     });
     const assertion = expect(promise).resolves.toEqual({ ok: true });
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
     await assertion;
     expect(fetch.mock.calls.map(([, init]) => init?.body)).toEqual([
       JSON.stringify({ metadata: { order: "first" } }),

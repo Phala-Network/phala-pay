@@ -16,6 +16,10 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Added
 
+- Label-free `topup_merchant_auth_shed_total` counter for authentication admission refusals.
+  Concurrent refund-cap verification retries unsaved overload responses with the same key,
+  matching the existing bounded retry behavior verified in both official server SDKs.
+
 - Optional `replacement_transaction_hash` and `original_signed_transaction` on refund `mark_paid`,
   with matching JS/Python SDK
   inputs. One candidate can resolve an attachment as `transaction_dropped` only with identical

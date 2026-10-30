@@ -18,10 +18,15 @@ struct HttpMetrics {
     requests: IntCounterVec,
     latency: HistogramVec,
     deadlines: IntCounterVec,
+    auth_shed: IntCounter,
 }
 impl HttpMetrics {
     fn new() -> Result<Self, prometheus::Error> {
         Ok(Self {
+            auth_shed: IntCounter::new(
+                "topup_merchant_auth_shed_total",
+                "Merchant requests refused before authentication because its slots were full or closed.",
+            )?,
             requests: IntCounterVec::new(
                 Opts::new("topup_http_requests_total", "Completed HTTP requests."),
                 &["route", "method", "status_class"],
@@ -96,6 +101,14 @@ pub(crate) fn request_deadline_exceeded(method: &str) {
     };
     match http() {
         Ok(metrics) => metrics.deadlines.with_label_values(&[method]).inc(),
+        Err(_) => tracing::error!("HTTP metrics initialization failed"),
+    }
+}
+
+/// Records authentication admission refusal without key, account, path or other labels.
+pub(crate) fn merchant_auth_shed() {
+    match http() {
+        Ok(metrics) => metrics.auth_shed.inc(),
         Err(_) => tracing::error!("HTTP metrics initialization failed"),
     }
 }
@@ -237,6 +250,7 @@ pub fn render(pool: &PgPool) -> Result<String, prometheus::Error> {
     families.extend(http.requests.collect());
     families.extend(http.latency.collect());
     families.extend(http.deadlines.collect());
+    families.extend(http.auth_shed.collect());
     // Like Registry::gather, omit families with no observed series rather than inventing zeros.
     families.retain(|family| !family.get_metric().is_empty());
     TextEncoder::new().encode_to_string(&families)
