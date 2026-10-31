@@ -557,7 +557,8 @@ up exact token/address/block totals with signed `GET /v1/admin/ignored_transfers
 unsampled logs. Support may need the payer's transaction hash and a block explorer for an
 unsampled transfer. These records have no deposit id and cannot use merchant deposit refund APIs;
 returning such funds requires the operator's existing manual recovery procedure and compliance
-checks. Previously created deposits and their delivered events keep the usual contract.
+checks. Previously created deposits, their reorganization successors and delivered events keep
+the usual contract.
 
 The guaranteed floor is conservative across every attested route version and merchant setting:
 the route's lowest atomic minimum, or, for stablecoins, the larger of that minimum and the
@@ -672,8 +673,9 @@ address = pay.deposit_addresses.create(client_reference_id="team-42",
   Eligible transfers meeting the credit minimum and token bounds are credited; transfers outside
   them are rejected and follow the existing refund rules (§1.3). Credit before finality also obeys `max_unfinalized_credit`: a
   transfer past that cap waits for finality, so the typical credit time can be longer. A routed
-  token you do not accept is `rejected(asset_not_accepted)`, any other token `rejected
-  (unsupported_asset)`, and neither is credited. Funds sent on a network that is not listed are not seen:
+  token you do not accept is `rejected(asset_not_accepted)` above the guaranteed route floor;
+  unsupported tokens and guaranteed-sub-floor transfers have no merchant deposit or webhook
+  (see the spam handling note in §1.3), and neither is credited. Funds sent on a network that is not listed are not seen:
   they stay at the address on that chain and can be swept only once the forwarder factory is
   deployed there, and only if your treasury is the same address on that chain; contact the
   operator.

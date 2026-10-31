@@ -515,8 +515,9 @@ version offline from the salt inputs and a network's treasury.
 **Crediting.** A transfer of **any supported token of the chain** to an active **or retired**
 deposit address is credited **at spot** (no quote) through the one pipeline: fast credit at the
 route's confirmation (D1), reversal, screening, events, chain-sourced sweeps (D4), refunds (D5),
-and per-forwarder reconciliation (§13). A token without a route on that chain is recorded
-`rejected (unsupported_asset)`, as at a quote's address. Each chain's forwarder is an ordinary
+and per-forwarder reconciliation (§13). Unsupported-token and guaranteed-sub-floor transfers
+use exact internal ignored accounting without a merchant deposit or webhook, as at a quote's
+address ([integration notes](../integration.md#13-payment-outcomes)). Each chain's forwarder is an ordinary
 `addresses` row owned by the deposit address (its network on that chain), so every mechanism that
 reads `addresses` covers it. Its deposit has `quote` set only if it consumes a quote, `deposit_address: "da_…"`, and the
 chain and address it arrived on (`chain_id`, `address`), and `deposit.credited` carries that

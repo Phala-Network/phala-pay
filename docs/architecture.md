@@ -1546,7 +1546,9 @@ from fetched state, never from webhook order.
   atomic minimum is positive, show both: "Send at least $5.00 and 10 USDC, up to 10,100 USDC
   per transfer on Ethereum." Omit a zero atomic minimum. Group token amounts in English,
   preserving every fractional digit. If any limit is missing or malformed, show "Send USDC on
-  Ethereum" without a range. Transfers below the credit minimum or outside token bounds are rejected;
+  Ethereum" without a range. Transfers below the credit minimum or outside token bounds are rejected,
+  except guaranteed-sub-floor transfers, which use internal ignored accounting without a merchant
+  deposit or webhook (integration spam handling notes);
   `max_unfinalized_credit` can delay credit until finality (§7). Where a network's address differs (another
   treasury), show each network's own address. After a rotation, stop showing the retired address; a
   payment to it is still credited.
