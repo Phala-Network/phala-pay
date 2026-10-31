@@ -468,8 +468,70 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
             end: end.min(start.saturating_add(limit).saturating_sub(1)),
         });
     }
+    // Snapshot only rows whose actual ranges are covered. Other issuance/restore work must
+    // not discard independent evidence for this bounded round.
+    let mut covered_snapshot = BTreeMap::new();
+    let mut covered_ids = Vec::new();
+    let mut covered_physical = Vec::new();
+    let mut covered_created = Vec::new();
+    let mut covered_through = Vec::new();
+    let mut covered_starts = Vec::new();
+    let mut covered_ends = Vec::new();
+    let mut proposed_progress = BTreeMap::new();
+    for range in &ranges {
+        for address in &range.addresses {
+            let start = range.start(address);
+            if start > range.end {
+                continue;
+            }
+            let id = address.address.id;
+            let physical = format!("{:#x}", address.address.address);
+            let created = i64::try_from(address.address.created_block)
+                .map_err(|_| ScannerError::SnapshotChanged)?;
+            let through = address
+                .through
+                .map(i64::try_from)
+                .transpose()
+                .map_err(|_| ScannerError::SnapshotChanged)?;
+            if covered_snapshot
+                .insert(id, (physical.clone(), created, through))
+                .is_some()
+            {
+                return Err(ScannerError::SnapshotChanged);
+            }
+            covered_ids.push(id);
+            covered_physical.push(physical);
+            covered_created.push(created);
+            covered_through.push(through);
+            covered_starts.push(i64::try_from(start).map_err(|_| ScannerError::SnapshotChanged)?);
+            covered_ends.push(i64::try_from(range.end).map_err(|_| ScannerError::SnapshotChanged)?);
+            proposed_progress.insert(id, range.end);
+        }
+    }
     let mut candidates = BTreeSet::new();
-    let mut factory_candidates = BTreeSet::new();
+    // Insert-only factory evidence must be reverified even when both log responses omit it.
+    // One set-based lookup covers every address's own inclusive range.
+    let hashes: Vec<String> = sqlx::query_scalar(
+        "WITH covered AS (SELECT * FROM unnest($2::uuid[],$3::bigint[],$4::bigint[]) \
+         AS ranges(address_id,start_block,end_block)) \
+         SELECT f.tx_hash FROM flushed f JOIN covered c ON c.address_id=f.address_id \
+         WHERE f.chain_id=$1 AND f.block_number BETWEEN c.start_block AND c.end_block \
+         UNION SELECT f.tx_hash FROM flush_failures f JOIN covered c ON c.address_id=f.address_id \
+         WHERE f.chain_id=$1 AND f.block_number BETWEEN c.start_block AND c.end_block",
+    )
+    .bind(chain_key)
+    .bind(&covered_ids)
+    .bind(&covered_starts)
+    .bind(&covered_ends)
+    .fetch_all(pool)
+    .await?;
+    let mut factory_candidates = hashes
+        .into_iter()
+        .map(|hash| {
+            hash.parse::<B256>()
+                .map_err(|_| ScannerError::SnapshotChanged)
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?;
     let mut factory_logs = [
         BTreeMap::<B256, BTreeMap<u64, FactoryLog>>::new(),
         BTreeMap::new(),
@@ -508,33 +570,28 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
                 &proven
             )
         )?;
-        for address in &range.addresses {
-            index.insert(address.address.address, address.address.clone());
-            let start = range.start(address);
-            // Insert-only factory evidence is reverified even when both getLogs responses omit it.
-            let hashes: Vec<String> = sqlx::query_scalar("SELECT tx_hash FROM flushed WHERE chain_id=$1 AND address_id=$2 AND block_number BETWEEN $3 AND $4 UNION SELECT tx_hash FROM flush_failures WHERE chain_id=$1 AND address_id=$2 AND block_number BETWEEN $3 AND $4")
-                .bind(i64::try_from(chain).map_err(|_|ScannerError::SnapshotChanged)?).bind(address.address.id).bind(i64::try_from(start).map_err(|_|ScannerError::SnapshotChanged)?).bind(i64::try_from(range.end).map_err(|_|ScannerError::SnapshotChanged)?).fetch_all(pool).await?;
-            for hash in hashes {
-                factory_candidates.insert(
-                    hash.parse::<B256>()
-                        .map_err(|_| ScannerError::SnapshotChanged)?,
-                );
-            }
-        }
+        let starts: BTreeMap<_, _> = range
+            .addresses
+            .iter()
+            .map(|address| {
+                index.insert(address.address.address, address.address.clone());
+                (address.address.address, range.start(address))
+            })
+            .collect();
         for (endpoint, (transfers, factory)) in [a, b].into_iter().enumerate() {
             for log in transfers {
-                if range
-                    .addresses
-                    .iter()
-                    .any(|a| a.address.address == log.to && log.block_number >= range.start(a))
+                if starts
+                    .get(&log.to)
+                    .is_some_and(|start| log.block_number >= *start)
                 {
                     candidates.insert((log.tx_hash, log.receipt_log_index));
                 }
             }
             for log in factory {
-                if range.addresses.iter().any(|a| {
-                    a.address.address == log.event.forwarder() && log.block_number >= range.start(a)
-                }) {
+                if starts
+                    .get(&log.event.forwarder())
+                    .is_some_and(|start| log.block_number >= *start)
+                {
                     factory_candidates.insert(log.tx_hash);
                     let hash = log.tx_hash;
                     if let Some(previous) = factory_logs[endpoint]
@@ -555,15 +612,7 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
         .iter()
         .try_fold(end, |common, (id, created, through)| {
             let created = u64::try_from(*created).map_err(|_| ScannerError::SnapshotChanged)?;
-            let proposed = ranges
-                .iter()
-                .filter(|r| {
-                    r.addresses
-                        .iter()
-                        .any(|a| a.address.id == *id && r.start(a) <= r.end)
-                })
-                .map(|r| r.end)
-                .max();
+            let proposed = proposed_progress.get(id).copied();
             let through = through
                 .map(u64::try_from)
                 .transpose()
@@ -612,21 +661,6 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
     let mut evidence = BTreeMap::new();
     // Only covered addresses and their own covered blocks belong to this round.
     // Other deposits use their owner's shared claim and backoff, including S/L.
-    let mut covered_ids = Vec::new();
-    let mut covered_starts = Vec::new();
-    let mut covered_ends = Vec::new();
-    for range in &ranges {
-        for address in &range.addresses {
-            let start = range.start(address);
-            if start <= range.end {
-                covered_ids.push(address.address.id);
-                covered_starts
-                    .push(i64::try_from(start).map_err(|_| ScannerError::SnapshotChanged)?);
-                covered_ends
-                    .push(i64::try_from(range.end).map_err(|_| ScannerError::SnapshotChanged)?);
-            }
-        }
-    }
     // Any change to the covered unverified set invalidates this round's RPC evidence.
     // Abandon the round after the DB-only lock recheck; the next round reads afresh.
     let ids: Vec<uuid::Uuid> = sqlx::query_scalar(
@@ -662,13 +696,19 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
             .bind(chain_key)
             .fetch_one(&mut *tx)
             .await?;
-    let current_addresses: Vec<(uuid::Uuid, i64, Option<i64>)> = sqlx::query_as(
-        "SELECT id,created_block,dual_covered_through FROM addresses WHERE chain_id=$1 ORDER BY id",
+    let current_addresses: Vec<(uuid::Uuid, String, i64, Option<i64>)> = sqlx::query_as(
+        "SELECT id,address,created_block,dual_covered_through FROM addresses \
+         WHERE chain_id=$1 AND id=ANY($2) ORDER BY id",
     )
     .bind(chain_key)
+    .bind(&covered_ids)
     .fetch_all(&mut *tx)
     .await?;
-    if u64::try_from(durable).ok() != Some(cursor.number) || current_addresses != address_snapshot {
+    let expected: Vec<_> = covered_snapshot
+        .into_iter()
+        .map(|(id, (address, created, through))| (id, address, created, through))
+        .collect();
+    if u64::try_from(durable).ok() != Some(cursor.number) || current_addresses != expected {
         tx.rollback().await?;
         return Err(ScannerError::SnapshotChanged);
     }
@@ -888,30 +928,38 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
         }
     }
     stats.factory = db::sweeps::commit_factory_logs_in(&mut tx, chain, &factory).await?;
-    for range in &ranges {
-        for address in &range.addresses {
-            if range.start(address) > range.end {
-                continue;
-            }
-            let caught_up = range.end == end;
-            let changed = sqlx::query("UPDATE addresses SET dual_covered_through=$2,backfilled=CASE WHEN $3 THEN true ELSE backfilled END,backfilled_through=CASE WHEN $3 THEN $2 ELSE backfilled_through END WHERE id=$1 AND created_block=$4 AND dual_covered_through IS NOT DISTINCT FROM $5")
-            .bind(address.address.id).bind(i64::try_from(range.end).map_err(|_|ScannerError::SnapshotChanged)?).bind(caught_up).bind(i64::try_from(address.address.created_block).map_err(|_|ScannerError::SnapshotChanged)?).bind(address.through.map(i64::try_from).transpose().map_err(|_|ScannerError::SnapshotChanged)?).execute(&mut *tx).await?.rows_affected();
-            if changed != 1 {
-                tx.rollback().await?;
-                return Err(ScannerError::SnapshotChanged);
-            }
-            if caught_up {
-                stats.backfilled_addresses = stats.backfilled_addresses.saturating_add(1);
-            }
-        }
-    }
-    sqlx::query("UPDATE chain_coverage SET through_block=$2,through_hash=$3,through_time=$4,updated_at=now() WHERE chain_id=$1 AND through_block < $2")
-    .bind(i64::try_from(chain).map_err(|_|ScannerError::SnapshotChanged)?).bind(i64::try_from(end).map_err(|_|ScannerError::SnapshotChanged)?).bind(format!("{:#x}",a.0)).bind(a.1).execute(&mut *tx).await?;
-    if chain_reads::common_coverage_in(&mut tx, chain).await? != common {
+    let changed = sqlx::query(
+        "UPDATE addresses a SET dual_covered_through=p.end_block, \
+         backfilled=CASE WHEN p.end_block=$2 THEN true ELSE a.backfilled END, \
+         backfilled_through=CASE WHEN p.end_block=$2 THEN p.end_block ELSE a.backfilled_through END \
+         FROM unnest($3::uuid[],$4::text[],$5::bigint[],$6::bigint[],$7::bigint[]) \
+         AS p(id,address,created_block,old_through,end_block) \
+         WHERE a.chain_id=$1 AND a.id=p.id AND a.address=p.address AND a.created_block=p.created_block \
+         AND a.dual_covered_through IS NOT DISTINCT FROM p.old_through"
+    ).bind(chain_key).bind(i64::try_from(end).map_err(|_| ScannerError::SnapshotChanged)?)
+        .bind(&covered_ids).bind(&covered_physical).bind(&covered_created).bind(&covered_through)
+        .bind(&covered_ends).execute(&mut *tx).await?.rows_affected();
+    if usize::try_from(changed).ok() != Some(covered_ids.len()) {
         tx.rollback().await?;
         return Err(ScannerError::SnapshotChanged);
     }
-    chain_reads::set_compat_cursor_in(&mut tx, chain, common, Some(common_time)).await?;
+    stats.backfilled_addresses = covered_ends
+        .iter()
+        .filter(|through| u64::try_from(**through).ok() == Some(end))
+        .count()
+        .try_into()
+        .map_err(|_| ScannerError::SnapshotChanged)?;
+    sqlx::query("UPDATE chain_coverage SET through_block=$2,through_hash=$3,through_time=$4,updated_at=now() WHERE chain_id=$1 AND through_block < $2")
+    .bind(i64::try_from(chain).map_err(|_|ScannerError::SnapshotChanged)?).bind(i64::try_from(end).map_err(|_|ScannerError::SnapshotChanged)?).bind(format!("{:#x}",a.0)).bind(a.1).execute(&mut *tx).await?;
+    // Uncovered rows may have changed during RPC. Preserve covered evidence and rebase
+    // the compatibility boundary safely; an unprefetched timestamp implies no negative proof.
+    let actual_common = chain_reads::common_coverage_in(&mut tx, chain).await?;
+    let actual_time = if actual_common == end {
+        Some(a.1)
+    } else {
+        (actual_common == common).then_some(common_time)
+    };
+    chain_reads::set_compat_cursor_in(&mut tx, chain, actual_common, actual_time).await?;
     db::pending::delete_finalized_in(
         &mut tx,
         i64::try_from(chain).map_err(|_| ScannerError::SnapshotChanged)?,

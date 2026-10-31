@@ -618,7 +618,9 @@ The union of both candidate sets is resolved independently by receipt, transacti
 Active unmarked identities are read without trusting their stored block numbers. All receipt,
 transaction, factory and boundary-header RPCs run without the chain lock. After taking that
 lock, the scanner re-reads the unmarked ids as a set. Any added or removed id, or changed
-address/coverage snapshot, aborts the round and discards all cached RPC evidence. One immediate
+covered address/coverage row, aborts the round and discards that round's RPC evidence.
+Uncovered issuance/restore work preserves covered evidence. Stored factory-history lookup and
+address progress writes use set-based SQL; indexed maps avoid per-log full address scans. One immediate
 retry repeats the full RPC round; a second snapshot change waits for the next coverage tick. Independently agreed block time and nonce correct an existing `detected` row;
 canonical receipts beyond the scanned range wait. A changed provisional recipient uses the
 shared finality reversal/successor transaction before coverage is published. Historical
@@ -632,7 +634,11 @@ origin by tx hash, receipt facts by tx/block hash); canonical headers and heads 
 
 One transaction writes evidence, dual markers, coverage at `e`, address progress at its actual
 backfill end, and the N-1 compatibility cursor at the boundary reached by every address. The
-cursor's header is read on both endpoints when it differs from `e`. It deletes pending rows at or below `e`. Only
+cursor's header is read on both endpoints when it differs from `e`. The common boundary is
+recomputed under the commit lock. A newly lowered boundary whose timestamp was not prefetched
+is stored with no compatibility timestamp, to be filled by a later round. The uncovered address
+continues to hold expiry/cancellation until caught up. The transaction deletes pending rows at
+or below `e`. Only
 caught-up addresses become `backfilled`. New issuance starts at agreed checkpoint `c+1`, with
 `dual_covered_through=c`, `backfilled=true` and `backfilled_through=c`; funding at or before `c`
 is outside discovery and crediting and becomes the immutable custody opening below. Historical

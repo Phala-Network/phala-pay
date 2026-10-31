@@ -131,6 +131,14 @@ Each round, staggered per chain:
    complete boundary across addresses. When it lags `e`, both endpoints supply an extra agreed
    header for that boundary; it never jumps to the checkpoint ahead of coverage.
 
+Factory-history lookup and guarded progress updates are set-based over each address's actual
+covered range. Commit validation compares only covered address rows and the covered active
+unverified deposit set. Uncovered insertions/restores do not invalidate existing RPC evidence.
+After writing covered progress, recompute the all-address common boundary under the DB-only
+lock. If unrelated work changed that boundary and no dual header timestamp was prefetched,
+store a NULL compatibility timestamp and fill it in a later round; no missing proof is inferred.
+Per-address negative conclusions still require that address's complete dual coverage.
+
 This replaces the single-source finalized backstop and the reconciler's missing-deposit pass.
 
 ### 2.3 Transaction-hash hints (checkout fast path)

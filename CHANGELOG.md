@@ -43,6 +43,13 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   receipt fallback. Verify matching dual factory events directly; missing or conflicting logs
   still require independent receipts and stored contradictions still freeze the chain.
 
+- Preserve dual coverage evidence when unrelated addresses are issued/restored during RPC;
+  only covered rows invalidate the round. Recompute the common compatibility boundary safely
+  under the commit lock, withholding its timestamp when no matching dual header was prefetched.
+- Replace per-address factory-history reads and coverage updates with set-based SQL and indexed
+  address lookups. PostgreSQL regressions cover 50,000-address coverage and custody statement
+  counts and duration; provider quotas and admission caps stay unchanged.
+
 - Verify refunds from receipt inclusion and published checkpoint events. Receipt probes back
   off through two hours, hourly until day one, then every six hours; observed receipts make no
   RPC until the checkpoint reaches them. Up to three durable dual-origin attempts at 0, 10

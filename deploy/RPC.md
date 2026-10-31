@@ -164,6 +164,28 @@ all historical chunks: `48 × (k + 3)` log calls/day on 3,000-block endpoints an
 `140 × (k + 3)` on BlockPI's 1,000-block endpoint, including the lagging chunk and factory reads.
 The tables below retain `k_hot = k = 1`, so this PR authorizes no increase in capacity.
 
+Coverage's address work uses set-based SQL: one stored factory-history lookup and one guarded
+bulk progress update for the entire covered set, plus bounded snapshot/deposit reads. Query
+round trips do not grow per address; positive deposit/factory evidence can still add queries
+per candidate. Indexed address maps avoid repeatedly scanning the full set for each log or
+common-boundary calculation. An unrelated address insertion/reissue during RPC does not discard
+covered evidence. Covered address/active-unverified changes still retry with fresh reads.
+The commit lock recomputes the common compatibility boundary across all current addresses;
+an unprefetched boundary receives no timestamp until a later dual header read. The affected
+uncovered address cannot supply expiry or cancellation evidence before coverage catches up.
+
+For ranges r, the per-endpoint coverage log formula remains
+`sum_r(ceil(blocks_r / max_log_blocks) × (ceil(addresses_r / 1,000) + 1 factory query))`.
+This change reduces database round trips, without reducing required dual RPC or raising caps.
+The 50,000-address PostgreSQL regressions compare statement counts against 1,000 addresses and
+bound each healthy synthetic coverage/custody round to 30 seconds. They validate local scaling,
+not provider latency or a live capacity increase. Custody retains its existing set-based SQL.
+The local PostgreSQL 18 debug-build check measured 23 coverage statements at both 1,000 and
+50,000 addresses (about 0.27 s and 6.78 s), including the durable-proof lookup, and 11 custody
+statements (about 0.08 s and 0.67 s).
+Fixture creation is excluded; external RPC is scripted, so these are database-scale evidence,
+not production latency measurements.
+
 Custody uses 1,000-call chunks and completes the full vector in each sweep. With N eligible
 forwarders and C chain/token routes, one sweep costs `2 × C × ceil(N / 1,000)` aggregate calls
 across both endpoints. At the default six-hour cadence, the daily cost is

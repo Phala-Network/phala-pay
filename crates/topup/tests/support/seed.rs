@@ -420,3 +420,19 @@ pub async fn initialize_dual_chain(pool: &PgPool, chain: u64) -> Result<(), sqlx
     )
     .await
 }
+
+/// Bulk clone an address and its quote with independent identities for scale regressions.
+/// Tiny deterministic UUIDs and physical addresses are confined to each isolated test database.
+pub async fn clone_addresses(
+    pool: &PgPool,
+    template: Uuid,
+    copies: usize,
+) -> Result<(), sqlx::Error> {
+    let copies = i64::try_from(copies).map_err(|error| encode_error(&error))?;
+    let mut tx = pool.begin().await?;
+    sqlx::query("INSERT INTO quotes SELECT copy.* FROM quotes q CROSS JOIN generate_series(1,$1::bigint) g CROSS JOIN LATERAL jsonb_populate_record(NULL::quotes,to_jsonb(q)||jsonb_build_object('id',lpad(to_hex(g),32,'0')::uuid,'address_id',lpad(to_hex(g),32,'0')::uuid,'idempotency_key',NULL,'client_secret_hash',NULL)) copy WHERE q.id=(SELECT quote_id FROM addresses WHERE id=$2)")
+        .bind(copies).bind(template).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO addresses SELECT copy.* FROM addresses a CROSS JOIN generate_series(1,$1::bigint) g CROSS JOIN LATERAL jsonb_populate_record(NULL::addresses,to_jsonb(a)||jsonb_build_object('id',lpad(to_hex(g),32,'0')::uuid,'quote_id',lpad(to_hex(g),32,'0')::uuid,'address','0x'||lpad(to_hex(g),40,'0'),'salt','0x'||lpad(to_hex(g),64,'0'))) copy WHERE a.id=$2")
+        .bind(copies).bind(template).execute(&mut *tx).await?;
+    tx.commit().await
+}
