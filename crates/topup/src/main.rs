@@ -744,9 +744,16 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
         .context("failed to connect to database")?;
     check_payment_settings_cutover(&pool).await?;
     // Monitoring has a separate bounded pool: RPC callers can already hold a transaction.
-    let accounting_pool = connect("run", 2)
-        .await
-        .context("failed to connect RPC accounting")?;
+    // Lazy connection and server-side deadlines also keep accounting outages off startup.
+    let accounting_pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .acquire_timeout(Duration::from_secs(1))
+        .connect_lazy_with(
+            pool.connect_options()
+                .as_ref()
+                .clone()
+                .options([("statement_timeout", "1s"), ("lock_timeout", "1s")]),
+        );
     let recorder = Arc::new(topup::db::rpc_usage::Recorder(accounting_pool));
     for pair in routes.rpc().values() {
         for client in [&pair.read, &pair.verify] {
