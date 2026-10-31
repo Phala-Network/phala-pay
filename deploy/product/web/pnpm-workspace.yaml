@@ -17,6 +17,8 @@ minimumReleaseAgeExclude:
   - miniflare@5.20261023.0-beta
 
 overrides:
+  # CVE-2026-118764 has no fixed 10.x release. Remove when parents require >=11.0.1.
+  'minimatch@^10.0.0': ^11.0.1
   # React's exact npm dependency must use the same local core as the demo's direct dependency.
   '@phala/pay': file:../../../sdk/js
   # The CLI still requires vulnerable KaTeX ^0.16.25; use the fixed CSS/fonts with Mermaid 12.2.
