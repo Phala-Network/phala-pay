@@ -47,8 +47,8 @@ keeps the indexes and uses its retained configuration and full-address RPC budge
 The `20261111000001` deposit observation-time index follows the same concurrent build/retry
 protocol for the UTC-day D tally. `20261111000000` stores RPC day/endpoint/method cumulative
 epoch counters. Monotonic upserts make background flush retries idempotent; daily usage sums
-all process epochs, including those before a restart. These additions do not require a higher
-compatibility floor; the ignored-transfer accounting boundary below still applies. Binary rollback retains the usage evidence and restores the target release's configuration.
+all process epochs, including those before a restart. These additions are expand-only; this
+release's ignored-transfer accounting boundary below still requires restore-only rollback.
 
 ## Ignored transfer accounting
 
@@ -60,7 +60,8 @@ are capped at 20 per address/token/UTC observation day; samples and daily counte
 policy and cannot be deleted while custody needs them. Growth remains proportional to distinct
 tokens × addresses × blocks. The signed admin report exposes totals and available samples.
 
-This release raises `COMPATIBILITY_FLOOR` to `20261110000000` and declares restore-only rollback:
+This release raises `COMPATIBILITY_FLOOR` to the combined schema maximum `20261111000001` and
+declares restore-only rollback:
 v0.13.4 cannot read the accounting totals. Its required Compose migration step rejects the floor;
 bypassing the gate would cause custody mismatch, freezing the chain and stopping crediting.
 The down migration preserves evidence. Recover using the pre-upgrade backup, its matching

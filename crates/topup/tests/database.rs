@@ -1631,7 +1631,7 @@ async fn scale_indexes_resume_unrecorded_builds_and_round_trip() -> Result<()> {
             "SELECT count(*) FROM _sqlx_migrations m \
              JOIN topup_migration_compatibility c ON c.version=m.version AND c.checksum=m.checksum \
              WHERE m.version BETWEEN 20261029030000 AND 20261029030005 \
-               AND m.success AND c.compatibility_floor=20261110000000",
+               AND m.success AND c.compatibility_floor=20261111000001",
         )
         .fetch_one(pool)
         .await?;
@@ -1693,7 +1693,7 @@ async fn service_indexes_resume_unrecorded_builds_and_round_trip() -> Result<()>
                 "SELECT count(*) FROM _sqlx_migrations m \
                  JOIN topup_migration_compatibility c ON c.version=m.version AND c.checksum=m.checksum \
                  WHERE m.version BETWEEN 20261029040000 AND 20261029040003 \
-                   AND m.success AND c.compatibility_floor=20261110000000",
+                   AND m.success AND c.compatibility_floor=20261111000001",
             )
             .fetch_one(pool)
             .await?;
@@ -1749,7 +1749,7 @@ async fn discovery_indexes_resume_completed_builds_with_expand_only_compatibilit
             "SELECT count(*) FROM _sqlx_migrations m JOIN topup_migration_compatibility c \
              ON c.version=m.version AND c.checksum=m.checksum \
              WHERE m.version IN (20261106000000,20261106000001) AND m.success \
-             AND c.compatibility_floor <= 20261110000000",
+             AND c.compatibility_floor <= 20261111000001",
         ).fetch_one(pool).await?;
         ensure!(compatible == 2, "discovery indexes must use the declared release floor");
         Ok::<_, anyhow::Error>(())

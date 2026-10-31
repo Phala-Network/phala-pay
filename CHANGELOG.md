@@ -18,7 +18,7 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 - **no rollback to 0.13.4; restore required**. Ignored-transfer accounting moves outside the
   deposits table; once totals exist, pre-change binaries cannot reconcile custody. The schema
-  compatibility floor is `20261110000000`, so their required Compose migration step fails
+  compatibility floor is `20261111000001`, so their required Compose migration step fails
   before service startup. A directly launched old binary bypasses that deployment gate; custody
   then freezes the affected chain on mismatch and crediting stops. Do not bypass the gate.
   Take and verify a pre-upgrade backup and exercise the [restore/reconciliation procedure](deploy/RESTORE.md)

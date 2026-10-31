@@ -524,7 +524,7 @@ Diagnostic raw samples are capped at 20 per address/token/UTC observation day; s
 counters older than 30 days are removed in bounded batches (up to 1,000 each coverage round).
 Counters use first observation time, so historical backfill counts on the day it is read.
 This is a declared restore-only schema boundary: **no rollback to 0.13.4; restore required**.
-`COMPATIBILITY_FLOOR=20261110000000` makes v0.13.4's required Compose migration step reject the
+`COMPATIBILITY_FLOOR=20261111000001` makes v0.13.4's required Compose migration step reject the
 unknown migration before service startup. A directly launched old binary has no startup schema
 gate. Its custody query cannot include ignored totals; bypassing the deployment gate would
 freeze that chain on a nonzero routed dust mismatch and stop crediting.
