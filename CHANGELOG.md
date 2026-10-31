@@ -89,6 +89,11 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Fixed
 
+- Upgrade SDK/site minimatch 10.x tooling to the fixed 11.x line for CVE-2026-118764.
+  The SDK's OpenAPI generator retains minimatch 5.1.9 under a scoped, expiring exception
+  tracked in [#597](https://github.com/Phala-Network/phala-pay/issues/597), pending a supported
+  parent update; the advisory's affected preprocessing implementation is absent from 5.x.
+
 - Advance finalized checkpoints at the lower of the providers' finalized heights, so a lagging
   endpoint does not stall the chain. Equal-height finalized headers need no extra pin read.
   Coverage uses the stored checkpoint header and selects the 19,200-block catch-up bound

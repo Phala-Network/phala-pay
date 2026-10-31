@@ -1,6 +1,13 @@
 {
   "vulnerabilities": [
     {
+      "id": "CVE-2026-118764",
+      "purls": ["pkg:npm/minimatch@5.1.9"],
+      "paths": ["pnpm-lock.yaml", "sdk/js/pnpm-lock.yaml"],
+      "statement": "SDK development/build-time OpenAPI generation only: openapi-typescript 7.13.0 requires Redocly 1, which calls minimatch 5.1.9's CommonJS function for operator-controlled URL/header patterns while generating from our local schema. No fixed 5.x or supported parent upgrade exists; overriding minimatch 11 or Redocly 2 breaks the generator's APIs. The advisory's optimizationLevel / firstPhasePreProcess / secondPhasePreProcess implementation does not exist in 5.1.9. This dependency is absent from SDK runtime bundles and deployed images. The SDK/site 10.x paths are upgraded independently to >=11.0.1. Remove on a supported openapi-typescript release off Redocly 1 (upstream https://github.com/openapi-ts/openapi-typescript/issues/2644); reassess if inputs/patterns become untrusted or this dependency enters runtime. Tracking and required re-review: https://github.com/Phala-Network/phala-pay/issues/597.",
+      "expired_at": "2026-11-30T03:00:00Z"
+    },
+    {
       "id": "CVE-2023-54404",
       "purls": ["pkg:npm/zod@3.25.76"],
       "paths": ["package-lock.json", "deploy/tools/package-lock.json"],

@@ -3,3 +3,7 @@ packages:
   - "../js-react"
   - "../js-server"
 linkWorkspacePackages: true
+
+overrides:
+  # CVE-2026-118764 has no fixed 10.x release. Remove when parents require >=11.0.1.
+  'minimatch@^10.0.0': ^11.0.1
