@@ -28,7 +28,10 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 use support::seed::{self, NewAccount, NewAddress};
-use support::{TEST_ORIGIN, merchant_request, public_key_base64, signed_request, with_database};
+use support::{
+    SignatureOptions, SignatureParameter, TEST_ORIGIN, merchant_request, public_key_base64,
+    signed_request, signed_request_with_options, with_database,
+};
 
 const ADMIN_KEY: [u8; 32] = [49; 32];
 
@@ -166,7 +169,9 @@ async fn ignored_amounts_preserve_balances_and_sweep_selection_after_a_full_flus
             // Ignored-only balances must exist even without any merchant deposit row.
             let (_, balance) = fixture.get("/v1/balance", Clear).await?;
             ensure!(balance["unswept"][0]["amount_atomic"]=="30" && balance["unswept"][0]["final_amount_atomic"]=="30", "{balance}");
-            let report=fixture.report().await?;
+            // Keep both reads at the same signing timestamp regardless of machine speed.
+            let report_created = Utc::now().timestamp();
+            let report=fixture.report(report_created).await?;
             let initial_key=if later_routed {format!("unrouted:1:{token_text}")} else {fixture.route.route.clone()};
             let initial=report["routes"].as_array().context("routes")?.iter()
                 .find(|r|r["route"]==initial_key).context("initial ignored report")?;
@@ -189,7 +194,7 @@ async fn ignored_amounts_preserve_balances_and_sweep_selection_after_a_full_flus
             ensure!(page["data"][0]["id"]==format!("fwd_{}",address.id.simple()));
             let (_, test_mode)=fixture.get_with("/v1/balance",Clear,&fixture.test_key).await?;
             ensure!(test_mode["unswept"]==json!([]),"ignored funds leaked across mode");
-            let report=fixture.report().await?;
+            let report=fixture.report(report_created).await?;
             let route=report["routes"].as_array().context("routes")?.iter()
                 .find(|r|r["route"]==fixture.route.route).context("routed balance report")?;
             ensure!(route["unflushed_balance_atomic"]=="10","{report}");
@@ -440,22 +445,31 @@ impl Fixture {
         self.get_with(path, screening, &self.live_key).await
     }
 
-    async fn report(&self) -> Result<Value> {
+    async fn report(&self, created: i64) -> Result<Value> {
+        let mut options = SignatureOptions::default();
+        options
+            .parameters
+            .push(SignatureParameter::Nonce(Uuid::new_v4().to_string()));
         let response = self
             .app(Arc::new(Clear))?
-            .oneshot(signed_request(
+            .oneshot(signed_request_with_options(
                 Method::GET,
                 "/v1/admin/reports/daily",
                 Vec::new(),
                 "admin/v1",
                 &SigningKey::from_bytes(&ADMIN_KEY),
-                Utc::now().timestamp(),
+                created,
+                &options,
             ))
             .await?;
-        ensure!(response.status() == StatusCode::OK);
-        Ok(serde_json::from_slice(
-            &to_bytes(response.into_body(), 1_048_576).await?,
-        )?)
+        let status = response.status();
+        let report: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 1_048_576).await?)?;
+        ensure!(
+            status == StatusCode::OK,
+            "daily report returned {status}: {report}"
+        );
+        Ok(report)
     }
 
     async fn get_with(

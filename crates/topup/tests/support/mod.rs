@@ -320,6 +320,7 @@ pub enum SignatureParameter {
     Created,
     KeyId,
     Algorithm(String),
+    Nonce(String),
 }
 
 #[derive(Clone, Debug)]
@@ -447,6 +448,10 @@ fn signature_parameters(
                 SignatureParameter::Algorithm(algorithm) => parameters.parameter(
                     KeyRef::from_str("alg").expect("alg must be an SFV key"),
                     StringRef::from_str(algorithm).expect("algorithm must be an SFV string"),
+                ),
+                SignatureParameter::Nonce(nonce) => parameters.parameter(
+                    KeyRef::from_str("nonce").expect("nonce must be an SFV key"),
+                    StringRef::from_str(nonce).expect("nonce must be an SFV string"),
                 ),
             };
         }
