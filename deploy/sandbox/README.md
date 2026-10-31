@@ -46,7 +46,8 @@ traffic from containers to the host. `restart_mid_flow` runs last in its own con
 only one given the Docker socket, which it uses to restart the local service
 (`scenarios/docker_restart.py`). Prices come from
 the live Chainlink, Binance, and Kraken endpoints, as in production. All containers, volumes,
-and temporary files are removed on exit.
+and temporary files are removed on exit. Docker assigns loopback host ports to Anvil and the
+service; the script reads their mappings after startup.
 
 ## Scenarios
 

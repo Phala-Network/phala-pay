@@ -1090,7 +1090,8 @@ its payment settings are held until it sends its complete configuration again wi
   operator onboarding of the product's account, its treasury proof and webhook endpoint, and one
   credited deposit submitted with a tx-hash hint and a signed event redelivery without a second
   credit. Mainnet prices use local fixtures; the Ethereum price Anvil mines every twelve seconds
-  after TWAP seeding, while the Base price Anvil mines every second.
+  after TWAP seeding, while the Base price Anvil mines every second. Docker assigns loopback host
+  ports to the registry and all four Anvils; the script reads them after startup.
 - `make restore-drill`: [RESTORE.md](RESTORE.md#local-and-ci-drills).
 - `make sandbox-local`: the integrator sandbox ([sandbox/README.md](sandbox/README.md)).
 - `deploy/validate-compose.sh`: every committed environment rendered and checked against

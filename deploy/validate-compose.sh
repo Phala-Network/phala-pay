@@ -113,6 +113,13 @@ local_stack -p validate-local >"$tmp/local.json"
 jq -e '[.services[].volumes[]? | select(.source == "/var/run/dstack.sock")] == []' "$tmp/local.json" \
     >/dev/null || fail "the local overlay must replace the host dstack socket with the simulator's"
 local_stack -p validate-sandbox -f "$root/deploy/sandbox/docker-compose.local.yml" >/dev/null
+TOPUP_LOCAL_PORT=0 SANDBOX_ANVIL_PORT=0 \
+    local_stack -p validate-sandbox-ports -f "$root/deploy/sandbox/docker-compose.local.yml" \
+    >"$tmp/sandbox-ports.json"
+jq -e '[.services[].ports[]?] as $ports
+    | ($ports | map(.target) | sort) == [8080, 8545]
+      and all($ports[]; .host_ip == "127.0.0.1" and .published == "0" and .protocol == "tcp")' \
+    "$tmp/sandbox-ports.json" >/dev/null || fail "the sandbox must support Docker-assigned loopback ports"
 local_stack --restore-check -p validate-drill -f "$root/deploy/local/restore-drill.compose.yml" \
     >"$tmp/drill.json"
 # The generated RPC overlay is shared across both drill variants. Restore-only TLS settings
@@ -172,5 +179,10 @@ jq -e '[.services[].volumes[]? | select(.type == "bind")] == []' "$tmp/rehearsal
 jq -e '[.services | to_entries[] | select((.value.ports // []) | length > 0) | .key] | sort
     == ["anvil", "anvil-base-mainnet-price", "anvil-base-sepolia", "anvil-mainnet-price"]' "$tmp/rehearsal.json" >/dev/null ||
     fail "only the Anvils may publish a port in the CVM rehearsal stack"
+jq -e '[.services[].ports[]?] as $ports
+    | ($ports | length) == 4
+      and all($ports[]; .host_ip == "127.0.0.1" and .target == 8545
+          and (.published // "0") == "0" and .protocol == "tcp")' \
+    "$tmp/rehearsal.json" >/dev/null || fail "the CVM rehearsal must use Docker-assigned loopback ports"
 
 echo "every committed environment renders and passes deploy/compose-policy.jq; the local overlays apply"

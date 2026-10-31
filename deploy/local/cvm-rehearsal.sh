@@ -63,18 +63,7 @@ client="$project-client"
 product_project="$project-product"
 owner="0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 export TOPUP_LOCAL_DSTACK_IMAGE="phala-pay-dstack-simulator:$project"
-export SANDBOX_ANVIL_PORT REHEARSAL_BASE_SEPOLIA_ANVIL_PORT
-export REHEARSAL_MAINNET_PRICE_ANVIL_PORT REHEARSAL_BASE_MAINNET_PRICE_ANVIL_PORT
 export REHEARSAL_PRICE_ANVIL_TIMESTAMP
-SANDBOX_ANVIL_PORT=$(free_port)
-REHEARSAL_BASE_SEPOLIA_ANVIL_PORT=$(free_port)
-REHEARSAL_MAINNET_PRICE_ANVIL_PORT=$(free_port)
-REHEARSAL_BASE_MAINNET_PRICE_ANVIL_PORT=$(free_port)
-registry_port=$(free_port)
-rpc_url="http://127.0.0.1:$SANDBOX_ANVIL_PORT"
-base_rpc_url="http://127.0.0.1:$REHEARSAL_BASE_SEPOLIA_ANVIL_PORT"
-mainnet_price_rpc_url="http://127.0.0.1:$REHEARSAL_MAINNET_PRICE_ANVIL_PORT"
-base_mainnet_price_rpc_url="http://127.0.0.1:$REHEARSAL_BASE_MAINNET_PRICE_ANVIL_PORT"
 # The sealed names of the rendered compose (filled in after the first render).
 env_names=()
 local_images=()
@@ -208,8 +197,10 @@ product_python() {
 }
 
 echo "== building images and pushing them to a loopback registry"
-docker run -d --name "$registry" -p "127.0.0.1:$registry_port:5000" \
+docker run -d --name "$registry" -p 127.0.0.1::5000 \
     --mount type=tmpfs,destination=/var/lib/registry "$registry_image" >/dev/null
+registry_address=$(docker port "$registry" 5000/tcp)
+registry_port=${registry_address##*:}
 wait_for "the registry" 30 curl -fsS "http://127.0.0.1:$registry_port/v2/"
 export SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(git -C "$root" log -1 --pretty=%ct)}
 # publish NAME VARIABLE BUILD_ARGS...: builds, pushes, and sets VARIABLE to repository@sha256.
@@ -260,6 +251,10 @@ echo "== starting Anvil (asset and hermetic price chains) and the client contain
 # Anchor after image builds; build duration must not age the price fixtures.
 REHEARSAL_PRICE_ANVIL_TIMESTAMP=$(($(date +%s) - 1950))
 dc up -d --wait anvil anvil-base-sepolia anvil-mainnet-price anvil-base-mainnet-price >/dev/null
+rpc_url="http://$(dc port anvil 8545)"
+base_rpc_url="http://$(dc port anvil-base-sepolia 8545)"
+mainnet_price_rpc_url="http://$(dc port anvil-mainnet-price 8545)"
+base_mainnet_price_rpc_url="http://$(dc port anvil-base-mainnet-price 8545)"
 # Both chains carry the canonical Multicall3 that topup's balance and addressOf reads go through.
 install_anvil_multicall3 "$rpc_url"
 install_anvil_multicall3 "$base_rpc_url"
