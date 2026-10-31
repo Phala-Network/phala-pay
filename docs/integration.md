@@ -371,7 +371,7 @@ verbatim:
 | `price_unavailable`, `unavailable`, `service_restoring` (503), `rate_limit`, `customer_rate_limit` (429) | Try again in a minute (`Retry-After` says how long). |
 
 Fresh quote snapshots have a configured daily cap per price chain and environment
-(default 60, production 150). Exhaustion returns retryable `503 price_unavailable`; the
+(default 60, production 600). Exhaustion returns retryable `503 price_unavailable`; the
 service never substitutes a stale price. Manual
 transfers to hot addresses are discovered every 300 seconds; admitted checkout hints use the independent instant
 processing path at route confirmation. Separate dual checkpoints run every 600 seconds, and
@@ -696,7 +696,7 @@ address = pay.deposit_addresses.create(client_reference_id="team-42",
   while `quotes` is paused (`400 paused`), and a network frozen by reconciliation gets no new
   address until it is lifted.
   The operator also enforces a configured historical per-chain issued-address cap (`rpc[].max_issued_addresses`):
-  currently 1,000 across all accounts
+  the configured cap across all accounts
   and modes on Phala's pilot, including retired and historical addresses. A first quote that
   issues a missing customer network and an address rotation consume it; at the cap these return
   `422 address_capacity_reached`, without `Retry-After`. This is not retryable: contact the
@@ -1010,7 +1010,7 @@ raises an alert. They do not advance coverage or cause expiry, cancellation, rej
 credit by themselves. Each task is limited to 12 read calls and 8 verify calls including retries
 and head polling, and 90 seconds on Ethereum chains or 30 seconds on Base chains. Limits are
 3/minute and 10/day per authenticated object, four active tasks, and a per-environment daily
-task cap set by the operator (`hints_per_day`, default 80; Phala's production uses 200). Hint endpoints have no per-IP limit; see the operator
+task cap set by the operator (`hints_per_day`, default 80; Phala's production uses 300). Hint endpoints have no per-IP limit; see the operator
 [API admission limits](configuration.md#api-admission-limits) for the ingress protection model.
 Transfers before the address's `created_block` are ignored, as in coverage scanning.
 Browser preflight returns an empty `204` with `Access-Control-Max-Age: 600`.

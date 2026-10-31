@@ -58,10 +58,10 @@ See the [RPC budget](RPC.md#worst-case-pilot-budget) for reserve and stop lines.
 
 | Pilot limit | Production value | Enforcement |
 |---|---:|---|
-| D: deposits per UTC day | 115 | Operator tally and stop |
-| H: hint tasks per UTC day | 200 | Service; excess hints fall back to scanning |
-| Q: fresh quote snapshots per price chain per UTC day | 150 | Service; `503 price_unavailable`, with 12-second snapshot reuse |
-| Issued addresses per chain, all accounts and modes | 1,000 permanently | Service; `422 address_capacity_reached` for a missing network or rotation |
+| D: deposits per UTC day | 280 | Operator tally and stop |
+| H: hint tasks per UTC day | 300 | Service; excess hints fall back to scanning |
+| Q: fresh quote snapshots per price chain per UTC day | 600 | Service; `503 price_unavailable`, with 12-second snapshot reuse |
+| Issued addresses per chain, all accounts and modes | 12,000 historical | Service; `422 address_capacity_reached` for a missing network or rotation |
 
 Quotes on an existing customer network consume no address capacity and continue at the cap.
 Each new RedPill organization consumes one address on each chain it first quotes on. Closing
@@ -123,7 +123,7 @@ Base Sepolia, Ethereum and Base. The mainnets are used for prices only. Sealed c
 `TOPUP_RPC_ANKR_KEY` and `TOPUP_RPC_INFURA_KEY`. Production keeps shared Ankr read and uses
 BlockPI verify on Ethereum and Base, with `TOPUP_RPC_BLOCKPI_ETHEREUM_KEY` and
 `TOPUP_RPC_BLOCKPI_BASE_KEY` from one free account. Production uses
-D=115/H=200/Q=150/factory=150/Safe=10; staging retains D=20/H=80/Q=60/factory=20/Safe=2.
+D=280/H=300/Q=600/factory=150/Safe=10; staging retains D=10/H=20/Q=30/factory=20/Safe=2.
 The [configuration](environments/phala-network/staging/topup/topup.yaml) uses strict HTTPS
 key templates. Run compose-path preflight with the complete sealed env before an authorized
 upgrade, including restore-check. The typed self-test checks actual receipt, transaction,

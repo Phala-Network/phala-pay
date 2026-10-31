@@ -311,7 +311,8 @@ async fn render_chain_reads_with_clock(
             .max(0);
         super::sanctions_metrics::snapshot(&snapshot, age, pool).await;
     }
-    let health = super::chain_health::snapshot(pool, now.unwrap_or_else(chrono::Utc::now)).await?;
+    let health =
+        super::chain_health::snapshot(pool, routes, now.unwrap_or_else(chrono::Utc::now)).await?;
     let lag = IntGaugeVec::new(
         Opts::new(
             "topup_coverage_lag_seconds",
@@ -412,6 +413,35 @@ async fn render_chain_reads_with_clock(
     families.extend(cap_gauge.collect());
     families.extend(addresses.collect());
     families.extend(used.collect());
+    for (name, help, column, limit) in [
+        (
+            "topup_hot_addresses",
+            "Distinct recipients in the configured discovery windows.",
+            1,
+            super::chain_health::HOT_ADDRESS_BUDGET,
+        ),
+        (
+            "topup_address_issuances_24h",
+            "Issued addresses in the last rolling 24 hours.",
+            2,
+            super::chain_health::issuance_budget(routes),
+        ),
+    ] {
+        let gauge = IntGaugeVec::new(Opts::new(name, help), &["chain_id"])?;
+        let budget = IntGaugeVec::new(
+            Opts::new(format!("{name}_budget"), "Budgeted per-chain RPC workload."),
+            &["chain_id"],
+        )?;
+        for &(chain, hot, issued) in &health.activity {
+            let chain = chain.to_string();
+            gauge
+                .with_label_values(&[&chain])
+                .set(if column == 1 { hot } else { issued });
+            budget.with_label_values(&[&chain]).set(limit);
+        }
+        families.extend(gauge.collect());
+        families.extend(budget.collect());
+    }
     families.retain(|family| !family.get_metric().is_empty());
     Ok(TextEncoder::new().encode_to_string(&families)?)
 }

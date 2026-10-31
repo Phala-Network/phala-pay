@@ -199,6 +199,29 @@ fn report_address_capacity(
 }
 
 fn report_pilot(state: &mut AlertState, now: DateTime<Utc>, routes: &RouteSet, health: &Snapshot) {
+    for &(chain, hot, issued) in &health.activity {
+        for (alert, observed, limit) in [
+            (
+                "TopupRpcHotAddressBudget",
+                hot,
+                chain_health::HOT_ADDRESS_BUDGET,
+            ),
+            (
+                "TopupRpcIssuanceBudget",
+                issued,
+                chain_health::issuance_budget(routes),
+            ),
+        ] {
+            state.observe(
+                now.timestamp(),
+                alert,
+                &format!("chain:{chain}"),
+                (observed > limit).then_some("warning"),
+                observed,
+                limit,
+            );
+        }
+    }
     for &(chain, lag, addresses) in &health.coverage {
         let component = format!("chain:{chain}");
         state.observe(
@@ -311,7 +334,7 @@ async fn probe_database(
     state: &mut AlertState,
 ) -> Result<(), sqlx::Error> {
     let now: DateTime<Utc> = sqlx::query_scalar("SELECT now()").fetch_one(pool).await?;
-    let health = chain_health::snapshot(pool, now).await?;
+    let health = chain_health::snapshot(pool, routes, now).await?;
     report_pilot(state, now, routes, &health);
     let heartbeat = sqlx::query_scalar("SELECT max(recorded_at) FROM heartbeat")
         .fetch_one(pool)
@@ -504,6 +527,7 @@ mod tests {
             issued: vec![(1, 699)],
             unresolved: vec![(1, 0, 0), (2, 0, 0)],
             slow: vec![(1, 0, 0), (2, 0, 0)],
+            activity: vec![(1, 2_000, 50)],
         }
     }
 
@@ -564,6 +588,36 @@ mod tests {
             });
             assert_eq!(events.len(), 1, "{alert} must be deduplicated");
             assert_eq!(events[0].tags["alert"], alert);
+        }
+    }
+
+    #[test]
+    fn activity_budget_alerts_are_per_chain_and_use_staging_issuance_allowance() {
+        for (environment, issuance_limit) in [("production", 50), ("staging", 10)] {
+            let routes = pilot_routes(300, 600).with_environment(environment.into());
+            let mut health = healthy_pilot();
+            health.activity = vec![(1, 2_000, issuance_limit), (2, 2_000, issuance_limit)];
+            let now = DateTime::from_timestamp(1_000_000, 0).unwrap();
+            let mut state = AlertState::default();
+            report_pilot(&mut state, now, &routes, &health);
+            assert!(state.active.is_empty());
+            health.activity[0].1 += 1;
+            health.activity[1].2 += 1;
+            report_pilot(&mut state, now, &routes, &health);
+            assert_eq!(state.active.len(), 2);
+            assert!(
+                state
+                    .active
+                    .contains_key(&("TopupRpcHotAddressBudget", "chain:1".into()))
+            );
+            assert!(
+                state
+                    .active
+                    .contains_key(&("TopupRpcIssuanceBudget", "chain:2".into()))
+            );
+            health.activity = vec![(1, 2_000, issuance_limit), (2, 2_000, issuance_limit)];
+            report_pilot(&mut state, now, &routes, &health);
+            assert!(state.active.is_empty());
         }
     }
 

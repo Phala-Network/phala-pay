@@ -13,6 +13,35 @@ The service evaluates readiness/backfill/coverage and S/L/H/Q in its existing bu
 [rpc-alerts.yaml](../rpc-alerts.yaml) are the optional Prometheus equivalents. Rolling provider
 quotas still require a time-series collector or daily provider-dashboard checks.
 
+## Hot set and issuance budgets
+
+`TopupRpcHotAddressBudget` / `RpcHotAddressBudget` fires when
+`topup_hot_addresses{chain_id}` exceeds `topup_hot_addresses_budget{chain_id}` (2,000).
+The DB counts distinct addresses quoted in the last 24 hours or with a deposit in the last
+seven days (chain block time), using the configured windows, in every state. Counts are per
+address and per chain. Quote snapshot Q
+cannot bound this set because quotes reuse snapshots. Staging's historical address cap is 1,000.
+
+Pause new quotes on the affected chain or reduce discovery windows through an attested config
+change. Keep `quote_window_hours × 3600` at least every route's maximum quote TTL; config
+validation rejects a smaller window. Cold addresses remain under hourly dual coverage and hints.
+Keep existing funded work running. Resume growth once the hot set fits its budget or a reviewed
+paid-provider budget replaces this one. Do not truncate discovery recipients to hide the alert.
+
+`TopupRpcIssuanceBudget` / `RpcIssuanceBudget` fires when
+`topup_address_issuances_24h{chain_id}` exceeds its `_budget` gauge: 50 per production chain,
+10 in staging. This rolling count includes all quote-owned and deposit-address-owned physical
+forwarders across accounts/modes, including retired addresses. RedPill currently admits at most
+20 new crypto organizations/day; Phala Cloud is not live. Token reuse on an existing network
+adds no issuance; new networks, treasury changes and rotations do.
+
+Pause new issuance before that allowance is spent. An alert above it requires reconciling
+opening jobs and RPC counters, debiting the excess/retries to the 150-call extra or monthly
+recovery reserve, and waiting for rolling usage to fit before resuming. Continue opening proof
+capture and all funded verification. These are operational allowances with alerts, not atomic
+admission limits. D is separately capped at 280 production/10 staging per UTC day, including
+recovery work. Check the [shared-account budget](../RPC.md#worst-case-pilot-budget).
+
 ## Confirmation provider lag
 
 Compare each endpoint's corresponding latest, safe or finalized head with the deposit's
@@ -51,12 +80,12 @@ and has its own capacity stop action.
    secrets. Run compose-path preflight before an owner-authorized upgrade.
 4. HTTP 402 waits until UTC midnight. Do not create extra free accounts, switch endpoints or
    enlarge budgets. Fresh quote snapshots have a configured daily cap per price chain
-   (production 150, staging/default 60); exhaustion returns retryable `price_unavailable`,
+   (production 600, staging 30, default 60); exhaustion returns retryable `price_unavailable`,
    and the UTC day resets that budget.
    `RpcPriceSnapshotBudgetExhausted` and `RpcHintBudgetExhausted` compare
    `topup_daily_budget_used{name}` against the matching `topup_daily_budget_limit{name}`,
    including all deployment scrape labels, and fire at exactly the configured cap. Hint tasks
-   use production 200, staging/default 80 per environment per UTC day. When importing the rules,
+   use production 300, staging 20, default 80 per environment per UTC day. When importing the rules,
    verify with the operator's evaluator that cap−1 does not fire and cap does for both environments.
    Older binaries lack the limit gauge; retain their original rules for rollback. Exhausted hints
    keep their quiet acknowledgement and fall back to scanning; they cannot establish negative coverage.
@@ -90,7 +119,7 @@ allocation. Continue verifying received funds, keep reservations, and retain eve
 Do not reset history/counters or speed polling up. Resolved entries stay in the rolling window
 until 24 hours after first entry. Resume new load only after stock and rolling entries both
 return to at most one, both endpoints recover, and existing payments resume confirmation.
-Production deposits/day is 46 and staging 20; include both in shared quota checks.
+Production deposits/day is 280 and staging 10; include both in shared quota checks.
 
 Receipt absence, disagreement, evidence changes and RPC failures instead enter S, which has
 its own stock/entry alerts and one-hour age alert. Follow the existing

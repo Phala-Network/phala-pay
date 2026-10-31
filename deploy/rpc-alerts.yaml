@@ -5,7 +5,7 @@
 # required for those internal checks. Sanctions freshness has its own existing monitor.
 # The increase(...[1d/7d]) provider-quota rules below REQUIRE a real time-series collector.
 # Without one, check provider dashboards daily (shared Ankr includes staging), plus the manual
-# D/recovery, factory and Safe tallies. Do not estimate rolling quotas from isolated snapshots.
+# D/recovery, factory and Safe tallies (D280 production/D10 staging). Do not estimate rolling quotas from isolated snapshots.
 groups:
   - name: phala-pay-rpc
     rules:
@@ -94,6 +94,20 @@ groups:
         annotations:
           summary: "Historical address count has reached 90% of the cap on chain {{ $labels.chain_id }}"
           runbook: "deploy/runbooks/address-capacity.md"
+      - alert: RpcHotAddressBudget
+        expr: topup_hot_addresses > topup_hot_addresses_budget
+        labels: { severity: warning }
+        annotations:
+          summary: "Hot discovery recipients exceed the 2,000-address budget on chain {{ $labels.chain_id }}"
+          description: "Lower discovery windows within the maximum quote TTL or pause new quotes; continue dual coverage."
+          runbook: "deploy/runbooks/rpc-health.md#hot-set-and-issuance-budgets"
+      - alert: RpcIssuanceBudget
+        expr: topup_address_issuances_24h > topup_address_issuances_24h_budget
+        labels: { severity: warning }
+        annotations:
+          summary: "Rolling address issuances exceed the opening-capture allowance on chain {{ $labels.chain_id }}"
+          description: "Pause new issuance; keep capturing openings and debit extra/recovery work before resuming."
+          runbook: "deploy/runbooks/rpc-health.md#hot-set-and-issuance-budgets"
       - record: topup_rpc_daily_calls
         expr: sum by (provider, chain_id) (increase(topup_rpc_calls_total[1d]))
       # Staging only: production has no Infura endpoints.

@@ -2,13 +2,14 @@
 # (docs/configuration.md), attested as an inline config of the rendered compose. A change is a pull
 # request and a Deploy `upgrade`.
 environment: production
-max_attached_pending_refunds: 2
-max_refund_attachments_per_day: 1
+max_attached_pending_refunds: 10
+max_attached_pending_refunds_per_account: 3
+max_refund_attachments_per_day: 10
 discovery:
   quote_window_hours: 24
   deposit_window_days: 7
-hints_per_day: 200
-quote_snapshots_per_day: 150
+hints_per_day: 300
+quote_snapshots_per_day: 600
 public_origin: https://pay-api.phala.com
 admin_key:
   id: admin/production-v1
@@ -21,11 +22,12 @@ maintenance_keys:
 # Independent Ankr read and BlockPI verify endpoints (deploy/RPC.md). Ankr is shared with staging;
 # BlockPI uses one mainnet key per chain from one free account. Staging retains Ankr + Infura.
 # Fast discovery uses read; coverage and money decisions require read/verify agreement.
-# Operational pilot caps: D=115 deposits/day, 150 factory verifications/day, 10 Safe proof sets/day.
+# Operational pilot caps: D=280 deposits/day, 150 factory verifications/day, 10 Safe proof sets/day.
+# At most 2,000 hot addresses/chain and 50 new issuances/chain/day; see deploy/RPC.md.
 # BlockPI log requests use its measured free-tier range limit; see deploy/RPC.md for the budget.
 rpc:
   - chain_id: 1
-    max_issued_addresses: 1000
+    max_issued_addresses: 12000
     read:
       id: ankr-mainnet
       url: "https://rpc.ankr.com/eth/{key}"
@@ -37,7 +39,7 @@ rpc:
       sealed_key: TOPUP_RPC_BLOCKPI_ETHEREUM_KEY
       max_log_blocks: 1000
   - chain_id: 8453
-    max_issued_addresses: 1000
+    max_issued_addresses: 12000
     read:
       id: ankr-base-mainnet
       url: "https://rpc.ankr.com/base/{key}"

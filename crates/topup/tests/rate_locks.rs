@@ -2785,6 +2785,13 @@ async fn permanent_chain_capacity_counts_closed_history_and_returns_same_nonretr
         let metrics=topup::observability::metrics::render_chain_reads(pool, &routes).await?;
         ensure!(metrics.contains("topup_issued_addresses{chain_id=\"1\"} 7"));
         ensure!(metrics.contains("topup_issued_address_cap{chain_id=\"1\"} 7"));
+        ensure!(metrics.contains("topup_hot_addresses{chain_id=\"1\"} 7"), "closed quotes still keep their recipients hot");
+        ensure!(metrics.contains("topup_hot_addresses_budget{chain_id=\"1\"} 2000"));
+        ensure!(metrics.contains("topup_address_issuances_24h{chain_id=\"1\"} 7"));
+        ensure!(metrics.contains("topup_address_issuances_24h_budget{chain_id=\"1\"} 50"));
+        let later=topup::observability::metrics::render_chain_reads_at(pool, &routes, Utc::now()+chrono::Duration::days(2)).await?;
+        ensure!(later.contains("topup_hot_addresses{chain_id=\"1\"} 0"));
+        ensure!(later.contains("topup_address_issuances_24h{chain_id=\"1\"} 0"));
         server.abort();let _=server.await;
         Ok(())
     })).await

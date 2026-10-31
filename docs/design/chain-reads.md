@@ -409,9 +409,9 @@ coverage-driven flow (§2.6) then expires or cancels it.
 ## 4. Config schema
 
 ```yaml
-max_attached_pending_refunds: 1           # required positive deployment cap; production uses 2
-# hints_per_day: 80                     # optional; integer 1..1,000,000; production 200
-# quote_snapshots_per_day: 60           # optional; same bounds; production 150
+max_attached_pending_refunds: 1           # required positive deployment cap; production uses 10
+# hints_per_day: 80                     # optional; integer 1..1,000,000; production 300
+# quote_snapshots_per_day: 60           # optional; same bounds; production 600
 rpc:                                    # one entry per chain used by a route or a price source
   - chain_id: 11155111                  # u64, unique
     read:                               # required
@@ -485,39 +485,38 @@ measurement record, separate from pricing-page claims.
 ### 5.2 Worst-case daily budget (staging + production combined)
 
 [RPC operations](../../deploy/RPC.md#worst-case-pilot-budget) is the authoritative budget:
-five-minute read discovery, ten-minute dual checkpoints, hourly dual coverage, six-hour
-19,200-block catch-up, all seven six-hour custody routes, prices, deposits, hints, factory proofs,
-Safe proofs, attached refunds, unresolved finality stock and extra operations. It assumes every
-payment chain runs all day, one caught-up recipient chunk plus one lagging chunk, and all 1,000
-historical addresses treated as hot. No hot-set idle savings raise the approved capacity.
+five-minute read discovery, ten-minute dual checkpoints, hourly dual coverage, adaptive
+19,200-block recovery, seven six-hour custody routes, opening captures, prices, deposits,
+hints, factory receipt fallbacks, Safe proofs, refunds and S/L stock/turnover. Steady-state
+coverage is `24·(k+1)` per chain/endpoint, with BlockPI splitting Base's hourly range into two.
+New addresses start caught up; no daily lagging chunk or four daily catch-up rounds are billed.
+An explicit 9,000-method/account/month recovery reserve replaces those terms.
 
-The approved [parallel operating mode and limits](../../deploy/RPC.md#pilot-limits-and-operating-modes)
-run staging tests, including refunds, alongside production on the shared free quotas. D, factory
-and Safe caps have no code enforcement; operators must tally work and stop new load at the limits.
-Refund attachments have atomic concurrent and rolling-24-hour admission caps. Hint and price
-daily budgets and the permanent address cap are hard limits.
+Production uses 12,000 historical addresses but budgets at most 2,000 hot recipients/chain;
+staging's historical cap is 1,000. The hot set counts addresses quoted in the last 24 hours or
+with a deposit in the last seven days, across all states. Quotes can share snapshots, so Q does not
+bound hot recipients. Per-chain DB gauges/alerts detect hot-set growth above 2,000 and rolling
+issuance above 50 production/10 staging; pause new quotes/issuance or reduce discovery windows
+without going below any route's maximum quote TTL. Opening captures reserve 300 production and
+80 staging methods/endpoint/day at the full unbatched bound, separately from the extra-operation
+reserve. See the
+[runbook](../../deploy/runbooks/rpc-health.md#hot-set-and-issuance-budgets).
 
-Per endpoint, Depth's normal allocation is 6 head methods + 3 complete-evidence methods + 4
-first-finality methods = 13. Safe uses 3 + 3 + 4 = 10; Finalized uses 7 + 3 + 0 = 10 and records
-finality without a duplicate first watcher check. Each deposit budgets 3 cold-discovery + 13
-confirmation/finality + 6 coverage + 2 price methods = **24 Ankr / 2,000 staging Infura**.
+Normal Depth uses at most six head probes, three complete-evidence methods and one first
+ancestry check/endpoint; Safe uses 3+3+1, Finalized 7+3+0. Two fresh valuation snapshots plus
+cold discovery yield 15 Ankr or 19 verify methods/deposit. Full first-finality fallback consumes
+recovery; later S rechecks retain the four-method bound and 86 checks/environment/day.
+L retains 86 head methods/environment/day and its independent stock/entry limits of one.
+Hints are charged separately in full despite their confirmation-only handoff savings; hint
+proof never establishes final_at and Finalized policy keeps the normal full path.
 
-With K=1, S rechecks cost `max(3, 1 + 3×K) = 4` methods per endpoint. S=1 plus at most one new
-entry per environment per rolling 24 h gives `2×(62 + 24) = 172` daily rechecks: 688 shared Ankr
-before retries. Staging uses half the rechecks, 27,520 Infura credits, and production uses
-7,310 BlockPI RU. L has its own one-stock/one-entry limits, giving 172 head methods
-across both environments: **172 shared Ankr**, with 6,880 staging Infura credits and
-1,720 production BlockPI RU. Its final full evidence read is already in D.
-
-At 3,000-block windows, coverage uses 192 log requests per endpoint/payment chain/day;
-BlockPI's 1,000-block windows conservatively require 560. Current route counts, provider totals,
-headroom, and approved operating limits are maintained only in the
-[RPC budget](../../deploy/RPC.md#worst-case-pilot-budget). Model ceilings do not authorize
-increases to approved limits. Non-refund reads use ×1.1; refunds reserve all
-three transport attempts. Logical method counts have hard bounds; each method can still make
-up to three physical sends. These totals do not guarantee ten-percent headroom if all
-non-refund requests exhaust retries. See the
-[approved retry caveat](../../deploy/RPC.md#worst-case-pilot-budget) and monitoring/stop actions.
+Production D280/H300/Q600/refunds10/10 and staging D10/H20/Q30/refunds1/1 leave modeled
+headroom of 10.36% Ankr, 71.61% Infura and 52.00% BlockPI, including monthly recovery.
+D, issuance, factory and Safe limits remain operational; H/Q and historical address/refund caps
+are atomic admission limits. Non-refund work uses ×1.1, refunds reserve all three transport
+attempts; this is not headroom when every non-refund method exhausts retries. Keep provider
+stop lines, monthly recovery ledger and the
+[approved retry caveat](../../deploy/RPC.md#worst-case-pilot-budget) in force.
 
 ### 5.3 Latency and recovery targets
 
