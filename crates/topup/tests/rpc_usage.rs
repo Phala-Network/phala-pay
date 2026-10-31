@@ -1,3 +1,5 @@
+//! Durable UTC-day RPC accounting and deposit observation-day regressions.
+
 mod support;
 
 use anyhow::{Result, ensure};
