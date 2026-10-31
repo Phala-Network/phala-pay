@@ -76,11 +76,8 @@ deployed_at_finalized() {
 }
 
 export SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(git -C "$root" log -1 --pretty=%ct)}
-TOPUP_LOCAL_PORT=$(free_port)
-SANDBOX_ANVIL_PORT=$(free_port)
-export TOPUP_LOCAL_PORT SANDBOX_ANVIL_PORT
-rpc_url="http://127.0.0.1:$SANDBOX_ANVIL_PORT"
-service_url="http://127.0.0.1:$TOPUP_LOCAL_PORT"
+# Docker reserves each host port when publishing it; read it back after the container starts.
+export TOPUP_LOCAL_PORT=0 SANDBOX_ANVIL_PORT=0
 public_url="http://product:8089"
 slug="sandbox-local"
 # A throwaway admin key for this run; the service issues the product through the admin API.
@@ -93,6 +90,7 @@ admin_public_key=$(openssl pkey -in "$tmp/admin.pem" -pubout -outform DER | tail
 echo "== building and starting postgres, dstack simulator, and anvil"
 "${compose[@]}" build postgres dstack-simulator topup
 "${compose[@]}" up -d postgres dstack-simulator anvil
+rpc_url="http://$("${compose[@]}" port anvil 8545)"
 wait_for anvil cast chain-id --rpc-url "$rpc_url"
 install_anvil_multicall3 "$rpc_url"
 "${compose[@]}" run --rm migrate >"$tmp/migrate.log" 2>&1 || { cat "$tmp/migrate.log" >&2; exit 1; }
@@ -145,6 +143,7 @@ cp "$tmp/resolved.json" "$environment/topup.yaml"
 
 echo "== starting the service"
 "${compose[@]}" up -d topup topup-tls
+service_url="http://$("${compose[@]}" port topup 8080)"
 wait_for "GET /healthz" curl -fsS "$service_url/healthz"
 
 echo "== creating the sandbox account through POST /v1/admin/accounts"

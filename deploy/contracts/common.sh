@@ -25,11 +25,6 @@ require_command() {
     command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
 }
 
-# Prints a loopback TCP port that is free right now, for a stack's published ports.
-free_port() {
-    python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'
-}
-
 lower() {
     tr '[:upper:]' '[:lower:]' <<<"$1"
 }

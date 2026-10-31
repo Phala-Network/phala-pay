@@ -16,7 +16,7 @@
 #
 # Like the restore drill, nothing here bind-mounts a host path (CI's Docker daemon cannot see
 # the checkout) and the workload publishes no host port; only the Anvils are published, on loopback
-# ports the script picks, so the contract scripts can deploy to them. `!override` and `!reset` need
+# ports Docker assigns, so the contract scripts can deploy to them. `!override` and `!reset` need
 # Compose 2.24.4 or newer.
 include:
   - s3.compose.yml
@@ -37,6 +37,8 @@ services:
     networks: !override
       default: { aliases: [anvil-b, provider-a.tenderly.test, sentio-sepolia-a.sentio.test, provider-b.publicnode.test, ethpandaops-sepolia-b.ethereum-foundation.test] }
     extends: { file: ../sandbox/docker-compose.local.yml, service: anvil }
+    ports: !override
+      - "127.0.0.1::8545"
 
   # Base Sepolia's chain id, an OP-stack one: its routes credit at depth 3 on Anvil's head.
   anvil-base-sepolia:
@@ -55,7 +57,7 @@ services:
       - --slots-in-an-epoch
       - "4"
     ports: !override
-      - "127.0.0.1:${REHEARSAL_BASE_SEPOLIA_ANVIL_PORT:-18546}:8545"
+      - "127.0.0.1::8545"
 
   # Hermetic price observation chains. They use production chain ids and fixture bytecode at the
   # reviewed feed/pair addresses, so CI never reaches Ethereum or Base public RPCs.
@@ -73,7 +75,7 @@ services:
       - --timestamp
       - "${REHEARSAL_PRICE_ANVIL_TIMESTAMP:-1}"
     ports: !override
-      - "127.0.0.1:${REHEARSAL_MAINNET_PRICE_ANVIL_PORT:-18547}:8545"
+      - "127.0.0.1::8545"
 
   anvil-base-mainnet-price:
     networks: !override
@@ -89,7 +91,7 @@ services:
       - --timestamp
       - "${REHEARSAL_PRICE_ANVIL_TIMESTAMP:-1}"
     ports: !override
-      - "127.0.0.1:${REHEARSAL_BASE_MAINNET_PRICE_ANVIL_PORT:-18548}:8545"
+      - "127.0.0.1::8545"
 
   # Local responses for the staging-only PHA check. The service aliases match the reviewed
   # exchange hostnames; test-only endpoint overrides keep CI off the public Internet.
