@@ -15,12 +15,12 @@ use alloy::rpc::json_rpc::{RequestPacket, ResponsePacket};
 use alloy::transports::{TransportError, TransportFut};
 use tower::{Layer, Service};
 
-/// Monitoring-only durable accounting hook, installed on service clients before use.
-#[async_trait::async_trait]
+/// Synchronous in-memory accounting hook, installed on service clients before use.
 pub trait RpcCallRecorder: std::fmt::Debug + Send + Sync {
-    /// Persist all methods in a transport packet (including retries and batch members).
+    /// Buffer all methods in a transport packet (including retries and batch members).
+    /// Implementations must perform no I/O or asynchronous work.
     /// Failure must not prevent the packet from being sent.
-    async fn record(
+    fn record(
         &self,
         provider: &str,
         chain: Option<u64>,
@@ -35,9 +35,14 @@ pub struct RpcAccountingError;
 
 static ACCOUNTING_FAILURES: AtomicU64 = AtomicU64::new(0);
 
-/// Failed durable packet writes since process start. Calls still proceed on failure.
+/// Failed usage flushes since process start. Calls still proceed on failure.
 pub fn rpc_accounting_failures() -> u64 {
     ACCOUNTING_FAILURES.load(Ordering::Relaxed)
+}
+
+/// Record a failed background usage flush without exposing internal errors.
+pub fn rpc_accounting_failed() {
+    ACCOUNTING_FAILURES.fetch_add(1, Ordering::Relaxed);
 }
 
 tokio::task_local! {
@@ -344,22 +349,15 @@ where
             record(&self.labels, method);
         }
         let labels = self.labels.clone();
-        let recorder = self.state.recorder.get().cloned();
+        if let Some(recorder) = self.state.recorder.get()
+            && recorder
+                .record(&labels.provider, labels.chain_id, &methods)
+                .is_err()
+        {
+            rpc_accounting_failed();
+        }
         let future = self.inner.call(request);
         Box::pin(HTTP_STATUS.scope(std::cell::Cell::new(None), async move {
-            if let Some(recorder) = recorder {
-                // Monitoring is bounded independently of the RPC timeout and never admission.
-                if !matches!(
-                    tokio::time::timeout(
-                        std::time::Duration::from_secs(1),
-                        recorder.record(&labels.provider, labels.chain_id, &methods),
-                    )
-                    .await,
-                    Ok(Ok(()))
-                ) {
-                    ACCOUNTING_FAILURES.fetch_add(1, Ordering::Relaxed);
-                }
-            }
             let response = future.await;
             // Alloy prefers a decoded JSON-RPC error over an HTTP error. Retain the status
             // for the one standard retry layer, even when the error body is valid JSON-RPC.
@@ -402,9 +400,8 @@ mod tests {
     #[derive(Debug)]
     struct FailedRecorder;
 
-    #[async_trait::async_trait]
     impl RpcCallRecorder for FailedRecorder {
-        async fn record(
+        fn record(
             &self,
             provider: &str,
             chain: Option<u64>,

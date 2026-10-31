@@ -559,15 +559,22 @@ create separate provider quotas. BlockPI is 1,250,000 RU/day and Infura 1,500,00
 warning at 1,000,000 RU and 1,200,000 credits. Configure exact endpoint ids, including staging's
 mainnet price endpoints; a provider label is never inferred from a URL.
 
-Accounting batches one DB upsert per packet on a separate two-connection pool, with a one-second
-deadline. An unavailable tally never blocks RPC: `topup_rpc_accounting_failures_total` increments
-and `TopupRpcAccountingFailed` warns that the day's usage may be incomplete. Successful
-accounting can overcount a packet if the process stops after committing and before sending it.
-A crash before commit, accounting failures, external CLI/preflight calls, another service and
-BlockPI response-size surcharges can undercount billed usage. The provider dashboard remains
+RPC packets synchronously update in-memory counters without database I/O. A background worker
+flushes one batched upsert every 30 seconds on a separate two-connection pool, with a one-second
+deadline and one final shutdown flush. Monotonic epoch counters make retries idempotent even
+after a lost write acknowledgement. Failed flushes retain pending counts for retry:
+`topup_rpc_accounting_failures_total` increments and `TopupRpcAccountingFailed` warns that the
+day's persisted usage may be incomplete. RPC never waits for accounting persistence. With a
+healthy database, a crash can lose the last flush interval; outages extend that window.
+External CLI/preflight calls, another service and BlockPI response-size surcharges can also
+undercount billed usage. The provider dashboard remains
 authoritative for combined monthly usage. Counters start at upgrade; reconcile the first day's
 pre-upgrade calls manually. Restarts preserve committed daily tallies and UTC rollover starts a
 new day. A read-only restore process does not write these monitoring tables.
+
+Older binaries reject `quota_alerts`; use the target release's retained configuration and kit
+for rollback. The drill strips this key when the target configuration lacks it. Disabled quota
+configuration is omitted from resolved/attested output for compatibility.
 
 Maintain manual daily tallies of factory verification instances and Safe attempts, including
 recovery work.

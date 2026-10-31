@@ -204,7 +204,7 @@ pub fn render(pool: &PgPool) -> Result<String, prometheus::Error> {
     let mut families = calls.collect();
     let accounting = prometheus::IntCounter::new(
         "topup_rpc_accounting_failures_total",
-        "Failed durable RPC packet writes since process start.",
+        "Failed background RPC usage flushes since process start.",
     )?;
     accounting.inc_by(topup_adapters::chain::evm::metrics::rpc_accounting_failures());
     families.extend(accounting.collect());

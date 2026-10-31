@@ -772,6 +772,7 @@ const DOCUMENTED_GRANTS: &[(&str, &[&str])] = &[
     ("custody_opening_balances", &["SELECT", "INSERT"]),
     ("custody_opening_jobs", &["SELECT", "INSERT"]),
     ("daily_budgets", &["SELECT", "INSERT", "UPDATE"]),
+    ("rpc_daily_usage", &["SELECT", "INSERT", "UPDATE"]),
     ("accounts", OPERATIONAL),
     ("payment_settings_revisions", &["SELECT", "INSERT"]),
     ("payment_settings_state", OPERATIONAL),

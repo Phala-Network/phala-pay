@@ -361,12 +361,23 @@ replacement candidate consumes no additional quota. See the [refund rules](archi
 ### Operational quota alerts
 
 `quota_alerts` is optional monitoring configuration, included in `config show` and the attested
-configuration. Omission keeps quota alerts disabled. `deposits_per_day` is a positive integer
+configuration only when set. Omission keeps quota alerts disabled and preserves the previous
+configuration format. Older binaries reject this key: use the target release's retained
+configuration and kit for rollback. The rollback drill removes `quota_alerts` when absent from
+the target release's configuration, as it does for other newly introduced keys.
+`deposits_per_day` is a positive integer
 (D); it counts each persisted deposit's first observation in the UTC day, including rejections.
 The `rpc` list has at most eight allocations with unique `[a-z0-9-]{1,40}` names, exact configured
 endpoint ids in `providers` (each endpoint appears at most once), a positive `stop_line`, and
 `unit: calls`, `blockpi_ru`, or `infura_credits`. Calls include every transport attempt and batch
 member; costs use the [RPC budget](../deploy/RPC.md#worst-case-pilot-budget) weights.
+
+RPC calls only update in-memory counters. A background worker persists one batched snapshot
+every 30 seconds on a separate pool, with a one-second deadline and one final shutdown flush.
+Monotonic per-process epoch counters make retries idempotent; failed flushes retain pending
+counts and raise `TopupRpcAccountingFailed`. With a healthy database, a crash can lose the last
+flush interval; an outage extends that window. Committed totals survive restarts. Accounting
+never waits for the database on the RPC path.
 
 RPC warnings start at ceil(80% of the allocation), become critical at the stop line, and deposit
 warnings start at D. Alerts use the existing admin API. These stop lines trigger monitoring;

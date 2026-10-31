@@ -202,11 +202,14 @@ Pause intake and reconcile the remaining RPC budget before resuming. Factory/Saf
 recovery still require manual tallies; D is an alert, not an automatic rejection gate.
 
 `TopupRpcAccountingFailed` and `topup_rpc_accounting_failures_total` indicate failed/timed-out
-usage writes. Calls continue, so the daily total may undercount; this process keeps the alert active for
-the observed UTC day even if accounting recovers. A process restart resets failure tracking;
-reconcile any accounting incident against the dashboard rather than treating restart as repair. Check database availability and the dedicated
-two-connection accounting pool, then reconcile with the provider dashboard before adding load.
-A database probe failure must never be read as zero usage or recovery. Committed tallies survive
-restarts; the UTC day resets quota conditions. The upgrade day's earlier calls, read-only restore
-processes and standalone CLI calls are outside the tally. A pre-send committed packet can be
-conservatively overcounted if the process dies before sending it.
+background flushes. RPC calls update only in-memory counters; one batched upsert runs every
+30 seconds with a one-second deadline on a dedicated two-connection pool. Failed flushes retain
+counts for retry, and monotonic epoch snapshots prevent duplicate counting on retries. The
+persisted daily total may lag; this process keeps the alert active for the observed UTC day even
+if accounting recovers. A process restart resets failure tracking; reconcile any accounting
+incident against the dashboard rather than treating restart as repair. Check database
+availability and the accounting pool before adding load. A database probe failure must never
+be read as zero usage or recovery. Committed tallies survive restarts; a crash can lose the last
+flush interval with a healthy database, and outages extend that window. A bounded final flush
+runs on graceful shutdown. The UTC day resets quota conditions. The upgrade day's earlier
+calls, read-only restore processes and standalone CLI calls are outside the tally.
