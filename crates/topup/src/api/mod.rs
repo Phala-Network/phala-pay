@@ -5,6 +5,7 @@ mod account;
 mod alerts;
 mod attestation;
 mod auth;
+mod auth_limits;
 mod cache;
 mod client_limit;
 mod deadlines;
@@ -97,7 +98,7 @@ pub struct AppState {
     pub rate_lock_quotes: Arc<dyn QuoteProvider>,
     /// Rate limit of anonymous quote reads by `client_secret`.
     pub client_reads: Arc<ClientReadLimiter>,
-    /// Per-account and platform rate limits of authenticated merchant requests.
+    /// Shared authentication protection and per-account/platform authenticated request limits.
     pub rate_limits: Arc<ApiRateLimiter>,
     /// Dedicated authenticated object limits for transaction hints.
     pub hint_limits: Arc<HintRateLimiter>,

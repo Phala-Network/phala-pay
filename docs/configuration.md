@@ -18,7 +18,7 @@ is in [design/deploy-config.md](design/deploy-config.md).
 ## API admission limits
 
 Topup receives the client source address through gateway and dstack-ingress PROXY v2
-passthrough. There is no per-client-IP limiting. Protection comes from the
+passthrough. Authentication uses a transient failed-auth bucket per source IP; further protection comes from the
 authenticated account-and-mode limits (100 requests/s live, 25 test, and 500 test requests/s
 across accounts), the `client_secret` object limits (120 reads/minute), the pre-authentication
 database gate, the global limit of 256 concurrent API requests, and the Phala gateway's per-app
@@ -27,9 +27,24 @@ connection cap (configured by Phala; value not confirmed).
 Well-formed, checksum-valid Bearer keys wait at most 250 ms for an authentication slot. Slots
 are half the database pool, with a minimum of one, and cover the restore freeze check and API-key
 lookup only. A full gate returns `503 unavailable` with `Retry-After: 1`; malformed or
-checksum-invalid keys return `401` before taking a slot. Anonymous `client_secret` reads use
+checksum-invalid keys return `401` before taking a slot, subject to the source bucket below. Anonymous `client_secret` reads use
 their own slots; `/healthz` and admin authentication do not use this gate. The service admission
 limits are built in, with no new configuration setting.
+
+Before database admission, each Bearer request reserves a token from its source IP's 20-token
+failed-auth bucket, refilling one token every three seconds. A genuine `401` spends the token;
+success, server errors, overload and request cancellation refund it. Exhaustion returns `429
+rate_limit` with `Retry-After: 1`. Unknown key hashes have a 60-second negative cache; cached
+misses consume no database slot. Revoked and expired keys are not cached. Committed key
+creation, roll and recovery invalidate the matching entry, including a miss still in flight.
+Direct repository users must call `ApiRateLimiter::invalidate_api_key` after committed issuance.
+Each map has a hard 4,096-entry bound. When active sources fill the map, untracked sources
+continue through the existing database auth gate; tracked sources retain their limits. A full
+unknown-key cache stops adding entries until expired ones can be pruned. IPv6 sources share
+one bucket per /64; IPv4-mapped IPv6 addresses use the corresponding IPv4 bucket.
+Addresses are held only in memory, never logged. The bucket uses `ConnectInfo`, including the
+PROXY v2 source; `X-Forwarded-For` and `X-Real-IP` cannot choose it. Requests without connection
+metadata share a fallback bucket. Anonymous `client_secret` reads retain their existing limits.
 
 Authentication shedding increments the label-free `topup_merchant_auth_shed_total` counter.
 These 503 responses precede idempotency admission and do not save a result. Retry after the
@@ -51,14 +66,17 @@ without authenticating it. Client-supplied `X-Real-IP` and `X-Forwarded-For` rem
 The service's attested gateway `port_policy` enables `pp:true` on 443 with `restrict_mode:false`;
 gateway PROXY v2 and ingress ACCEPT/SEND must stay aligned in one app-compose update
 ([Custom domain](../deploy/README.md#custom-domain)).
-Carrying the address introduces no per-IP admission or transaction-hint limits.
+The source address is used only for the transient failed-auth bucket described above.
 
-Transaction-hash hints have no per-IP limit. Their controls are credential-gated per-object
-limits of 3/minute and 10/day, the configured `hints_per_day` cap per environment per UTC day
+Transaction-hash hint processing has no per-IP task limit. Quotes allow at most three submissions
+per rolling 24 hours; reusable deposit addresses keep 3/minute and 10/day. Tracking is bounded
+to 4,096 objects in total, with at most three instants per quote; new objects are ignored when
+the map is full until expired entries can be pruned. Further controls are the configured
+`hints_per_day` cap per environment per UTC day
 (300 production, 20 staging; default 80), and at most
 four tasks in flight. Request bodies are read only after the shared 256-request concurrency gate
 admits the hint; overload returns `503 unavailable` with `Retry-After: 1`. Admitted hints retain
-quiet `202 received` responses. Merchant-key hints share the database authentication gate above.
+quiet `202 received` responses. Merchant-key hints share the failed-auth bucket and database authentication gate above.
 dstack-ingress uses HAProxy in TCP mode and forwards to `topup:8082` with PROXY protocol;
 client-supplied forwarding headers are not trusted.
 

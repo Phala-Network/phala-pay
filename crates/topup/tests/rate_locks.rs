@@ -2267,6 +2267,17 @@ async fn create_lock(
     account: &Customer,
     route: &RouteFile,
 ) -> Result<locks::RateLock> {
+    Ok(create_lock_amount(database, quotes, product, account, route, 100).await?)
+}
+
+async fn create_lock_amount(
+    database: &TestDatabase,
+    quotes: &Arc<dyn QuoteProvider>,
+    product: &Account,
+    account: &Customer,
+    route: &RouteFile,
+    amount: u64,
+) -> Result<locks::RateLock, RateLockError> {
     let (lock, _) = locks::create(
         &database.app_pool,
         quotes,
@@ -2275,7 +2286,7 @@ async fn create_lock(
         account,
         route,
         1000,
-        MinorAmount::new(100),
+        MinorAmount::new(amount),
         &Default::default(),
     )
     .await?;
@@ -2906,4 +2917,116 @@ async fn consumption_rechecks_a_window_cut_after_the_candidate_was_read() -> Res
         })
     })
     .await
+}
+
+fn stablecoin_test_routes() -> Vec<RouteFile> {
+    let config = topup::config::Config::parse(include_str!(
+        "../../../deploy/environments/phala-network/production/topup/topup.yaml"
+    ))
+    .unwrap();
+    config
+        .routes
+        .into_iter()
+        .take(2)
+        .map(|mut route| {
+            let fixture = test_route();
+            route.chain = fixture.chain;
+            route.merchant = fixture.merchant;
+            route.asset.decimals = 2;
+            route.asset.quote_amount_decimals = 2;
+            route
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn stablecoin_replacements_discount_customer_amount_but_keep_account_and_count_caps()
+-> Result<()> {
+    support::with_database(|db| Box::pin(async move {
+        let pool = &db.app_pool;
+        let account = seed_product_without_key(pool, "stable replacement").await?;
+        let customer = seed_account(pool, account.id, "payer").await?;
+        let routes = stablecoin_test_routes();
+        let route = &routes[0];
+        seed::configure_payments(pool, account.id, true,
+            &topup::payment_config::Document::accepting(routes.iter())).await?;
+        set_limits(pool, account.id, true, None, Some(2_000_000), Some(1_000_000)).await?;
+        let provider: Arc<dyn QuoteProvider> = Arc::new(FixedQuote);
+        let first = create_lock_amount(db, &provider, &account, &customer, route, 600_000).await?;
+        let second = create_lock_amount(db, &provider, &account, &customer, route, 600_000).await?;
+        let rows: Vec<(Uuid, Option<String>, Option<Uuid>, bool)> = sqlx::query_as(
+            "SELECT id,pricing_mode,replaced_by,exposure_reserved FROM quotes WHERE customer_id=$1 ORDER BY id"
+        ).bind(customer.id).fetch_all(pool).await?;
+        ensure!(rows.len()==2 && rows.iter().all(|row|row.1.as_deref()==Some("stablecoin") && row.3));
+        ensure!(rows.iter().find(|row|row.0==first.id).unwrap().2==Some(second.id));
+        sqlx::query("UPDATE quotes SET pricing_mode=pricing_mode WHERE id=$1").bind(first.id).execute(pool).await?;
+        for changed in [Some("spot"), None] {
+            ensure!(sqlx::query("UPDATE quotes SET pricing_mode=$2 WHERE id=$1")
+                .bind(first.id).bind(changed).execute(pool).await.is_err());
+        }
+        set_limits(pool, account.id, true, None, Some(1_500_000), Some(1_000_000)).await?;
+        ensure!(matches!(create_lock_amount(db, &provider, &account, &customer, route, 600_000).await,
+            Err(RateLockError::ExposureCap {scope:"account",..})));
+        set_limits(pool, account.id, true, Some(2), Some(2_000_000), Some(1_000_000)).await?;
+        ensure!(matches!(create_lock_amount(db, &provider, &account, &customer, route, 600_000).await,
+            Err(RateLockError::QuoteCountCap(2))));
+        let replaced: Option<Uuid> = sqlx::query_scalar("SELECT replaced_by FROM quotes WHERE id=$1")
+            .bind(second.id).fetch_one(pool).await?;
+        ensure!(replaced.is_none(), "failed creations must roll back their window cuts");
+        Ok(())
+    })).await
+}
+
+#[tokio::test]
+async fn cancel_requested_stablecoin_quote_allows_another_token_under_customer_cap() -> Result<()> {
+    support::with_database(|db| Box::pin(async move {
+        let pool = &db.app_pool;
+        let account = seed_product_without_key(pool, "token switch").await?;
+        let customer = seed_account(pool, account.id, "payer").await?;
+        let routes = stablecoin_test_routes();
+        seed::configure_payments(pool, account.id, true,
+            &topup::payment_config::Document::accepting(routes.iter())).await?;
+        set_limits(pool, account.id, true, None, Some(2_000_000), Some(1_000_000)).await?;
+        let provider: Arc<dyn QuoteProvider> = Arc::new(FixedQuote);
+        let first = create_lock_amount(db, &provider, &account, &customer, &routes[0], 600_000).await?;
+        let cancelled = locks::cancel(pool, &topup::routes::RouteSet::new(routes.clone()).unwrap(),
+            Scope::new(account.id, true), &Actor::system("test"), first.id).await?;
+        ensure!(cancelled.cancel_requested_at.is_some());
+        let second = create_lock_amount(db, &provider, &account, &customer, &routes[1], 600_000).await?;
+        ensure!(first.route != second.route);
+        let reserved: String = sqlx::query_scalar("SELECT sum(credit_minor)::text FROM quotes WHERE customer_id=$1 AND exposure_reserved")
+            .bind(customer.id).fetch_one(pool).await?;
+        ensure!(reserved=="1200000", "account reservations must retain both payments");
+        Ok(())
+    })).await
+}
+
+#[tokio::test]
+async fn spot_and_legacy_null_quotes_remain_in_customer_amount() -> Result<()> {
+    support::with_database(|db| Box::pin(async move {
+        let pool = &db.app_pool;
+        let account = seed_product_without_key(pool, "conservative exposure").await?;
+        let customer = seed_account(pool, account.id, "spot payer").await?;
+        set_limits(pool, account.id, true, None, Some(2_000_000), Some(1_000_000)).await?;
+        let provider: Arc<dyn QuoteProvider> = Arc::new(FixedQuote);
+        let first = create_lock_amount(db, &provider, &account, &customer, &test_route(), 600_000).await?;
+        ensure!(matches!(create_lock_amount(db, &provider, &account, &customer, &test_route(), 600_000).await,
+            Err(RateLockError::ExposureCap {scope:"customer",..})));
+        let mode: Option<String> = sqlx::query_scalar("SELECT pricing_mode FROM quotes WHERE id=$1")
+            .bind(first.id).fetch_one(pool).await?;
+        ensure!(mode.as_deref()==Some("spot"));
+        let legacy_customer = seed_account(pool, account.id, "legacy payer").await?;
+        let old = seed::insert_address(pool, &support::seed::NewAddress {
+            id:Uuid::new_v4(), customer_id:legacy_customer.id, chain_id:1,
+            route:test_route().route, salt:B256::repeat_byte(0xc1), address:Address::repeat_byte(0xc2),
+        }).await?;
+        let old_quote = old.quote_id.context("legacy quote")?;
+        sqlx::query("UPDATE quotes SET status='open',closed_at=NULL,exposure_reserved=true,credit_minor=600000,expires_at=now()+interval '1 hour',cancel_requested_at=now() WHERE id=$1")
+            .bind(old_quote).execute(pool).await?;
+        ensure!(sqlx::query("UPDATE quotes SET pricing_mode='stablecoin' WHERE id=$1")
+            .bind(old_quote).execute(pool).await.is_err(), "NULL history must stay immutable");
+        ensure!(matches!(create_lock_amount(db, &provider, &account, &legacy_customer, &test_route(), 600_000).await,
+            Err(RateLockError::ExposureCap {scope:"customer",..})));
+        Ok(())
+    })).await
 }

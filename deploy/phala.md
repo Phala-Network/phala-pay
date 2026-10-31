@@ -15,12 +15,15 @@ API-key authentication that cannot acquire a database slot within 250 ms returns
 [Service configuration](../docs/configuration.md#api-admission-limits) for the authentication
 gate and protection model.
 
+The unknown-key cache and source-IP failed-auth bucket are unreleased protections for the next
+upgrade. Deployed v0.13.4 uses the database admission gate above.
+
 ## Ingress
 
 Staging and production run dstack-ingress 2.8. Topup enables gateway PROXY on 443 and ingress
 ACCEPT/SEND to its private listener on 8082 together; the staging reference product keeps PROXY
-off and uses its plain HTTP backend. Topup carries the client address without per-IP limits and
-never logs it; HAProxy's private access logs are the documented privacy exception. See
+off and uses its plain HTTP backend. Topup carries the client address for its transient
+failed-auth bucket and never logs it; HAProxy's private access logs are the documented privacy exception. See
 [Custom domain](README.md#custom-domain) for the attested policy and verification checks.
 The current [rollback floor](README.md#rollback-compatibility) is v0.13.0.
 

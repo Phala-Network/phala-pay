@@ -18,7 +18,7 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 - **no rollback to 0.13.4; restore required**. Ignored-transfer accounting moves outside the
   deposits table; once totals exist, pre-change binaries cannot reconcile custody. The schema
-  compatibility floor is `20261111000001`, so their required Compose migration step fails
+  compatibility floor is `20261112000000`, so their required Compose migration step fails
   before service startup. A directly launched old binary bypasses that deployment gate; custody
   then freezes the affected chain on mismatch and crediting stops. Do not bypass the gate.
   Take and verify a pre-upgrade backup and exercise the [restore/reconciliation procedure](deploy/RESTORE.md)
@@ -45,6 +45,19 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Changed
 
+- The customer open-amount cap excludes unconsumed stablecoin-priced quotes after replacement
+  or a cancel request, including the same-route window cut by a new creation. Account amount
+  and quote-count caps retain those reservations. Spot/PHA and historical quotes without an
+  immutable pricing mode remain conservatively counted.
+- API-key authentication caches unknown SHA-256 key hashes for 60 seconds and applies an
+  in-memory, unlogged source-IP failed-auth token bucket (20-token burst, one token per three
+  seconds), before database admission. Both maps are capped at 4,096 entries; untracked sources
+  pass through the existing DB auth gate when source tracking is full. IPv6 sources share /64
+  buckets. Successful authentication, server errors and canceled requests refund provisional
+  tokens; committed key creation, roll and recovery invalidate the cache. PROXY v2 client
+  addresses are respected; forwarding HTTP headers are ignored.
+- Quote transaction hints allow at most three submissions per rolling 24 hours, with bounded
+  object tracking. Reusable deposit-address hint limits remain three/minute and ten/day.
 - **Merchant webhook behavior:** newly discovered unsupported-token, zero-amount and
   guaranteed-sub-floor transfers no longer create merchant deposit objects or `deposit.rejected`
   events. Staff can inspect the operator report. Existing deposits and ordinary rejections keep

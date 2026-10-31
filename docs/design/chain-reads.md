@@ -181,11 +181,14 @@ Task (in process; deduplicated by `(chain, tx, object)`; insertion dedupes by re
    deadline** (90 s Ethereum chains, 30 s Base chains); hitting either ends the task (scanning
    covers it).
 
-Caps: per object 3/min and 10/day (`api/rate_limit.rs`); no per-IP limit because TCP ingress shares
-one peer across clients. The shared API concurrency gate admits at most 256 requests; hint workers
-run at most 4 tasks in flight. **80 tasks per environment per UTC day**, enforced by an atomic
+Caps: quotes allow at most 3 submissions per rolling 24 hours; reusable deposit addresses keep
+3/min and 10/day (`api/rate_limit.rs`). Tracking is bounded to 4,096 objects and at most three
+instants per quote. Hint processing has no per-IP task limit; merchant-key authentication uses
+the transient failed-auth bucket and PROXY v2 client source. The shared API concurrency gate
+admits at most 256 requests; hint workers run at most 4 tasks in flight. The configurable daily
+task cap (default 80, production 300) is enforced by an atomic
 `daily_budgets` row (`UPDATE … SET used = used + 1 WHERE day = $today AND name = 'hints' AND
-used < 80`), because the governor buckets refill. Endpoint not ready → park in a bounded
+used < $limit`), because the governor buckets refill. Endpoint not ready → park in a bounded
 in-memory queue (256 entries, 15 min TTL); overflow dropped.
 
 SDK: `@phala/pay` gains `submitTransaction(...)`; `payWithWallet` (`sdk/js/src/wallet.ts`) calls

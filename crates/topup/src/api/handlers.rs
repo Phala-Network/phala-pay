@@ -202,6 +202,7 @@ pub(crate) async fn issue_api_key(
     )
     .await
     .map_err(super::keys::map_error)?;
+    state.rate_limits.invalidate_api_key(&issued.secret);
     Ok(super::keys::issued_response(&issued))
 }
 
@@ -726,6 +727,9 @@ fn validate_scopes(scopes: Vec<String>) -> ApiResult<Vec<String>> {
 }
 
 async fn account_response(state: &AppState, issued: IssuedAccount) -> ApiResult<AccountResponse> {
+    for key in &issued.api_keys {
+        state.rate_limits.invalidate_api_key(&key.secret);
+    }
     let account = issued.account;
     let mut connection = state.pool.acquire().await?;
     let payment_settings = AccountPaymentSettings {

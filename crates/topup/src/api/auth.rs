@@ -5,7 +5,7 @@ use super::AppState;
 use super::error::ApiError;
 use super::repository;
 use axum::body::{Body, to_bytes};
-use axum::extract::{MatchedPath, Request, State};
+use axum::extract::{ConnectInfo, MatchedPath, Request, State};
 use axum::http::{HeaderMap, HeaderValue, Method, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -13,6 +13,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use chrono::{DateTime, Utc};
 use ed25519_dalek::VerifyingKey;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Semaphore;
@@ -113,19 +114,46 @@ impl Merchant {
 /// request without a well-formed key is refused without a database read. Database authentication
 /// holds at most half the pool's slots; waiting more than 250 ms is `503 unavailable` with
 /// `Retry-After: 1`. The slot is released before any handler runs.
+/// Unknown-key hashes are cached for 60 seconds. A bounded, unlogged source-IP failure bucket
+/// reserves tokens before admission and refunds successful, canceled and server-error attempts.
 pub(super) async fn authenticate_merchant(
     State(auth): State<MerchantAuthState>,
     mut request: Request,
     next: Next,
 ) -> Response {
+    let state = &auth.app;
+    // ConnectInfo also carries PROXY v2's asserted source on the private ingress listener.
+    // Forwarded HTTP headers never select the bucket; absent connection info shares one bucket.
+    let source = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED), |peer| peer.0.ip());
+    let Some(failure) = state.rate_limits.auth.reserve(source) else {
+        return ApiError::too_many_requests().into_response();
+    };
     let presented = match bearer_key(request.headers()) {
         Ok(presented) => presented,
-        Err(error) => return unauthorized(error),
+        Err(error) => {
+            failure.fail();
+            return unauthorized(error);
+        }
     };
     if api_keys::check_format(&presented).is_none() {
+        failure.fail();
         return unauthorized(ApiError::api_key_invalid());
     }
-    let state = &auth.app;
+    let hash = api_keys::hash(&presented);
+    let generation = match state
+        .rate_limits
+        .auth
+        .unknown_key(&hash, std::time::Instant::now())
+    {
+        Ok(generation) => generation,
+        Err(()) => {
+            failure.fail();
+            return unauthorized(ApiError::api_key_invalid());
+        }
+    };
     let authenticated = {
         let _slot = match tokio::time::timeout(SLOT_WAIT, auth.slots.acquire()).await {
             Ok(Ok(slot)) => slot,
@@ -142,13 +170,27 @@ pub(super) async fn authenticate_merchant(
         }
         match api_keys::authenticate(&state.pool, &presented).await {
             Ok(Ok(authenticated)) => authenticated,
-            Ok(Err(Rejection::Expired)) => return unauthorized(ApiError::api_key_expired()),
-            Ok(Err(Rejection::Invalid | Rejection::Revoked)) => {
+            Ok(Err(Rejection::Expired)) => {
+                failure.fail();
+                return unauthorized(ApiError::api_key_expired());
+            }
+            Ok(Err(Rejection::Invalid)) => {
+                state.rate_limits.auth.remember_unknown(
+                    hash,
+                    generation,
+                    std::time::Instant::now(),
+                );
+                failure.fail();
+                return unauthorized(ApiError::api_key_invalid());
+            }
+            Ok(Err(Rejection::Revoked)) => {
+                failure.fail();
                 return unauthorized(ApiError::api_key_invalid());
             }
             Err(error) => return ApiError::from(error).into_response(),
         }
     };
+    drop(failure); // A valid credential consumes no failed-auth quota, including later 403/429s.
     let scope = authenticated.key.scope();
     // The operator can turn live mode off after issuing live keys (design D12).
     if scope.livemode() && !authenticated.charges_enabled {

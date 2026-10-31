@@ -288,7 +288,7 @@ customers     id, account_id, livemode, client_reference_id, paused_scopes text[
               -- created by the customer's first quote or deposit address
               -- (`settlement` stops crediting: deposits wait in `confirmed`)
 quotes        id (qt_ + hex), account_id, livemode, customer_id, address_id, route, route_version, amount_atomic,
-              window_start, replaced_by, price_scaled, credit_minor, expires_at, cancel_requested_at, status, consumed_by (deposit_id) UNIQUE,
+              window_start, replaced_by, price_scaled, pricing_mode, credit_minor, expires_at, cancel_requested_at, status, consumed_by (deposit_id) UNIQUE,
               client_secret_hash, metadata jsonb, settings_revision_id, terms jsonb
               -- terms: resolved terms kept for good; address_id: fixed network (§9)
 payment_settings_revisions  id (random, never reused), account_id, livemode,
@@ -596,8 +596,10 @@ depth before verify is polled.
 RPC runs outside the chain lock; insertion strictly rechecks the address snapshot and inspects
 all receipt-position history under that lock. Any reversed history defers the hint to scanning:
 identical evidence cannot re-enter, and differing evidence needs the finalized successor path.
-Root's admission decision is no per-IP limit on hints: controls are authenticated per-object
-limits of 3/minute and 10/day, a hard daily cap of 80 tasks per environment per UTC day, and
+Hint processing has no per-IP task limit: quotes allow at most three submissions per rolling
+24 hours, while reusable deposit addresses keep 3/minute and 10/day. Tracking has a hard
+4,096-object bound, with at most three instants per quote. Further controls are a configured
+daily cap (`hints_per_day`, default 80, production 300) per environment per UTC day, and
 at most four tasks in flight. See the operator [API admission limits](configuration.md#api-admission-limits).
 
 **Agreed checkpoints** are checked and published independently every 600 seconds, only after
@@ -772,7 +774,11 @@ Invoice model, with this service's exception profile:
   per price chain per environment per UTC day (default 60, production 600). Exhaustion returns retryable `503 price_unavailable`, with no stale price. Quote
   reuse remains twelve seconds; confirmation always requests a fresh dual Multicall3 snapshot.
 - Exposure counters sum `credit_minor` across routes, which every route counts in USD cents
-  (§6).
+  (§6). The customer amount sum excludes unconsumed quotes whose immutable `pricing_mode`
+  is `stablecoin` and which are replaced or cancel-requested. This includes a same-route quote
+  atomically cut during creation. Account amount and quote-count caps still count them until
+  reservation release. `spot` and historical/restored `NULL` modes remain counted. New quotes
+  persist their attested route's mode; the database rejects changes, including `NULL` backfills.
 - Every quote uses the customer's active deposit-address network on its chain, issued in the
   same transaction if missing. Quotes reference `addresses.id`; they do not issue single-use
   addresses. Historical fixed customer addresses remain watched.
@@ -1412,7 +1418,7 @@ destination is `400 destination_sanctioned`. A reversed deposit is not refundabl
 | 401 | `invalid_request_error` | `signature_replayed` (admin: the signature was already used) |
 | 409 | `idempotency_error` | `idempotency_key_in_use` (a request with the key still runs; retry); the only `409` |
 | 422 | `invalid_request_error` | `address_capacity_reached`, `refund_attachment_limit_exceeded` (non-retryable pilot admission limits) |
-| 429 | `invalid_request_error` | `rate_limit` (requests per account and mode; reads of a public view by `client_secret`), `customer_rate_limit` (quote creations per minute and deposit address rotations per hour of one customer); each with `Retry-After` |
+| 429 | `invalid_request_error` | `rate_limit` (failed authentication by source IP; requests per account and mode; reads of a public view by `client_secret`), `customer_rate_limit` (quote creations per minute and deposit address rotations per hour of one customer); each with `Retry-After` |
 | 503 | `api_error` | `unavailable` (no fresh price, database unavailable, including API-key authentication slots exhausted), `service_maintenance` (planned upgrades pause new mutations; reads continue while the process is up; retry after `Retry-After` with the same `Idempotency-Key`, since the request has not executed), `service_restoring` (every merchant request with an API key, reads included, while the service is frozen after a restore, §14; with `Retry-After`) |
 | 400 | `invalid_request_error` | admin only: `restore_not_frozen`, `restore_rescan_incomplete` (§14) |
 | 500 | `api_error` | `internal_error` |
