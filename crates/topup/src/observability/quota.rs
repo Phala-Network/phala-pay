@@ -60,6 +60,11 @@ impl RpcUnit {
 }
 
 impl QuotaAlerts {
+    /// Omit disabled monitoring from resolved files so older binaries can still read them.
+    pub fn is_disabled(&self) -> bool {
+        self.deposits_per_day.is_none() && self.rpc.is_empty()
+    }
+
     /// Validate bounded names and references to this deployment's exact endpoint ids.
     pub fn validate(&self, endpoints: &[crate::chain_rpc::ChainRpcSpec]) -> Result<(), String> {
         if self.rpc.len() > 8 {
@@ -145,5 +150,18 @@ mod tests {
             25_000
         );
         assert_eq!(staging.quota_alerts.rpc[0].providers.len(), 4);
+        let mut disabled = config;
+        disabled.quota_alerts = Default::default();
+        let resolved = disabled.resolved_json().unwrap();
+        assert!(
+            !resolved.contains("\"quota_alerts\""),
+            "N-1 denies unknown config fields"
+        );
+        assert!(
+            crate::config::Config::parse(&resolved)
+                .unwrap()
+                .quota_alerts
+                .is_disabled()
+        );
     }
 }

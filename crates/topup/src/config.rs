@@ -128,6 +128,7 @@ struct ResolvedConfig<'a> {
     hints_per_day: i32,
     quote_snapshots_per_day: i32,
     discovery: crate::scanner::ScanConfig,
+    #[serde(skip_serializing_if = "crate::observability::quota::QuotaAlerts::is_disabled")]
     quota_alerts: &'a crate::observability::quota::QuotaAlerts,
     #[serde(skip_serializing_if = "Option::is_none")]
     public_origin: Option<String>,
