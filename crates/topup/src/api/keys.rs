@@ -166,9 +166,11 @@ pub(crate) async fn create_api_key(
         }
     }
     .map_err(map_error)?;
-    idempotent
+    let response = idempotent
         .commit(transaction, issued_response(&issued))
-        .await
+        .await?;
+    state.rate_limits.invalidate_api_key(&issued.secret);
+    Ok(response)
 }
 
 #[utoipa::path(
@@ -225,9 +227,11 @@ pub(crate) async fn roll_api_key(
     )
     .await
     .map_err(map_error)?;
-    idempotent
+    let response = idempotent
         .commit(transaction, issued_response(&issued))
-        .await
+        .await?;
+    state.rate_limits.invalidate_api_key(&issued.secret);
+    Ok(response)
 }
 
 #[utoipa::path(

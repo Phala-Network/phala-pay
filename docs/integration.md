@@ -355,6 +355,12 @@ the token's price risk from the payment until you sell it.
   quote by setting `cancel_requested_at` and ending its payment window. The response stays
   `open`; coverage later completes cancellation with `quote.canceled`. An in-window payment
   discovered afterwards consumes the quote normally. Hide the payment address after requesting cancellation.
+  On a token switch, cancel the previous quote before creating the new token's quote; both the
+  JavaScript and Python server SDKs expose `quotes.cancel`. Same-route creation cuts the prior
+  window atomically. Unconsumed stablecoin quotes that are replaced or cancel-requested stop
+  consuming customer amount headroom; account amount and quote-count reservations remain until
+  coverage closes them. Spot/PHA and historical quotes without pricing-mode evidence keep
+  consuming customer headroom too.
 - A quote above the remaining open exposure fails with `400 exposure_cap_exceeded`; its message
   states what is left.
 
@@ -1034,8 +1040,10 @@ receipt visibility keeps polling within the task budget; only confirmed evidence
 raises an alert. They do not advance coverage or cause expiry, cancellation, rejection or
 credit by themselves. Each task is limited to 12 read calls and 8 verify calls including retries
 and head polling, and 90 seconds on Ethereum chains or 30 seconds on Base chains. Limits are
-3/minute and 10/day per authenticated object, four active tasks, and a per-environment daily
-task cap set by the operator (`hints_per_day`, default 80; Phala's production uses 300). Hint endpoints have no per-IP limit; see the operator
+at most three submissions per rolling 24 hours per quote (3/minute and 10/day for reusable
+deposit addresses), bounded tracking of 4,096 objects, four active tasks, and a per-environment daily
+task cap set by the operator (`hints_per_day`, default 80; Phala's production uses 300). Hint processing has no per-IP task limit;
+merchant-key authentication has a separate transient failed-auth bucket. See the operator
 [API admission limits](configuration.md#api-admission-limits) for the ingress protection model.
 Transfers before the address's `created_block` are ignored, as in coverage scanning.
 Browser preflight returns an empty `204` with `Access-Control-Max-Age: 600`.

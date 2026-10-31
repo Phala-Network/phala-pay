@@ -70,6 +70,13 @@ image/config, and delivered-event reconciliation as described in the
 
 ## Roles and privileges
 
+`20261112000000` adds nullable, immutable `quotes.pricing_mode` (`stablecoin`/`spot`). New quotes
+copy the attested route's mode. Historical, restored and old-binary rows retain `NULL` and stay
+in the customer exposure sum; they cannot be backfilled. Unconsumed stablecoin quotes after
+replacement/cancel request leave only the customer amount sum, retaining account/count
+reservations. The expand-only down migration retains the field and trigger; the current
+compatibility floor is unchanged.
+
 `20261105000000_alerts` adds the platform's durable alert instances and list/retention indexes.
 It is expand-only and preserves the previous release's schema compatibility floor. Its down
 migration drops only the new table. Resolved instances are pruned after 30 days in bounded

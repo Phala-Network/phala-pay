@@ -515,7 +515,7 @@ pub async fn create_in(
     }
     lock_customer(transaction, customer).await?;
     check_creation_rate(transaction, customer.id, creations_per_minute).await?;
-    check_exposure(transaction, account, customer, credit_minor).await?;
+    lock_exposure(transaction, scope).await?;
     let (deposit_address, _) = crate::deposit_addresses::create(
         &mut **transaction,
         account,
@@ -579,15 +579,19 @@ pub async fn create_in(
     .bind(id)
     .execute(&mut **transaction)
     .await?;
+    // Include the windows just cut in the account/count caps, but discount unconsumed
+    // stablecoin replacements from the customer amount cap. A failure rolls the cuts back.
+    check_exposure(transaction, account, customer, credit_minor).await?;
     sqlx::query(
         r#"
         INSERT INTO quotes (
             id, account_id, livemode, customer_id, route, amount_atomic, price_scaled,
             credit_minor, expires_at, status, exposure_reserved, created_at, metadata,
-            client_secret_hash, route_version, settings_revision_id, terms, address_id, window_start
+            client_secret_hash, route_version, settings_revision_id, terms, address_id, window_start,
+            pricing_mode
         )
         VALUES ($1, $2, $3, $4, $5, $6::text::numeric, $7::text::numeric, $8::text::numeric,
-                $9, 'open', true, $10, $11, $12, $13, $14, $15, $16, $10)
+                $9, 'open', true, $10, $11, $12, $13, $14, $15, $16, $10, $17)
         "#,
     )
     .bind(id)
@@ -606,6 +610,10 @@ pub async fn create_in(
     .bind(revision)
     .bind(Json(terms))
     .bind(address_id)
+    .bind(match route.pricing.mode {
+        topup_core::route::PricingMode::Stablecoin => "stablecoin",
+        topup_core::route::PricingMode::Spot => "spot",
+    })
     .execute(&mut **transaction)
     .await?;
     let lock = RateLock {
@@ -1151,8 +1159,8 @@ async fn lock_customer(
 /// per account and mode only (design §12): a test quote never uses live headroom, and there is no
 /// global cap.
 ///
-/// The transaction-level advisory lock serialises creations of the account and mode from this
-/// check to commit, and under `READ COMMITTED` the sums, a later statement, see every creation
+/// The previously acquired advisory lock serialises creations of the account and mode through
+/// commit, and under `READ COMMITTED` these sums see every creation
 /// committed before it. Closing a lock only lowers the sums, so cancellation, consumption, and
 /// expiry need no lock.
 async fn check_exposure(
@@ -1162,10 +1170,6 @@ async fn check_exposure(
     amount: MinorAmount,
 ) -> Result<(), RateLockError> {
     let scope = Scope::new(account.id, customer.livemode);
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('rate-lock-exposure:' || $1, 0))")
-        .bind(format!("{}:{}", scope.account_id(), scope.livemode()))
-        .execute(&mut **transaction)
-        .await?;
     let limits = crate::limits::load(transaction, scope)
         .await
         .map_err(|error| match error {
@@ -1175,7 +1179,10 @@ async fn check_exposure(
     let open = sqlx::query(
         r#"
         SELECT count(*) AS quotes,
-               coalesce(sum(credit_minor) FILTER (WHERE customer_id = $3), 0)::text AS customer,
+               coalesce(sum(credit_minor) FILTER (WHERE customer_id = $3 AND (
+                   pricing_mode IS DISTINCT FROM 'stablecoin' OR consumed_by IS NOT NULL
+                   OR (replaced_by IS NULL AND cancel_requested_at IS NULL)
+               )), 0)::text AS customer,
                coalesce(sum(credit_minor), 0)::text AS account
         FROM quotes
         WHERE account_id = $1 AND livemode = $2 AND status = 'open' AND exposure_reserved
@@ -1218,6 +1225,18 @@ async fn check_exposure(
             );
         }
     }
+    Ok(())
+}
+
+/// Preserve the existing customer → account exposure → address/quote lock order.
+async fn lock_exposure(
+    transaction: &mut Transaction<'_, Postgres>,
+    scope: Scope,
+) -> Result<(), RateLockError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('rate-lock-exposure:' || $1, 0))")
+        .bind(format!("{}:{}", scope.account_id(), scope.livemode()))
+        .execute(&mut **transaction)
+        .await?;
     Ok(())
 }
 

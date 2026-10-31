@@ -19,8 +19,8 @@ gate and protection model.
 
 Staging and production run dstack-ingress 2.8. Topup enables gateway PROXY on 443 and ingress
 ACCEPT/SEND to its private listener on 8082 together; the staging reference product keeps PROXY
-off and uses its plain HTTP backend. Topup carries the client address without per-IP limits and
-never logs it; HAProxy's private access logs are the documented privacy exception. See
+off and uses its plain HTTP backend. Topup carries the client address for its transient
+failed-auth bucket and never logs it; HAProxy's private access logs are the documented privacy exception. See
 [Custom domain](README.md#custom-domain) for the attested policy and verification checks.
 The current [rollback floor](README.md#rollback-compatibility) is v0.13.0.
 

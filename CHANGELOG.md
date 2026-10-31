@@ -57,6 +57,21 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   Balances, sweep selection and the daily route report include ignored amounts, so sweeping
   a forwarder's whole token balance never understates a later payment.
 
+### Changed
+
+- The customer open-amount cap excludes unconsumed stablecoin-priced quotes after replacement
+  or a cancel request, including the same-route window cut by a new creation. Account amount
+  and quote-count caps retain those reservations. Spot/PHA and historical quotes without an
+  immutable pricing mode remain conservatively counted.
+- API-key authentication caches unknown SHA-256 key hashes for 60 seconds and applies an
+  in-memory, unlogged source-IP failed-auth token bucket (20-token burst, one token per three
+  seconds), before database admission. Both maps are capped at 4,096 entries. Successful
+  authentication, server errors and canceled requests refund provisional tokens; committed
+  key creation, roll and recovery invalidate the cache. PROXY v2 client addresses are respected;
+  forwarding HTTP headers are ignored.
+- Quote transaction hints allow at most three submissions per rolling 24 hours, with bounded
+  object tracking. Reusable deposit-address hint limits remain three/minute and ten/day.
+
 ## [0.13.4] - 2026-10-31
 
 ### Added

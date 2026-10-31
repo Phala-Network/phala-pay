@@ -62,8 +62,9 @@ impl Default for RateLimits {
     }
 }
 
-/// The per-account and platform limits of authenticated merchant requests.
+/// Shared authentication protection and per-account/platform authenticated request limits.
 pub struct ApiRateLimiter {
+    pub(super) auth: super::auth_limits::AuthLimits,
     limits: RateLimits,
     clock: Clock,
     state: Mutex<State>,
@@ -106,10 +107,17 @@ impl ApiRateLimiter {
         clock: impl Fn() -> Instant + Send + Sync + 'static,
     ) -> Self {
         Self {
+            auth: Default::default(),
             limits,
             clock: Box::new(clock),
             state: Mutex::default(),
         }
+    }
+
+    /// Invalidate an unknown-key cache entry after committed key creation, roll or recovery.
+    /// HTTP issuance paths call this automatically; direct repository callers must do so too.
+    pub fn invalidate_api_key(&self, secret: &str) {
+        self.auth.invalidate(&crate::api_keys::hash(secret));
     }
 
     /// Counts one request of `scope`; `false` means it is over a limit and must be refused with
@@ -392,18 +400,50 @@ pub struct HintRateLimiter {
 }
 #[derive(Default)]
 struct HintLimits {
-    objects: HashMap<uuid::Uuid, (Instant, Instant)>,
+    quotes: HashMap<uuid::Uuid, std::collections::VecDeque<Instant>>,
+    addresses: HashMap<uuid::Uuid, (Instant, Instant)>,
+}
+const HINT_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
+impl HintLimits {
+    fn prune(&mut self, now: Instant) {
+        self.quotes.retain(|_, instants| {
+            instants.retain(|at| now.saturating_duration_since(*at) < HINT_WINDOW);
+            !instants.is_empty()
+        });
+        self.addresses
+            .retain(|_, (minute, day)| *minute > now || *day > now);
+    }
 }
 impl HintRateLimiter {
-    pub(crate) fn allow_object(&self, object: uuid::Uuid) -> bool {
-        self.object_at(object, Instant::now())
+    pub(crate) fn allow_object(&self, object: uuid::Uuid, quote: bool) -> bool {
+        self.object_at(object, quote, Instant::now())
     }
-    fn object_at(&self, object: uuid::Uuid, now: Instant) -> bool {
+    fn object_at(&self, object: uuid::Uuid, quote: bool, now: Instant) -> bool {
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let previous = state.objects.get(&object).copied();
+        let tracked = if quote {
+            state.quotes.contains_key(&object)
+        } else {
+            state.addresses.contains_key(&object)
+        };
+        if !tracked && state.quotes.len() + state.addresses.len() >= PRUNE_ABOVE {
+            state.prune(now);
+            if state.quotes.len() + state.addresses.len() >= PRUNE_ABOVE {
+                return false;
+            }
+        }
+        if quote {
+            let instants = state.quotes.entry(object).or_default();
+            instants.retain(|at| now.saturating_duration_since(*at) < HINT_WINDOW);
+            if instants.len() >= 3 {
+                return false;
+            }
+            instants.push_back(now);
+            return true;
+        }
+        let previous = state.addresses.get(&object).copied();
         let Ok(minute) = trial_admission(
             previous.map(|value| value.0),
             now,
@@ -412,20 +452,10 @@ impl HintRateLimiter {
         ) else {
             return false;
         };
-        let Ok(day) = trial_admission(
-            previous.map(|value| value.1),
-            now,
-            10,
-            Duration::from_secs(24 * 60 * 60),
-        ) else {
+        let Ok(day) = trial_admission(previous.map(|value| value.1), now, 10, HINT_WINDOW) else {
             return false;
         };
-        if state.objects.len() >= PRUNE_ABOVE {
-            state
-                .objects
-                .retain(|_, (minute, day)| *minute > now || *day > now);
-        }
-        state.objects.insert(object, (minute, day));
+        state.addresses.insert(object, (minute, day));
         true
     }
 }
@@ -434,20 +464,53 @@ impl HintRateLimiter {
 mod hint_tests {
     use super::*;
     #[test]
-    fn hint_limits_are_per_object_and_refusals_do_not_charge_other_quotas() {
+    fn quote_hint_limit_is_a_hard_rolling_three() {
+        let limits = HintRateLimiter::default();
+        let now = Instant::now();
+        let object = uuid::Uuid::new_v4();
+        for hour in [0, 1, 2] {
+            assert!(limits.object_at(object, true, now + Duration::from_secs(hour * 3600)));
+        }
+        assert!(!limits.object_at(object, true, now + HINT_WINDOW - Duration::from_nanos(1)));
+        assert!(limits.object_at(object, true, now + HINT_WINDOW));
+        assert!(!limits.object_at(object, true, now + HINT_WINDOW));
+        assert!(limits.object_at(object, true, now + HINT_WINDOW + Duration::from_secs(3600)));
+        assert_eq!(limits.state.lock().unwrap().quotes[&object].len(), 3);
+    }
+
+    #[test]
+    fn hint_tracking_has_a_hard_shared_capacity_and_reclaims_expired_objects() {
+        let limits = HintRateLimiter::default();
+        let now = Instant::now();
+        for index in 0..PRUNE_ABOVE {
+            assert!(limits.object_at(
+                uuid::Uuid::from_u128(u128::try_from(index).unwrap()),
+                index % 2 == 0,
+                now
+            ));
+        }
+        let extra = uuid::Uuid::new_v4();
+        assert!(!limits.object_at(extra, true, now));
+        assert!(!limits.object_at(extra, false, now));
+        assert!(limits.object_at(extra, true, now + HINT_WINDOW));
+        let state = limits.state.lock().unwrap();
+        assert!(state.quotes.len() + state.addresses.len() <= PRUNE_ABOVE);
+    }
+
+    #[test]
+    fn deposit_address_hints_keep_the_existing_minute_and_day_limits() {
         let limits = HintRateLimiter::default();
         let now = Instant::now();
         let object = uuid::Uuid::new_v4();
         for _ in 0..3 {
-            assert!(limits.object_at(object, now));
+            assert!(limits.object_at(object, false, now));
         }
-        assert!(!limits.object_at(object, now));
-        assert!(limits.object_at(uuid::Uuid::new_v4(), now));
-        // Spread submissions so the minute quota refills while the day quota stays spent.
+        assert!(!limits.object_at(object, false, now));
+        assert!(limits.object_at(uuid::Uuid::new_v4(), false, now));
         for minute in 1..8 {
-            assert!(limits.object_at(object, now + Duration::from_secs(minute * 60)));
+            assert!(limits.object_at(object, false, now + Duration::from_secs(minute * 60)));
         }
-        assert!(!limits.object_at(object, now + Duration::from_secs(8 * 60)));
-        assert!(limits.object_at(object, now + Duration::from_secs(24 * 60 * 60)));
+        assert!(!limits.object_at(object, false, now + Duration::from_secs(8 * 60)));
+        assert!(limits.object_at(object, false, now + HINT_WINDOW));
     }
 }

@@ -2052,3 +2052,111 @@ async fn ignored_transfer_admin_report_is_authenticated_filtered_and_paginated()
         Ok(())
     })).await
 }
+
+fn auth_request_from(key: &str, source: &str) -> Result<axum::http::Request<Body>> {
+    let mut request = merchant_request(Method::GET, "/v1/account", vec![], key);
+    request.extensions_mut().insert(axum::extract::ConnectInfo(
+        source.parse::<std::net::SocketAddr>()?,
+    ));
+    Ok(request)
+}
+
+#[tokio::test]
+async fn unknown_keys_and_source_failures_bypass_saturated_authentication_slots() -> Result<()> {
+    support::with_database(|db| Box::pin(async move {
+        let admin = SigningKey::from_bytes(&[39; 32]);
+        let (_, key) = seed_product(&db.app_pool, "auth abuse").await?;
+        let state = app_state(db.app_pool.clone(), &admin);
+        let app = topup::api::router(state).0;
+        let cached = topup::api_keys::generate(topup::api_keys::KeyKind::Secret, true)?;
+        ensure!(app.clone().oneshot(auth_request_from(&cached, "192.0.2.1:1")?).await?.status()==StatusCode::UNAUTHORIZED);
+        // Successful keys refund the provisional failure reservation before the handler.
+        for _ in 0..25 {
+            ensure!(app.clone().oneshot(auth_request_from(&key, "192.0.2.2:1")?).await?.status()==StatusCode::OK);
+        }
+        // Different well-formed forgeries still share one source's failure budget.
+        for _ in 0..20 {
+            let forged = topup::api_keys::generate(topup::api_keys::KeyKind::Secret, true)?;
+            ensure!(app.clone().oneshot(auth_request_from(&forged, "192.0.2.3:1")?).await?.status()==StatusCode::UNAUTHORIZED);
+        }
+        let mut lock = db.owner_pool.begin().await?;
+        sqlx::query("LOCK TABLE restores IN ACCESS EXCLUSIVE MODE").execute(&mut *lock).await?;
+        let slots = db.app_pool.options().get_max_connections() / 2;
+        let mut pending = tokio::task::JoinSet::new();
+        for _ in 0..slots {
+            let forged = topup::api_keys::generate(topup::api_keys::KeyKind::Secret, true)?;
+            pending.spawn(app.clone().oneshot(auth_request_from(&forged, "192.0.2.4:1")?));
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let waiting: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT EXISTS (SELECT 1 FROM restores%'")
+                    .fetch_one(&db.owner_pool).await?;
+                if waiting==i64::from(slots) { return Ok::<_,anyhow::Error>(()); }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        }).await??;
+        let response = tokio::time::timeout(std::time::Duration::from_secs(1),
+            app.clone().oneshot(auth_request_from(&cached, "192.0.2.1:2")?)).await??;
+        ensure!(response.status()==StatusCode::UNAUTHORIZED, "cached unknown key waited for DB admission");
+        let fresh = topup::api_keys::generate(topup::api_keys::KeyKind::Secret, true)?;
+        let mut spoofed = auth_request_from(&fresh, "192.0.2.3:2")?;
+        spoofed.headers_mut().insert("x-forwarded-for", "192.0.2.99".parse()?);
+        spoofed.headers_mut().insert("x-real-ip", "192.0.2.99".parse()?);
+        let response = tokio::time::timeout(std::time::Duration::from_secs(1), app.clone().oneshot(spoofed)).await??;
+        ensure!(response.status()==StatusCode::TOO_MANY_REQUESTS, "forwarding headers bypassed the source bucket");
+        pending.abort_all();
+        while let Some(joined) = pending.join_next().await { ensure!(joined.unwrap_err().is_cancelled()); }
+        lock.rollback().await?;
+        ensure!(app.clone().oneshot(auth_request_from(&key, "192.0.2.4:2")?).await?.status()==StatusCode::OK);
+        Ok(())
+    })).await
+}
+
+#[tokio::test]
+async fn committed_key_issuance_invalidates_a_recent_unknown_hash() -> Result<()> {
+    support::with_database(|db| {
+        Box::pin(async move {
+            let admin = SigningKey::from_bytes(&[39; 32]);
+            let (account, _) = seed_product(&db.app_pool, "unknown key becoming valid").await?;
+            let state = app_state(db.app_pool.clone(), &admin);
+            let limits = state.rate_limits.clone();
+            let app = topup::api::router(state).0;
+            let mut transaction = db.app_pool.begin().await?;
+            let issued = topup::api_keys::create(
+                &mut *transaction,
+                topup::tenancy::Scope::new(account.id, true),
+                "new key",
+                &topup::audit::Actor::admin("test"),
+                "",
+            )
+            .await?;
+            // The row is still uncommitted, so authentication caches its hash as unknown.
+            ensure!(
+                app.clone()
+                    .oneshot(auth_request_from(&issued.secret, "192.0.2.1:1")?)
+                    .await?
+                    .status()
+                    == StatusCode::UNAUTHORIZED
+            );
+            transaction.commit().await?;
+            ensure!(
+                app.clone()
+                    .oneshot(auth_request_from(&issued.secret, "192.0.2.1:1")?)
+                    .await?
+                    .status()
+                    == StatusCode::UNAUTHORIZED
+            );
+            // Same post-commit invalidation used by HTTP create/roll/recovery and account issuance.
+            limits.invalidate_api_key(&issued.secret);
+            ensure!(
+                app.clone()
+                    .oneshot(auth_request_from(&issued.secret, "192.0.2.1:1")?)
+                    .await?
+                    .status()
+                    == StatusCode::OK
+            );
+            Ok(())
+        })
+    })
+    .await
+}

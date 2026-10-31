@@ -1823,10 +1823,8 @@ async fn same_ingress_peer_does_not_globally_limit_hints_but_object_credentials_
         }
         ensure!(h.queue.pending() == 25);
         let path = format!("/v1/quotes/{}/transactions", h.quote_id);
-        for _ in 0..25 {
-            h.submit(&path, Some("invalid"), json!({"transaction_hash":TX}))
-                .await?;
-        }
+        h.submit(&path, Some("invalid"), json!({"transaction_hash":TX}))
+            .await?;
         for byte in 30..=33 {
             h.submit(
                 &path,
@@ -1837,7 +1835,7 @@ async fn same_ingress_peer_does_not_globally_limit_hints_but_object_credentials_
         }
         ensure!(
             h.queue.pending() == 28,
-            "only three authenticated hints per object per minute"
+            "only three authenticated hints per quote per rolling 24 hours"
         );
         Ok(())
     }

@@ -278,7 +278,7 @@ async fn submit(
     let Some((id, chain, recipient, created)) = address else {
         return Ok(());
     };
-    if !state.hint_limits.allow_object(object) {
+    if !state.hint_limits.allow_object(object, quote) {
         return Ok(());
     }
     let chain = u64::try_from(chain).map_err(|_| ApiError::internal())?;
