@@ -2496,7 +2496,7 @@ async fn issuance_during_rpc_preserves_covered_evidence_and_defers_negative_evid
         scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
         read.logs_gate = Some((started.clone(), resume.clone()));
         let chain = chain();
-        let coverage = scanner::coverage_round(&d.app_pool, &read, &verify, &chain, 1);
+        let coverage = scanner::coverage_round(&d.app_pool, &read, &verify, &chain);
         let issuance = async {
             started.notified().await;
             let inserted = address(d, 100).await;
@@ -2518,7 +2518,7 @@ async fn issuance_during_rpc_preserves_covered_evidence_and_defers_negative_evid
         ensure!(read.requests.lock().unwrap().iter().filter(|(addresses,_,_)| !addresses.is_empty()).count() == 1,
             "uncovered issuance repeated covered RPC evidence");
         read.logs_gate = None;
-        scanner::coverage_once(&d.app_pool, &read, &verify, &chain, 2).await?;
+        scanner::coverage_once(&d.app_pool, &read, &verify, &chain).await?;
         ensure!(marker(d, inserted.id).await? == Some(200));
         ensure!(compat(d).await? == (200, Some(time(200))));
         ensure!(topup::locks::expire_once(&d.app_pool, &routes()).await? == 1);
@@ -2566,7 +2566,7 @@ async fn with_database_counted(count: usize) -> Result<Option<(usize, std::time:
             let start = std::time::Instant::now();
             let result = tokio::time::timeout(
                 std::time::Duration::from_secs(30),
-                scanner::coverage_once(&d.app_pool, &read, &verify, &chain(), 1)
+                scanner::coverage_once(&d.app_pool, &read, &verify, &chain())
                     .with_subscriber(queries.subscriber()),
             )
             .await
