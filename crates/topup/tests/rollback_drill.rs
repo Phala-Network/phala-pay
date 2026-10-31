@@ -302,6 +302,7 @@ async fn merchant(origin: &str, key: &str, path: &str, body: Value) -> Result<Va
 }
 fn new_config(route: &RouteFile, tls: &support::tls::RpcTlsProxy) -> Result<Value> {
     let raw = json!({"environment":"local","public_origin":"http://topup:8080","max_attached_pending_refunds":2,"max_refund_attachments_per_day":1,"admin_key":{"id":"drill/admin","public_key":support::public_key_base64(&ed25519_dalek::SigningKey::from_bytes(&[41;32]))},
+        "quota_alerts":{"deposits_per_day":280,"rpc":[{"name":"ankr","providers":["ankr-drill"],"unit":"calls","stop_line":20442}]},
         "rpc":[{"chain_id":1,"max_issued_addresses":1000,"read":{"id":"ankr-drill","url":format!("{}/{{key}}",tls.read_url),"sealed_key":"TOPUP_RPC_ANKR_KEY","max_log_blocks":3000},"verify":{"id":"infura-drill","url":format!("{}/{{key}}",tls.verify_url),"sealed_key":"TOPUP_RPC_INFURA_KEY","max_log_blocks":3000}}],"routes":[route]});
     let config = topup::config::Config::parse(&raw.to_string()).map_err(anyhow::Error::msg)?;
     Ok(serde_json::from_str(
@@ -535,7 +536,7 @@ async fn published_image_round_trip() -> Result<()> {
             std::env::var("TOPUP_ROLLBACK_CONFIG").context("verified N-1 kit configuration required")?
         )?)?;
         let mut previous_config=current_config.clone();
-        for key in ["discovery", "max_refund_attachments_per_day", "max_attached_pending_refunds_per_account"] {
+        for key in ["quota_alerts", "discovery", "max_refund_attachments_per_day", "max_attached_pending_refunds_per_account"] {
             if previous_schema.get(key).is_none() {
                 previous_config.as_object_mut().context("configuration object")?.remove(key);
             }

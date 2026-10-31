@@ -64,7 +64,7 @@ changing it is a route PR and Deploy `upgrade` ([deploy/README.md, "Deploy"](../
 | Alert, monitor, or symptom | Runbook |
 |---|---|
 | `TopupSanctionsListStale`, `TopupSanctionsListVerifyFailed`, `TopupSanctionsRescreenFailed`, `TopupRefundDestinationSanctioned`, `topup-sanctions-refresh` | [Sanctions list](sanctions-list.md) |
-| `TopupRpcEndpointUnavailable`, `TopupRpcAddressBackfillLag`, `TopupRpcCoverageLag`, `TopupRpcConfirmationProviderLag`, `TopupRpcConfirmationSlowStock`, `TopupRpcConfirmationSlowEntries`, `TopupRpcHotAddressBudget`, `TopupRpcIssuanceBudget`, `RpcHotAddressBudget`, `RpcIssuanceBudget`, `TopupRpcHintBudgetExhausted`, `TopupRpcPriceSnapshotBudgetExhausted`, `RpcEndpointUnavailable`, `RpcCoverageLag`, `RpcAddressBackfillLag`, `RpcPriceSnapshotBudgetExhausted`, `RpcInfuraQuotaPressure`, `RpcBlockpiQuotaPressure`, `RpcAnkrQuotaPressure` | [RPC health](rpc-health.md) |
+| `TopupRpcQuotaPressure`, `TopupRpcAccountingFailed`, `TopupDepositDailyLimit`, `TopupRpcEndpointUnavailable`, `TopupRpcAddressBackfillLag`, `TopupRpcCoverageLag`, `TopupRpcConfirmationProviderLag`, `TopupRpcConfirmationSlowStock`, `TopupRpcConfirmationSlowEntries`, `TopupRpcHotAddressBudget`, `TopupRpcIssuanceBudget`, `RpcHotAddressBudget`, `RpcIssuanceBudget`, `TopupRpcHintBudgetExhausted`, `TopupRpcPriceSnapshotBudgetExhausted`, `RpcEndpointUnavailable`, `RpcCoverageLag`, `RpcAddressBackfillLag`, `RpcPriceSnapshotBudgetExhausted`, `RpcInfuraQuotaPressure`, `RpcBlockpiQuotaPressure`, `RpcAnkrQuotaPressure` | [RPC health](rpc-health.md) |
 | `TopupReconciliationMismatch` (`check:address_derivation` or `check:custody_balance`), `TopupContractCodeMismatch`, `TopupFinalizedCheckpointConflict`, `TopupUnverifiedEvidenceMismatch`, `400 chain_frozen` | [Chain frozen](chain-frozen.md) |
 | `TopupReconciliationMismatch` (other `check`), `topup-reconciler` | [Reconciliation mismatch](reconciliation-mismatch.md) |
 | `TopupCustodyOpeningUnavailable` | [Custody opening unavailable](rpc-health.md#custody-opening-unavailable) |
@@ -177,6 +177,9 @@ commands and detector boundaries are:
 | `TopupRpcConfirmationSlowEntries` | `topup alert-test --alert TopupRpcConfirmationSlowEntries --severity critical` | same boundary test: L rolling 24-hour entries >1 |
 | `TopupRpcHintBudgetExhausted` | `topup alert-test --alert TopupRpcHintBudgetExhausted` | `pilot_daily_budgets_use_the_configured_limits_and_resolve_after_utc_rollover`: persisted H reaches configured limit |
 | `TopupRpcPriceSnapshotBudgetExhausted` | `topup alert-test --alert TopupRpcPriceSnapshotBudgetExhausted` | same boundary/rollover test: persisted per-price-chain Q reaches configured limit |
+| `TopupRpcQuotaPressure` | `topup alert-test --alert TopupRpcQuotaPressure` | `quota_thresholds_weights_and_utc_rollover`: 80% warning, stop-line critical, UTC rollover; `durable_packet_usage_counts_batch_members_retries_and_utc_days`: buffered calls, retry-safe flushes, restarts |
+| `TopupRpcAccountingFailed` | `topup alert-test --alert TopupRpcAccountingFailed` | `accounting_failure_does_not_prevent_transport`: failed recorder still sends RPC; `durable_packet_usage_counts_batch_members_retries_and_utc_days`: failed flush retains counters |
+| `TopupDepositDailyLimit` | `topup alert-test --alert TopupDepositDailyLimit` | same quota boundary test: D−1 quiet, D warns; `deposits_count_observation_day_once` verifies durable observation timestamps |
 | `TopupRpcHotAddressBudget`, `TopupRpcIssuanceBudget` | `topup alert-test --alert TopupRpcHotAddressBudget` | `activity_budget_alerts_are_per_chain_and_use_staging_issuance_allowance`: above 2,000 hot or 50/10 rolling issuances, per chain |
 
 The business monitor's state tests `hourly_reminders_recovery_and_reentry_use_the_supplied_clock`,

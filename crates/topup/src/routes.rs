@@ -21,6 +21,7 @@ pub struct RouteSet {
     hints_per_day: i32,
     quote_snapshots_per_day: i32,
     discovery: crate::scanner::ScanConfig,
+    quota_alerts: crate::observability::quota::QuotaAlerts,
     rpc: BTreeMap<u64, crate::chain_rpc::ChainRpc>,
     current: BTreeMap<(u64, Address), usize>,
     chains: BTreeMap<u64, ChainEntry>,
@@ -34,6 +35,7 @@ impl Default for RouteSet {
             hints_per_day: crate::hints::HINTS_PER_DAY,
             quote_snapshots_per_day: crate::db::daily_budgets::QUOTE_SNAPSHOTS_PER_DAY,
             discovery: crate::scanner::ScanConfig::default(),
+            quota_alerts: crate::observability::quota::QuotaAlerts::default(),
             rpc: BTreeMap::new(),
             current: BTreeMap::new(),
             chains: BTreeMap::new(),
@@ -149,6 +151,15 @@ impl RouteSet {
     /// Configured activity windows for the fast-discovery hot set.
     pub fn discovery(&self) -> crate::scanner::ScanConfig {
         self.discovery
+    }
+    /// Attach validated monitoring-only quota allocations.
+    pub fn with_quota_alerts(mut self, quotas: crate::observability::quota::QuotaAlerts) -> Self {
+        self.quota_alerts = quotas;
+        self
+    }
+    /// Monitoring-only account allocations and deposit stop line.
+    pub fn quota_alerts(&self) -> &crate::observability::quota::QuotaAlerts {
+        &self.quota_alerts
     }
     /// Historical issued-address cap; inline test routes retain the 1,000-address fixture limit.
     pub fn max_issued_addresses(&self, chain: u64) -> u32 {

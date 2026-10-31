@@ -44,6 +44,12 @@ activity union; keyset address pages contain at most 1,000 addresses. Every stat
 These additions preserve the current compatibility floor and old reads/writes; binary rollback
 keeps the indexes and uses its retained configuration and full-address RPC budget.
 
+The `20261111000001` deposit observation-time index follows the same concurrent build/retry
+protocol for the UTC-day D tally. `20261111000000` stores RPC day/endpoint/method cumulative
+epoch counters. Monotonic upserts make background flush retries idempotent; daily usage sums
+all process epochs, including those before a restart. Both additions preserve the compatibility
+floor. Binary rollback retains the usage evidence and restores the target release's configuration.
+
 ## Roles and privileges
 
 `20261105000000_alerts` adds the platform's durable alert instances and list/retention indexes.
@@ -77,6 +83,7 @@ the owner creates; no application table grants `TRUNCATE`. The migration narrows
 | `restore_delivered_events`, `restore_deposit_tombstones` | `SELECT`, `INSERT` |
 | `payment_settings_revisions` | `SELECT`, `INSERT` (append-only) |
 | `payment_settings_cutover` | `SELECT`, `UPDATE` |
+| `rpc_daily_usage` | `SELECT`, `INSERT`, `UPDATE` (monotonic epoch counters) |
 | `rpc_config_acceptances` | `SELECT`, `INSERT` (public digests) |
 | `rpc_member_validations` | `SELECT`, `INSERT`; `UPDATE` of `validated_at` only |
 | `rpc_chain_state` | `SELECT`, `INSERT`; `UPDATE` of `frozen`, `reason`, `awaiting_anchor` only |

@@ -202,6 +202,12 @@ pub fn render(pool: &PgPool) -> Result<String, prometheus::Error> {
     let timeouts = pool_timeouts()
         .map_err(|_| prometheus::Error::Msg("database pool metrics unavailable".into()))?;
     let mut families = calls.collect();
+    let accounting = prometheus::IntCounter::new(
+        "topup_rpc_accounting_failures_total",
+        "Failed background RPC usage flushes since process start.",
+    )?;
+    accounting.inc_by(topup_adapters::chain::evm::metrics::rpc_accounting_failures());
+    families.extend(accounting.collect());
     let errors = IntCounterVec::new(
         Opts::new(
             "topup_rpc_errors_total",

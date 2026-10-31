@@ -578,6 +578,17 @@ fn counted_providers(
 }
 
 impl EvmClient {
+    /// Install durable monitoring on all clones of this endpoint before sending service calls.
+    pub fn record_calls_with(
+        &self,
+        recorder: Arc<dyn metrics::RpcCallRecorder>,
+    ) -> Result<(), metrics::RpcAccountingError> {
+        self.state
+            .recorder
+            .set(recorder)
+            .map_err(|_| metrics::RpcAccountingError)
+    }
+
     /// Enforce the hint's 12 read / 8 verify calls over its entire future, retries included.
     pub async fn hint_call_limits<T>(&self, verify: &Self, work: impl Future<Output = T>) -> T {
         metrics::task_call_limits(self.labels.clone(), verify.labels.clone(), work).await

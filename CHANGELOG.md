@@ -14,6 +14,19 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Added
+
+- Restart-safe UTC-day RPC usage by endpoint/method, with configurable Ankr call, BlockPI RU,
+  Infura credit and deposit (D) stop lines. The service generates quota warnings at 80%,
+  critical RPC alerts at the stop line, and deposit alerts at D through the existing admin alerts
+  API. RPC calls update in-memory counters synchronously; a background worker flushes one batched
+  upsert every 30 seconds. Failed flushes retain counters, increment a failure counter and raise
+  an accounting alert without delaying RPC. A crash can lose the last flush interval (longer
+  during a database outage). Production/staging Ankr allocations sum to the shared 25,000-call
+  stop line. Provider dashboards remain authoritative for billing. Disabled quota configuration
+  is omitted; older binaries require their retained configuration without `quota_alerts`, as
+  exercised by the rollback drill.
+
 ## [0.13.4] - 2026-10-31
 
 ### Added

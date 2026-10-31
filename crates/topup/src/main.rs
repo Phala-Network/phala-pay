@@ -139,6 +139,12 @@ enum SyntheticAlert {
     RpcHintBudgetExhausted,
     #[value(name = "TopupRpcPriceSnapshotBudgetExhausted")]
     RpcPriceSnapshotBudgetExhausted,
+    #[value(name = "TopupRpcQuotaPressure")]
+    RpcQuotaPressure,
+    #[value(name = "TopupRpcAccountingFailed")]
+    RpcAccountingFailed,
+    #[value(name = "TopupDepositDailyLimit")]
+    DepositDailyLimit,
 }
 
 #[derive(Subcommand)]
@@ -737,6 +743,23 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
         .await
         .context("failed to connect to database")?;
     check_payment_settings_cutover(&pool).await?;
+    // Flushes use a separate bounded pool so monitoring cannot exhaust worker DB slots.
+    // Lazy connection and server-side deadlines also keep accounting outages off startup.
+    let accounting_pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .acquire_timeout(Duration::from_secs(1))
+        .connect_lazy_with(
+            pool.connect_options()
+                .as_ref()
+                .clone()
+                .options([("statement_timeout", "1s"), ("lock_timeout", "1s")]),
+        );
+    let recorder = Arc::new(topup::db::rpc_usage::Recorder::default());
+    for pair in routes.rpc().values() {
+        for client in [&pair.read, &pair.verify] {
+            client.record_calls_with(recorder.clone())?;
+        }
+    }
     let pricing_runtimes = topup::locks::pricing::PricingRuntime::build_all(&routes, pool.clone())
         .map_err(anyhow::Error::msg)
         .context("invalid rate-lock pricing configuration")?;
@@ -966,6 +989,11 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
     tasks.spawn("backup monitor", topup::observability::monitor_backup);
     let business_pool = pool.clone();
     let business_routes = routes.clone();
+    tasks.spawn("RPC usage recorder", |cancellation| {
+        after_unfreeze(pool.clone(), cancellation, |cancellation| async move {
+            recorder.run(accounting_pool, cancellation).await;
+        })
+    });
     tasks.spawn("business health monitor", |cancellation| {
         after_unfreeze(
             business_pool.clone(),
