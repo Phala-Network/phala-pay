@@ -18,7 +18,7 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 - **no rollback to 0.13.4; restore required**. Ignored-transfer accounting moves outside the
   deposits table; once totals exist, pre-change binaries cannot reconcile custody. The schema
-  compatibility floor is `20261111000001`, so their required Compose migration step fails
+  compatibility floor is `20261112000000`, so their required Compose migration step fails
   before service startup. A directly launched old binary bypasses that deployment gate; custody
   then freezes the affected chain on mismatch and crediting stops. Do not bypass the gate.
   Take and verify a pre-upgrade backup and exercise the [restore/reconciliation procedure](deploy/RESTORE.md)
@@ -45,20 +45,6 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Changed
 
-- **Merchant webhook behavior:** newly discovered unsupported-token, zero-amount and
-  guaranteed-sub-floor transfers no longer create merchant deposit objects or `deposit.rejected`
-  events. Staff can inspect the operator report. Existing deposits and ordinary rejections keep
-  their contracts. Stablecoin floors account for the lowest permitted credit minimum and largest
-  quote tolerance across route versions, so valid quote underpayments still use the normal flow.
-- Fast discovery filters route contracts and discards dust before receipt/origin completion.
-  Hourly coverage retains exact dual-agreed accounting for every ignored token, including tokens
-  routed later, without completion or price RPC. At most 20 raw samples per address/token/UTC
-  observation day remain for 30 days; block totals retain the financial-record policy.
-  Balances, sweep selection and the daily route report include ignored amounts, so sweeping
-  a forwarder's whole token balance never understates a later payment.
-
-### Changed
-
 - The customer open-amount cap excludes unconsumed stablecoin-priced quotes after replacement
   or a cancel request, including the same-route window cut by a new creation. Account amount
   and quote-count caps retain those reservations. Spot/PHA and historical quotes without an
@@ -72,6 +58,17 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   addresses are respected; forwarding HTTP headers are ignored.
 - Quote transaction hints allow at most three submissions per rolling 24 hours, with bounded
   object tracking. Reusable deposit-address hint limits remain three/minute and ten/day.
+- **Merchant webhook behavior:** newly discovered unsupported-token, zero-amount and
+  guaranteed-sub-floor transfers no longer create merchant deposit objects or `deposit.rejected`
+  events. Staff can inspect the operator report. Existing deposits and ordinary rejections keep
+  their contracts. Stablecoin floors account for the lowest permitted credit minimum and largest
+  quote tolerance across route versions, so valid quote underpayments still use the normal flow.
+- Fast discovery filters route contracts and discards dust before receipt/origin completion.
+  Hourly coverage retains exact dual-agreed accounting for every ignored token, including tokens
+  routed later, without completion or price RPC. At most 20 raw samples per address/token/UTC
+  observation day remain for 30 days; block totals retain the financial-record policy.
+  Balances, sweep selection and the daily route report include ignored amounts, so sweeping
+  a forwarder's whole token balance never understates a later payment.
 
 ## [0.13.4] - 2026-10-31
 

@@ -60,7 +60,7 @@ are capped at 20 per address/token/UTC observation day; samples and daily counte
 policy and cannot be deleted while custody needs them. Growth remains proportional to distinct
 tokens × addresses × blocks. The signed admin report exposes totals and available samples.
 
-This release raises `COMPATIBILITY_FLOOR` to the combined schema maximum `20261111000001` and
+This release raises `COMPATIBILITY_FLOOR` to the combined schema maximum `20261112000000` and
 declares restore-only rollback:
 v0.13.4 cannot read the accounting totals. Its required Compose migration step rejects the floor;
 bypassing the gate would cause custody mismatch, freezing the chain and stopping crediting.
@@ -74,8 +74,8 @@ image/config, and delivered-event reconciliation as described in the
 copy the attested route's mode. Historical, restored and old-binary rows retain `NULL` and stay
 in the customer exposure sum; they cannot be backfilled. Unconsumed stablecoin quotes after
 replacement/cancel request leave only the customer amount sum, retaining account/count
-reservations. The expand-only down migration retains the field and trigger; the current
-compatibility floor is unchanged.
+reservations. The expand-only down migration retains the field and trigger; the restore-only
+floor above covers the combined release's schema maximum.
 
 `20261105000000_alerts` adds the platform's durable alert instances and list/retention indexes.
 It is expand-only and preserves the previous release's schema compatibility floor. Its down

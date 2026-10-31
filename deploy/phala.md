@@ -15,6 +15,9 @@ API-key authentication that cannot acquire a database slot within 250 ms returns
 [Service configuration](../docs/configuration.md#api-admission-limits) for the authentication
 gate and protection model.
 
+The unknown-key cache and source-IP failed-auth bucket are unreleased protections for the next
+upgrade. Deployed v0.13.4 uses the database admission gate above.
+
 ## Ingress
 
 Staging and production run dstack-ingress 2.8. Topup enables gateway PROXY on 443 and ingress
