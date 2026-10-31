@@ -28,7 +28,10 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 use support::seed::{self, NewAccount, NewAddress};
-use support::{TEST_ORIGIN, merchant_request, public_key_base64, signed_request, with_database};
+use support::{
+    SignatureOptions, SignatureParameter, TEST_ORIGIN, merchant_request, public_key_base64,
+    signed_request, signed_request_with_options, with_database,
+};
 
 const ADMIN_KEY: [u8; 32] = [49; 32];
 
@@ -148,6 +151,57 @@ async fn balance_sweeps_and_sweepable_forwarders_follow_final_deposits_and_flush
         })
     })
     .await
+}
+
+#[tokio::test]
+async fn ignored_amounts_preserve_balances_and_sweep_selection_after_a_full_flush() -> Result<()> {
+    for later_routed in [false, true] {
+        with_database(|database| Box::pin(async move {
+            let mut fixture = Fixture::new(&database.app_pool).await?;
+            let address = fixture.address(1).await?;
+            let token = if later_routed { Address::repeat_byte(0x82) } else { fixture.route.asset.contract };
+            let token_text = format!("{token:#x}");
+            sqlx::query("INSERT INTO ignored_transfer_totals \
+                (id,chain_id,address_id,token,block_number,block_hash,amount_atomic,event_count,evidence_hash,observed_day) \
+                VALUES ($1,1,$2,$3,9,$4,30,30,'fixture',CURRENT_DATE)")
+                .bind(Uuid::new_v4()).bind(address.id).bind(&token_text)
+                .bind(format!("{:#x}",B256::repeat_byte(0x91))).execute(&database.app_pool).await?;
+            // Ignored-only balances must exist even without any merchant deposit row.
+            let (_, balance) = fixture.get("/v1/balance", Clear).await?;
+            ensure!(balance["unswept"][0]["amount_atomic"]=="30" && balance["unswept"][0]["final_amount_atomic"]=="30", "{balance}");
+            // Keep both reads at the same signing timestamp regardless of machine speed.
+            let report_created = Utc::now().timestamp();
+            let report=fixture.report(report_created).await?;
+            let initial_key=if later_routed {format!("unrouted:1:{token_text}")} else {fixture.route.route.clone()};
+            let initial=report["routes"].as_array().context("routes")?.iter()
+                .find(|r|r["route"]==initial_key).context("initial ignored report")?;
+            ensure!(initial["unflushed_balance_atomic"]=="30","{report}");
+            if later_routed {
+                fixture.route.asset.contract=token;
+                fixture.route.route="later-token".into();
+            }
+            fixture.deposit(&address,1,100,DepositState::Credited,None,true).await?;
+            fixture.flushed(&address,130).await?;
+            let (_, empty)=fixture.get("/v1/balance",Clear).await?;
+            ensure!(empty["unswept"]==json!([]),"full flush left a balance: {empty}");
+            fixture.deposit(&address,2,10,DepositState::Credited,None,true).await?;
+            sqlx::query("UPDATE deposits SET block_number=12 WHERE tx_hash=$1")
+                .bind(format!("{:#x}",B256::repeat_byte(0xd2))).execute(&database.app_pool).await?;
+            let (_, balance)=fixture.get("/v1/balance",Clear).await?;
+            ensure!(balance["unswept"][0]["amount_atomic"]=="10" && balance["unswept"][0]["final_amount_atomic"]=="10","{balance}");
+            let (_, page)=fixture.get(&format!("/v1/forwarders?sweepable={token_text}"),Clear).await?;
+            ensure!(page["data"].as_array().map(Vec::len)==Some(1),"new final payment disappeared from sweep selection: {page}");
+            ensure!(page["data"][0]["id"]==format!("fwd_{}",address.id.simple()));
+            let (_, test_mode)=fixture.get_with("/v1/balance",Clear,&fixture.test_key).await?;
+            ensure!(test_mode["unswept"]==json!([]),"ignored funds leaked across mode");
+            let report=fixture.report(report_created).await?;
+            let route=report["routes"].as_array().context("routes")?.iter()
+                .find(|r|r["route"]==fixture.route.route).context("routed balance report")?;
+            ensure!(route["unflushed_balance_atomic"]=="10","{report}");
+            Ok(())
+        })).await?;
+    }
+    Ok(())
 }
 
 #[tokio::test]
@@ -389,6 +443,33 @@ impl Fixture {
         screening: impl DestinationScreener + 'static,
     ) -> Result<(StatusCode, Value)> {
         self.get_with(path, screening, &self.live_key).await
+    }
+
+    async fn report(&self, created: i64) -> Result<Value> {
+        let mut options = SignatureOptions::default();
+        options
+            .parameters
+            .push(SignatureParameter::Nonce(Uuid::new_v4().to_string()));
+        let response = self
+            .app(Arc::new(Clear))?
+            .oneshot(signed_request_with_options(
+                Method::GET,
+                "/v1/admin/reports/daily",
+                Vec::new(),
+                "admin/v1",
+                &SigningKey::from_bytes(&ADMIN_KEY),
+                created,
+                &options,
+            ))
+            .await?;
+        let status = response.status();
+        let report: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 1_048_576).await?)?;
+        ensure!(
+            status == StatusCode::OK,
+            "daily report returned {status}: {report}"
+        );
+        Ok(report)
     }
 
     async fn get_with(

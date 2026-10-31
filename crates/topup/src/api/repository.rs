@@ -1343,33 +1343,52 @@ pub async fn daily_report(
 
     for row in sqlx::query(
         r#"
-        WITH held AS (
-            SELECT COALESCE(route, 'unrouted:' || chain_id::text || ':' || asset_contract)
-                       AS report_key,
-                   chain_id, asset_contract, sum(amount_atomic) AS deposited
+        WITH incoming AS (
+            SELECT chain_id, asset_contract AS token, amount_atomic
             FROM deposits
             WHERE state <> 'reversed'
-            GROUP BY report_key, chain_id, asset_contract
+            UNION ALL
+            SELECT chain_id, token, amount_atomic FROM ignored_transfer_totals
+        ), held AS (
+            SELECT chain_id, token, sum(amount_atomic) AS deposited
+            FROM incoming GROUP BY chain_id, token
         ), swept AS (
             SELECT chain_id, token, sum(amount_atomic) AS flushed
             FROM flushed
             GROUP BY chain_id, token
         )
-        SELECT held.report_key,
-               GREATEST(sum(held.deposited - COALESCE(swept.flushed, 0)), 0)::text AS amount
+        SELECT held.chain_id, held.token,
+               GREATEST(held.deposited - COALESCE(swept.flushed, 0), 0)::text AS amount
         FROM held
         LEFT JOIN swept
-            ON swept.chain_id = held.chain_id AND swept.token = held.asset_contract
-        GROUP BY held.report_key
+            ON swept.chain_id = held.chain_id AND swept.token = held.token
         "#,
     )
     .fetch_all(pool)
     .await?
     {
-        let route: String = row.try_get("report_key")?;
-        if let Some(report) = reports.get_mut(&route) {
-            report.unflushed_balance_atomic = row.try_get("amount")?;
-        }
+        let chain = count_u64(row.try_get("chain_id")?)?;
+        let token: String = row.try_get("token")?;
+        // A token can have ignored funds before its first route. Attribute its whole balance
+        // to the loaded route, or one unrouted key, so sweeps are subtracted only once.
+        let report = match routes
+            .iter()
+            .filter(|route| {
+                route.chain.chain_id == chain && format!("{:#x}", route.asset.contract) == token
+            })
+            .max_by_key(|route| route.version)
+        {
+            Some(route) => reports
+                .entry(route.route.clone())
+                .or_insert_with(|| empty_route_report(route)),
+            None => {
+                let key = unrouted_key(chain, &token);
+                reports
+                    .entry(key.clone())
+                    .or_insert_with(|| empty_unrouted_report(key, chain, token))
+            }
+        };
+        report.unflushed_balance_atomic = row.try_get("amount")?;
     }
 
     for row in sqlx::query(

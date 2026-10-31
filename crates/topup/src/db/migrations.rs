@@ -239,7 +239,7 @@ async fn recover_queue_indexes(connection: &mut PgConnection) -> Result<(), Migr
 // Schema capability of the first release implementing this protocol. Future expand-only releases
 // keep the immediately previous release's maximum migration here. A breaking release raises it
 // to its own maximum and declares "no rollback; restore required" in CHANGELOG.
-const COMPATIBILITY_FLOOR: i64 = 20261105000000;
+const COMPATIBILITY_FLOOR: i64 = 20261111000001;
 
 async fn validate_compatibility(connection: &mut PgConnection) -> Result<(), MigrateError> {
     let exists: bool =

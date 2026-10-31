@@ -4102,6 +4102,10 @@ mod event_driven {
                 Box::pin(async move {
                     let pool = &database.app_pool;
                     let (merchant, id, uuid, time) = attached(pool).await?;
+                    // Model setup crossing a second boundary before the replacement POST.
+                    let time = time - Duration::seconds(2);
+                    sqlx::query("UPDATE refunds SET paid_at=$2,next_check_at=$2 WHERE id=$1")
+                        .bind(uuid).bind(time).execute(pool).await?;
                     let body = serde_json::to_vec(&json!({
                         "transaction_hash": REFUND_TX,
                         "replacement_transaction_hash": OTHER_TX,
@@ -4119,7 +4123,8 @@ mod event_driven {
                         );
                     }
                     let worker = worker(pool, &a, &b, &heads);
-                    let mut now = time + Duration::seconds(1);
+                    // The POST schedules against database now(), after the original paid_at.
+                    let mut now = next(pool, uuid).await?;
                     for pass in 0..topup::refunds::MAX_REPLACEMENT_ATTEMPTS {
                         ensure!(worker.check_once_at(now).await? == Verification::Waiting);
                         let due = next(pool, uuid).await?;

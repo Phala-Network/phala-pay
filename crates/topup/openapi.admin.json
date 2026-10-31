@@ -2267,6 +2267,156 @@
         ],
         "type": "object"
       },
+      "IgnoredTransfer": {
+        "example": {
+          "address": "0x1111111111111111111111111111111111111111",
+          "amount_atomic": "1",
+          "block_hash": "0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e",
+          "block_number": 100,
+          "chain_id": 1,
+          "created": 1790553600,
+          "event_count": 1,
+          "forwarder": "fwd_00112233445566778899aabbccddeeff",
+          "id": "igt_00112233445566778899aabbccddeeff",
+          "object": "ignored_transfer",
+          "samples": [
+            {
+              "amount_atomic": "1",
+              "from_address": "0x3333333333333333333333333333333333333333",
+              "log_index": 0,
+              "reason": "below_route_minimum",
+              "transaction_hash": "0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e"
+            }
+          ],
+          "token": "0x2222222222222222222222222222222222222222"
+        },
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "amount_atomic": {
+            "description": "Exact sum of all ignored transfers in this token/address/block, including unsampled logs.",
+            "type": "string"
+          },
+          "block_hash": {
+            "type": "string"
+          },
+          "block_number": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "chain_id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "created": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "event_count": {
+            "description": "Exact number of ignored logs in this group.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "forwarder": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "description": "Always `ignored_transfer`.",
+            "enum": [
+              "ignored_transfer"
+            ],
+            "type": "string"
+          },
+          "samples": {
+            "description": "At most 20 raw logs per address/token/UTC observation day; pruned after 30 days.",
+            "items": {
+              "$ref": "#/components/schemas/Sample"
+            },
+            "type": "array"
+          },
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "object",
+          "chain_id",
+          "forwarder",
+          "address",
+          "token",
+          "block_number",
+          "block_hash",
+          "amount_atomic",
+          "event_count",
+          "created",
+          "samples"
+        ],
+        "type": "object"
+      },
+      "IgnoredTransferList": {
+        "example": {
+          "data": [
+            {
+              "address": "0x1111111111111111111111111111111111111111",
+              "amount_atomic": "1",
+              "block_hash": "0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e",
+              "block_number": 100,
+              "chain_id": 1,
+              "created": 1790553600,
+              "event_count": 1,
+              "forwarder": "fwd_00112233445566778899aabbccddeeff",
+              "id": "igt_00112233445566778899aabbccddeeff",
+              "object": "ignored_transfer",
+              "samples": [
+                {
+                  "amount_atomic": "1",
+                  "from_address": "0x3333333333333333333333333333333333333333",
+                  "log_index": 0,
+                  "reason": "below_route_minimum",
+                  "transaction_hash": "0x7d3c1e5a9b2f4d6c8e0a1b3d5f7c9e2a4b6d8f0c1e3a5b7d9f1c3e5a7b9d1f3e"
+                }
+              ],
+              "token": "0x2222222222222222222222222222222222222222"
+            }
+          ],
+          "has_more": false,
+          "object": "list",
+          "url": "/v1/admin/ignored_transfers"
+        },
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/IgnoredTransfer"
+            },
+            "type": "array"
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "object": {
+            "description": "Always `list`.",
+            "enum": [
+              "list"
+            ],
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "object",
+          "url",
+          "has_more",
+          "data"
+        ],
+        "type": "object"
+      },
       "InstancePauseRequest": {
         "additionalProperties": false,
         "example": {
@@ -3929,6 +4079,34 @@
         "required": [
           "route",
           "paused_scopes"
+        ],
+        "type": "object"
+      },
+      "Sample": {
+        "properties": {
+          "amount_atomic": {
+            "type": "string"
+          },
+          "from_address": {
+            "type": "string"
+          },
+          "log_index": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "transaction_hash": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction_hash",
+          "log_index",
+          "from_address",
+          "amount_atomic",
+          "reason"
         ],
         "type": "object"
       },
@@ -7565,6 +7743,171 @@
               }
             },
             "description": "`idempotency_key_in_use`: a request with this `Idempotency-Key` is still running; retry with the same key",
+            "headers": {
+              "Cache-Control": {
+                "description": "Tenant data and credentials must never be stored, including errors",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Request-Id": {
+                "description": "The request's id, `req_…` (https://docs.stripe.com/api/request_ids)",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds",
+            "headers": {
+              "Cache-Control": {
+                "description": "Tenant data and credentials must never be stored, including errors",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Request-Id": {
+                "description": "The request's id, `req_…` (https://docs.stripe.com/api/request_ids)",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Optional: minimum seconds to wait before retrying; sent for database admission failures and service_restoring, and may be absent for other unavailable errors",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "http_message_signature": []
+          }
+        ],
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/ignored_transfers": {
+      "get": {
+        "operationId": "list",
+        "parameters": [
+          {
+            "description": "Positive EVM chain id",
+            "in": "query",
+            "name": "chain_id",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Issued forwarder id, fwd_...",
+            "in": "query",
+            "name": "forwarder",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "ERC-20 contract address",
+            "in": "query",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "1–100, default 10",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Ignored transfer aggregate id, igt_...",
+            "in": "query",
+            "name": "starting_after",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exclusive cursor; mutually exclusive with starting_after",
+            "in": "query",
+            "name": "ending_before",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IgnoredTransferList"
+                }
+              }
+            },
+            "description": "Finalized accounting groups, newest observation first; raw samples are capped and expire",
+            "headers": {
+              "Cache-Control": {
+                "description": "Tenant data and credentials must never be stored, including errors",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Request-Id": {
+                "description": "The request's id, `req_…` (https://docs.stripe.com/api/request_ids)",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid filter or cursor",
             "headers": {
               "Cache-Control": {
                 "description": "Tenant data and credentials must never be stored, including errors",

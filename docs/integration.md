@@ -539,13 +539,35 @@ locally ([deploy/sandbox/README.md](../deploy/sandbox/README.md#scenarios)).
 | Second payment to a quote's address, or to a canceled quote's | Credited at spot. |
 | Deposit address (§1.5), active or retired, an accepted token within its deposit limits on a listed network | Credited at spot when confirmed; the deposit has `quote: null` and names the `deposit_address`, its `chain_id`, and its `address`. |
 | A routed token your payment settings do not accept (§1.9), on a chain or for an asset not configured, or anything while the account accepts nothing | `rejected(asset_not_accepted)` once both providers confirm it, before it is valued; never credited; refundable once final, above the route's dust floor, like any rejected deposit (§3). The settings that decide are those current when the payment is recorded. A payment that completes a quote (its asset, in time, within its tolerance) is honoured at the quote's terms even if you stopped accepting the asset after issuing it. |
-| Token without a route | Once final (about 15 minutes, up to one more reconciliation round), `rejected(unsupported_asset)`; never credited; the tokens stay in the forwarder. |
+| Token without a route, zero amount, or transfer below the operator’s guaranteed route floor | No merchant deposit or webhook; finalized accounting is available to the operator. The tokens stay in the forwarder; contact support for a mistaken transfer. See the spam handling note below. |
 | Below your `min_amount` | `rejected(below_minimum)`. |
 | Outside your `min_deposit_atomic`..`max_deposit_atomic`, or credit overflow | `rejected(out_of_bounds)` or `rejected(out_of_range)`. |
 | Sanctioned sender | `rejected(sanctioned)`; not refundable. |
 | Known same-sender, same-nonce replacement agreed finalized by both endpoints, or its transfer is gone at finality | Deposit `reversed`; `deposit.reversed` if you were told of it (credited or rejected): its `amount_reversed` takes the whole credit back (§2.3). A quote it completed always reopens with its reservation; coverage later expires or cancels it. A transaction re-included in another block keeps its deposit id and is not reversed. |
 | A payment made through a contract (a router, a swap output) whose transaction is re-included before finality against other state, so that it pays you another amount, or another of your addresses | The first deposit is `reversed` as above, and the transfer now in the final chain is a **new deposit with a new id**, credited (or rejected) through the usual events, already final. The new deposit's `replaces` names the reversed one, and the reversed one's `replaced_by` names it (both `null` when the other deposit is in another account or mode). If it pays the same quote, it completes that quote in the first deposit's place, with no `quote.expired` in between. The events of the two deposits can arrive in any order (a new deposit's `deposit.rejected` can even come before the old one's `deposit.reversed`): apply each through the balance rule (§2.3), which nets the customer to what the final chain paid whatever the order. A plain transfer of a routed token cannot change this way: routes never take fee-on-transfer or rebasing tokens. |
 | You refuse the credit (for example a closed customer) | Deposit `credited`; you hold it and refund it (§2.4). |
+
+**Spam handling and merchant impact.** New unsupported-token, zero-amount and guaranteed-sub-floor
+transfers are recorded only from identical finalized coverage logs from both providers. They no
+longer appear in `GET /v1/deposits`, a quote's pending payment view, or `deposit.rejected` webhooks.
+Do not depend on a rejection webhook to detect these mistaken payments. The operator can look
+up exact token/address/block totals with signed `GET /v1/admin/ignored_transfers`, filtered by
+`chain_id`, `forwarder` or `token`, with standard cursor pagination. Its `samples` contain at most
+20 raw logs per address/token/UTC observation day and expire after 30 days; totals include
+unsampled logs. Support may need the payer's transaction hash and a block explorer for an
+unsampled transfer. These records have no deposit id and cannot use merchant deposit refund APIs;
+returning such funds requires the operator's existing manual recovery procedure and compliance
+checks. Previously created deposits, their reorganization successors and delivered events keep
+the usual contract.
+
+The guaranteed floor is conservative across every attested route version and merchant setting:
+the route's lowest atomic minimum, or, for stablecoins, the larger of that minimum and the
+smallest possible quote payment at the upper peg-band price after the largest allowed quote
+tolerance. Stablecoin credit normally uses $1 after fresh depeg checks; the upper band makes the
+floor more permissive. Integer divisions round up. A transfer at the floor follows the normal
+pipeline. Volatile routes use only their explicit atomic floor. Transfers above this floor but
+below your account's own minimum retain the normal rejection/webhook behavior, including fresh
+valuation where needed. Quotes and valid tolerated payments keep their normal behavior.
 
 User-facing copy per state and reason, including what never to show, is in
 [architecture §12, product UI](architecture.md#customer-experience-obligations-product-ui).
@@ -651,8 +673,9 @@ address = pay.deposit_addresses.create(client_reference_id="team-42",
   Eligible transfers meeting the credit minimum and token bounds are credited; transfers outside
   them are rejected and follow the existing refund rules (§1.3). Credit before finality also obeys `max_unfinalized_credit`: a
   transfer past that cap waits for finality, so the typical credit time can be longer. A routed
-  token you do not accept is `rejected(asset_not_accepted)`, any other token `rejected
-  (unsupported_asset)`, and neither is credited. Funds sent on a network that is not listed are not seen:
+  token you do not accept is `rejected(asset_not_accepted)` above the guaranteed route floor;
+  unsupported tokens and guaranteed-sub-floor transfers have no merchant deposit or webhook
+  (see the spam handling note in §1.3), and neither is credited. Funds sent on a network that is not listed are not seen:
   they stay at the address on that chain and can be swept only once the forwarder factory is
   deployed there, and only if your treasury is the same address on that chain; contact the
   operator.
@@ -840,8 +863,10 @@ move them, and a forwarder can pay only the treasury in its address. You choose 
 gas, with one `factory.flush(treasury, salts, token)` per token and treasury (design D4).
 
 - `GET /v1/balance` (`pay.balance.retrieve()`, Stripe's Balance): per chain and token, the
-  `amount_atomic` your forwarders hold (deposits not reversed, minus finalized sweeps) and the
-  `final_amount_atomic` part of it from final deposits, which is safe to sweep.
+  `amount_atomic` your forwarders hold (deposits not reversed plus finalized ignored transfers,
+  minus finalized sweeps) and its final `final_amount_atomic` part, which is safe to sweep.
+  Ignored amounts contribute to balances and sweep selection even though they create no
+  merchant deposit or rejection webhook; a whole-balance sweep moves these tokens too.
 - `GET /v1/forwarders` (`pay.forwarders.list()`): every forwarder issued in the mode, for quotes
   and for deposit address networks (current and superseded, `superseded_at`), with its `chain_id`,
   `address`, `factory`, `salt`, and `treasury`: the export that keeps your funds recomputable and

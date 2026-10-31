@@ -16,6 +16,7 @@ mod examples;
 mod extract;
 mod handlers;
 mod idempotency;
+mod ignored_transfers;
 mod instance_pause;
 mod keys;
 pub(crate) mod metadata;
@@ -453,6 +454,7 @@ fn hint_routes() -> OpenApiRouter<AppState> {
 fn admin_routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(alerts::list))
+        .routes(routes!(ignored_transfers::list))
         .routes(routes!(alerts::get))
         .routes(routes!(alerts::acknowledge))
         .routes(routes!(alerts::silence))

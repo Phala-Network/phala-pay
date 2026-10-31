@@ -272,7 +272,7 @@ async fn check_migrations(pool: &PgPool) -> Result<i64, String> {
 }
 
 /// Durable tables whose exact counts are reported; identifiers are constants, never input.
-const COUNTED_TABLES: [&str; 23] = [
+const COUNTED_TABLES: [&str; 26] = [
     "alerts",
     "chain_checkpoints",
     "chain_coverage",
@@ -286,6 +286,9 @@ const COUNTED_TABLES: [&str; 23] = [
     "addresses",
     "cursors",
     "deposits",
+    "ignored_transfer_totals",
+    "ignored_transfer_samples",
+    "ignored_transfer_daily",
     "transitions",
     "flushed",
     "flush_failures",

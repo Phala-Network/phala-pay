@@ -33,7 +33,7 @@ async fn observation_index_resumes_completed_concurrent_build() -> Result<()> {
         let floor: i64 = sqlx::query_scalar(
             "SELECT compatibility_floor FROM topup_migration_compatibility WHERE version=20261111000001",
         ).fetch_one(pool).await?;
-        ensure!(floor == 20261105000000, "quota monitoring raised the rollback floor");
+        ensure!(floor == 20261111000001, "observation index must use the declared release floor");
         Ok::<_, anyhow::Error>(())
     }.await;
     result.and(database.cleanup().await)

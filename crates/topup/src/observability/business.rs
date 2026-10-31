@@ -199,6 +199,16 @@ fn report_address_capacity(
 }
 
 fn report_pilot(state: &mut AlertState, now: DateTime<Utc>, routes: &RouteSet, health: &Snapshot) {
+    for &(chain, count) in &health.ignored {
+        state.observe(
+            now.timestamp(),
+            "TopupIgnoredTransferVolume",
+            &format!("chain:{chain}"),
+            (count >= 100).then_some("warning"),
+            count,
+            100,
+        );
+    }
     for &(chain, hot, issued) in &health.activity {
         for (alert, observed, limit) in [
             (
@@ -656,7 +666,34 @@ mod tests {
             issued: vec![(1, 699)],
             unresolved: vec![(1, 0, 0), (2, 0, 0)],
             slow: vec![(1, 0, 0), (2, 0, 0)],
+            ignored: Vec::new(),
             activity: vec![(1, 2_000, 50)],
+        }
+    }
+
+    #[test]
+    fn ignored_volume_is_per_chain_and_resolves_without_address_tags() {
+        let routes = pilot_routes(200, 150);
+        let now = DateTime::from_timestamp(1_000_000, 0).unwrap();
+        let events = sentry::test::with_captured_events(|| {
+            tracing::subscriber::with_default(super::super::log_subscriber(std::io::sink), || {
+                let mut state = AlertState::default();
+                let mut health = healthy_pilot();
+                health.ignored = vec![(1, 99), (2, 0)];
+                report_pilot(&mut state, now, &routes, &health);
+                health.ignored = vec![(1, 100), (2, 100)];
+                report_pilot(&mut state, now, &routes, &health);
+                report_pilot(&mut state, now, &routes, &health);
+                health.ignored = vec![(1, 0), (2, 0)];
+                report_pilot(&mut state, now, &routes, &health);
+                assert!(state.active.is_empty());
+            });
+        });
+        assert_eq!(events.len(), 2);
+        for event in events {
+            assert_eq!(event.tags["alert"], "TopupIgnoredTransferVolume");
+            assert!(event.tags["component"].starts_with("chain:"));
+            assert!(!event.tags.contains_key("address"));
         }
     }
 

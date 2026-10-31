@@ -453,8 +453,10 @@ The merchant declares the refund, pays it from the treasury of the deposit's add
 paid, and the service verifies it, as for any other refund. A deposit bound to a route version
 that is no longer loaded fails closed; its refund floor never falls back to the current version.
 
-A token without a route stays `unsupported_asset`. Its dust floor today is another token's route
-default; that is a known defect and out of this design's scope.
+A legacy deposit for a token without a route stays `unsupported_asset`. Its dust floor today is
+another token's route default; that is a known defect and out of this design's scope. Newly
+discovered unsupported-token transfers use internal ignored accounting and operator recovery,
+without a merchant deposit or rejection webhook (see the integration spam handling notes).
 
 ## 10. Migration and cutover
 

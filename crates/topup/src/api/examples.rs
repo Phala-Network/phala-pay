@@ -48,6 +48,8 @@ const RUNTIME_PERMISSIONS: [&str; 8] = [
 /// The example of the component schema `name`, if it has one.
 pub(super) fn schema(name: &str) -> Option<Value> {
     Some(match name {
+        "IgnoredTransfer" => ignored_transfer(),
+        "IgnoredTransferList" => list("/v1/admin/ignored_transfers", ignored_transfer()),
         "Alert" => alert(),
         "AlertList" => list("/v1/admin/alerts", alert()),
         "SilenceRequest" => json!({"until": CREATED + 3600}),
@@ -550,6 +552,14 @@ fn restore() -> Value {
         "unfrozen_by": null,
         "unfreeze_reason": null,
     })
+}
+
+fn ignored_transfer() -> Value {
+    json!({"id":"igt_00112233445566778899aabbccddeeff","object":"ignored_transfer",
+        "chain_id":1,"forwarder":"fwd_00112233445566778899aabbccddeeff", "address":"0x1111111111111111111111111111111111111111",
+        "token":"0x2222222222222222222222222222222222222222","block_number":100,"block_hash":TX,"amount_atomic":"1",
+        "event_count":1,"created":CREATED,"samples":[{"transaction_hash":TX,"log_index":0,
+        "from_address":"0x3333333333333333333333333333333333333333","amount_atomic":"1","reason":"below_route_minimum"}]})
 }
 
 fn list(url: &str, item: Value) -> Value {

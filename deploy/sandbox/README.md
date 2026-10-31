@@ -60,7 +60,7 @@ from the product API, the verified webhooks, and the product ledger of the refer
 | `late_payment` | Exact locked amount after `quote.expired` | `credited` at spot; lock stays `expired`. |
 | `underpayment` | 97% of the locked amount (tolerance is 1%) | `credited` at spot below the quote; lock not consumed; cancel is refused (`400 quote_payment_received` while the quote is open). |
 | `overpayment` | +0.5%, then +5% on a second lock | Within tolerance: lock price, exact quoted credit, the quote `complete`. Beyond: spot for the full amount, that lock not completed. |
-| `unsupported_asset` | A token without a route to a quote's address | `rejected`, `deposit.rejected` reason `unsupported_asset`; the product never receives `deposit.credited`. |
+| `unsupported_asset` | A token without a route, then a supported payment to the same quote address | No merchant deposit or rejection webhook for the unsupported transfer; the supported payment still credits normally. |
 | `product_refusal` | Payment for a suspended workspace | Deposit `credited`; the product holds it without a ledger credit (`account_suspended`) and requests its refund, which stays `pending` until the merchant pays it and marks it paid. |
 | `restart_mid_flow` | The product fulfills the credit but its acknowledgement is lost, then the service restarts | The restarted service delivers the same `deposit.credited` again; exactly one ledger credit. Needs `restart_command`, so it is skipped against a deployed service. |
 

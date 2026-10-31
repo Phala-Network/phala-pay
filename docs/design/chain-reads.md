@@ -105,9 +105,13 @@ Each round, staggered per chain:
    event signatures by 1 000 recipients. Query C over `(c, e]`; G from
    `g = min(coalesce(dual_covered_through + 1, created_block))` to `g_end = min(e, g + L − 1)`,
    keeping only logs at or after each address's own start. Any failed request aborts the round.
-4. **Union** both candidate sets (never equality, never intersection) and resolve:
+4. Partition transfers before completion. Unsupported/zero/sub-floor logs require exact dual
+   equality and become immutable per-address/token/block amount/count aggregates with bounded
+   raw samples, not deposits or webhooks. The conservative stablecoin floor includes the maximum
+   quote tolerance. See [RPC spam accounting](../../deploy/RPC.md#ignored-transfer-spam).
+   **Union** both ordinary candidate sets (never equality, never intersection) and resolve:
    - new candidate → R1 by receipt, transaction and header on both: agreed present → record
-     (`detected`, `rejected(unsupported_asset)`, `flushed`, `flush_failures`, `deployed_block`;
+     (`detected`, `flushed`, `flush_failures`, `deployed_block`;
      `Evidence::Finalized`, `dual_verified_at` set); agreed absent → drop;
    - an active deposit with `dual_verified_at` and the exact `(tx, block hash, block-wide log
      index)` → skip raw-log completion and receipt resolution on both endpoints; changed
@@ -369,8 +373,8 @@ coverage-driven flow (§2.6) then expires or cancels it.
   check and raises `TopupCustodyOpeningUnavailable` with chain/route tags and a count; other
   forwarders still run. Lowering discovery start requires a new proof. The target below applies
   once opening evidence exists. A token route added later already has post-issuance history:
-  coverage records unsupported tokens as `rejected(unsupported_asset)` with no route, and custody
-  includes those transfers after finality settles them. No route-activation balance reset occurs.
+  coverage records exact finalized ignored-transfer aggregates for unsupported tokens, and custody
+  includes those amounts as soon as the token is routed. Legacy rejected deposits still count. No route-activation balance reset occurs.
   A forwarder with a non-final, non-reversed deposit at B is deferred until settled. Each sweep
   alerts `TopupCustodyCoverageIncomplete` with the count per chain/route when an excluding
   deposit is at least 24 h old (`--custody-unsettled-alert-after-s`, default `86400`). An

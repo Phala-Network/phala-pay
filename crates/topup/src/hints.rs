@@ -275,7 +275,6 @@ async fn process(
         count("budget_spent");
         let read_reader = FinalizedReader::new(read.clone());
         let verify_reader = FinalizedReader::new(verify.clone());
-        let tokens = chain.routes.keys().copied().collect::<Vec<_>>();
         let mut poll = 0_u32;
         let mut target = loop {
             if let Some(receipt) = read_reader.hint_receipt(hint.tx).await? {
@@ -338,15 +337,24 @@ async fn process(
             {
                 continue;
             }
-            let evidence = current.complete(hint.address.address, &tokens).await?;
-            let independent = verified.complete(hint.address.address, &tokens).await?;
+            let mut rules = chain.rules.clone();
+            rules.ignored_blocks = db::ignored::historical_groups(
+                pool,
+                hint.chain,
+                &[hint.address.id],
+                target.min(verified.block_number()),
+                target.max(verified.block_number()),
+            )
+            .await?;
+            let evidence = current.complete(hint.address.address, &rules).await?;
+            let independent = verified.complete(hint.address.address, &rules).await?;
             if independent != evidence {
                 read.disagreement("eth_getTransactionReceipt");
                 return Err(scanner::ScannerError::Disagreement);
             }
-            if evidence.transfers.is_empty() {
+            let (Some(evidence), Some(independent)) = (evidence, independent) else {
                 return Ok(Outcome::Deferred);
-            }
+            };
             break (evidence, independent, [read_head, verify_head]);
         };
         let mut tx = pool.begin().await?;

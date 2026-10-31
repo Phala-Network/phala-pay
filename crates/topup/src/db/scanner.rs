@@ -194,12 +194,26 @@ pub(crate) async fn commit_confirmed_scan_in(
 
 /// Inserts a transfer read from the chain as a deposit, with its `deposit.rejected` event if it
 /// is born rejected, and returns its id; `None` when its receipt position is held, or when only
-/// finalized `evidence` may take it (`Evidence`).
+/// finalized `evidence` may take it (`Evidence`), or finalized ignored accounting owns it.
 pub async fn insert_scanned_deposit_in(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     deposit: &NewDeposit,
     evidence: Evidence,
 ) -> Result<Option<Uuid>, sqlx::Error> {
+    // Discovery/hints may have read before coverage committed, or replay after route changes.
+    // All scanner callers hold the chain lock: finalized ignored amounts cannot become deposits.
+    let ignored: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM ignored_transfer_totals \
+         WHERE address_id=$1 AND token=$2 AND block_hash=$3)",
+    )
+    .bind(deposit.address_id)
+    .bind(format!("{:#x}", deposit.asset_contract))
+    .bind(format!("{:#x}", deposit.block_hash))
+    .fetch_one(&mut **transaction)
+    .await?;
+    if ignored {
+        return Ok(None);
+    }
     let id = insert_deposit_in(transaction, deposit, evidence).await?;
     if let Some(id) = id
         && deposit.state == DepositState::Rejected
