@@ -212,7 +212,7 @@ request time.
 Catch-up is adaptive at 19,200 blocks for either the main cursor or a lagging range, retaining
 per-provider splitting. Recovery reserves **9,000 logical methods/provider account/month**
 (300/day averaged over 30 days), priced at 255 credits for Infura and 50 RU for BlockPI. Ankr's
-reserve is shared once by both environments. It covers extra range queries, checkpoint-boundary
+reserve is shared once by both environments. It covers extra range queries, intermediate coverage-boundary
 reads, five-minute not-ready probes, and first-finality fallbacks. A 24-hour backlog adds about
 `3·(k+1)` Ethereum and `15·(k+1)` Base log queries on 3,000-block providers, once, rather than
 four catch-up rounds every day. Including staging, that is about 270 Ankr queries before range

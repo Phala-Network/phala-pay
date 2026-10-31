@@ -119,7 +119,7 @@ allocation. Continue verifying received funds, keep reservations, and retain eve
 Do not reset history/counters or speed polling up. Resolved entries stay in the rolling window
 until 24 hours after first entry. Resume new load only after stock and rolling entries both
 return to at most one, both endpoints recover, and existing payments resume confirmation.
-Production deposits/day is 46 and staging 20; include both in shared quota checks.
+Production deposits/day is 280 and staging 10; include both in shared quota checks.
 
 Receipt absence, disagreement, evidence changes and RPC failures instead enter S, which has
 its own stock/entry alerts and one-hour age alert. Follow the existing
