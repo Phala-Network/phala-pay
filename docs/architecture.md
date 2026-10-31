@@ -1570,7 +1570,7 @@ forwarders with expected-zero balances.
 |---|---|
 | `credit_minor` ≠ recomputation from stored inputs | alert |
 | Final `credited` deposit with a `flushed` row at a later log position | sweep it (replay of indexed events) |
-| Per caught-up forwarder with settled deposits, including expected-zero balances, at block `B` = min(checkpoint, dual coverage cursor), pinned to its canonical hash: its token balance at `B` ≠ immutable opening + Σ deposits from discovery start through `B` (not reversed) − Σ `flushed.amount_atomic` over that range | freeze chain, alert |
+| Per caught-up forwarder with settled deposits, including expected-zero balances, at block `B` = min(checkpoint, dual coverage cursor), pinned to its canonical hash: its token balance at `B` ≠ immutable opening + Σ deposits (not reversed) + Σ finalized ignored amounts from discovery start through `B` − Σ `flushed.amount_atomic` over that range | freeze chain, alert |
 | `addressOf(treasury, salt)` on chain ≠ stored address, with each address's own treasury | freeze chain, alert |
 | After a restore, in the read-only restore-check instance (§14) | the checks above, on the restored ledger alone: the service's record is authoritative for its credits, so the check asks the merchant nothing and does not depend on it being reachable; the merchant's records enter only through the operator's reconciliation (§14) |
 
@@ -1991,7 +1991,7 @@ gates are in [post-launch status](plan.md); the original PR plan remains in
 Merchant acceptance on mainnet must prove an address recomputed from its pins; an exact payment
 credited at the quote and late or wrong-amount payments at spot; recovery after restart and
 provider interruption; one ledger mutation across duplicates and concurrency; forwarder balances
-equal to deposits minus finalized `Flushed` events; a merchant sweep and refund end to end; and a
+equal to deposits plus finalized ignored amounts minus `Flushed` events; a merchant sweep and refund end to end; and a
 production restore drill. Record evidence in the
 [launch checklist](../deploy/runbooks/production-launch.md#13-sign-off-checklist).
 

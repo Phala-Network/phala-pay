@@ -863,8 +863,10 @@ move them, and a forwarder can pay only the treasury in its address. You choose 
 gas, with one `factory.flush(treasury, salts, token)` per token and treasury (design D4).
 
 - `GET /v1/balance` (`pay.balance.retrieve()`, Stripe's Balance): per chain and token, the
-  `amount_atomic` your forwarders hold (deposits not reversed, minus finalized sweeps) and the
-  `final_amount_atomic` part of it from final deposits, which is safe to sweep.
+  `amount_atomic` your forwarders hold (deposits not reversed plus finalized ignored transfers,
+  minus finalized sweeps) and its final `final_amount_atomic` part, which is safe to sweep.
+  Ignored amounts contribute to balances and sweep selection even though they create no
+  merchant deposit or rejection webhook; a whole-balance sweep moves these tokens too.
 - `GET /v1/forwarders` (`pay.forwarders.list()`): every forwarder issued in the mode, for quotes
   and for deposit address networks (current and superseded, `superseded_at`), with its `chain_id`,
   `address`, `factory`, `salt`, and `treasury`: the export that keeps your funds recomputable and

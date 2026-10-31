@@ -33,11 +33,11 @@ const MAX_LIMIT: i64 = 100;
 const SWEEPABLE_SCREENING_CONCURRENCY: usize = 4;
 
 /// Starts a query with `held`: per forwarder of the scope and token, every deposit not reversed
-/// minus the finalized sweeps (`unswept`), the same over final deposits (`final_unswept`), and
+/// plus finalized ignored amounts minus sweeps (`unswept`), the final part (`final_unswept`), and
 /// whether it holds a deposit rejected as sanctioned.
 fn with_held(scope: Scope) -> QueryBuilder<Postgres> {
     let mut builder = QueryBuilder::new(
-        "WITH deposited AS ( \
+        "WITH incoming AS ( \
              SELECT deposit.address_id, deposit.asset_contract AS token, \
                     SUM(deposit.amount_atomic) AS total, \
                     COALESCE(SUM(deposit.amount_atomic) \
@@ -53,6 +53,22 @@ fn with_held(scope: Scope) -> QueryBuilder<Postgres> {
         .push_bind(scope.livemode())
         .push(
             " GROUP BY deposit.address_id, deposit.asset_contract \
+             UNION ALL \
+             SELECT ignored.address_id, ignored.token, SUM(ignored.amount_atomic), \
+                    SUM(ignored.amount_atomic), false \
+             FROM ignored_transfer_totals AS ignored \
+             JOIN addresses AS address ON address.id = ignored.address_id \
+             WHERE address.account_id = ",
+        )
+        .push_bind(scope.account_id())
+        .push(" AND address.livemode = ")
+        .push_bind(scope.livemode())
+        .push(
+            " GROUP BY ignored.address_id, ignored.token \
+             ), deposited AS ( \
+                 SELECT address_id, token, SUM(total) AS total, SUM(final_total) AS final_total, \
+                        bool_or(sanctioned) AS sanctioned \
+                 FROM incoming GROUP BY address_id, token \
              ), swept AS ( \
                  SELECT flushed.address_id, flushed.token, SUM(flushed.amount_atomic) AS total \
                  FROM flushed JOIN addresses AS address ON address.id = flushed.address_id \

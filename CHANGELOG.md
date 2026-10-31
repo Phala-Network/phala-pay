@@ -54,6 +54,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   Hourly coverage retains exact dual-agreed accounting for every ignored token, including tokens
   routed later, without completion or price RPC. At most 20 raw samples per address/token/UTC
   observation day remain for 30 days; block totals retain the financial-record policy.
+  Balances, sweep selection and the daily route report include ignored amounts, so sweeping
+  a forwarder's whole token balance never understates a later payment.
 
 ## [0.13.4] - 2026-10-31
 
