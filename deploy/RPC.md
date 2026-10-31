@@ -497,6 +497,48 @@ guarantee ten-percent headroom if all non-refund requests exhaust retries. Appro
 
 > 延续已批准的计费口径：非退款 ×1.1，退款预留全部三次 transport attempts。逻辑方法数有硬上界；每方法的物理发送上界仍为三倍。不能把上述总额描述成“所有非退款请求都耗尽重试时仍保留 10%”。
 
+### Ignored transfer spam
+
+Fast discovery uses the route token contracts as the `eth_getLogs` address filter and checks
+amounts before completing a log. Unsupported tokens, zero amounts and transfers below a
+conservative route floor bypass receipt, origin, timestamp and pricing RPC. Finalized hourly
+coverage still reads **all** token contracts on both endpoints and requires exact agreement on
+ignored raw logs before advancing its atomic per-address progress. Ordinary deposits retain
+full dual receipt evidence and fresh price validation. The stablecoin floor also accounts for
+maximum quote tolerance; see [merchant behavior](../docs/integration.md).
+Transaction hints apply the same floor and historical ignored-group checks before header/origin
+completion; explicit hint polling still consumes its existing bounded H allowance.
+
+Ignored logs add **zero per-log completion or price methods** to either provider. They still
+increase `eth_getLogs` response bytes and database work; BlockPI's response-size surcharge and
+provider result-size limits remain relevant. The `16.5 × D` marginal Ankr model above applies to
+normal deposited payments, not ignored spam; this change does not raise D/H/Q or other caps.
+
+Coverage keeps immutable exact amount/count aggregates per address/token/block, including fake
+tokens that might be routed later. Custody includes these totals from `created_block` through its
+pin in addition to the immutable opening proof. Reissue/restore replay never promotes already
+ignored groups to deposits or counts their amounts twice. The financial seven-year retention
+policy applies to totals: never delete accounting still needed by custody without an approved
+archival baseline. Distinct fake tokens × watched addresses × blocks can still grow this table.
+Diagnostic raw samples are capped at 20 per address/token/UTC observation day; samples and daily
+counters older than 30 days are removed in bounded batches (up to 1,000 each coverage round).
+Counters use first observation time, so historical backfill counts on the day it is read.
+This is a declared restore-only schema boundary: **no rollback to 0.13.4; restore required**.
+`COMPATIBILITY_FLOOR=20261110000000` makes v0.13.4's required Compose migration step reject the
+unknown migration before service startup. A directly launched old binary has no startup schema
+gate. Its custody query cannot include ignored totals; bypassing the deployment gate would
+freeze that chain on a nonzero routed dust mismatch and stop crediting.
+Never bypass the gate or force-unfreeze such a mismatch. Before upgrade, preserve and verify a
+pre-upgrade backup, image/config and merchant delivered-event exports, and exercise the
+[restore procedure](RESTORE.md). Recovery restores the pre-upgrade database with its matching
+image/config, reconciles post-backup delivered events and reissues addresses as required, then
+runs the documented operator checks/unfreeze. Prefer a forward fix using the accounting-aware
+binary. The down migration preserves evidence; it does not make an old binary compatible.
+
+`TopupIgnoredTransferVolume` warns when any address on a chain reaches 100 ignored events in a
+UTC observation day. It groups only by chain, with a count field, and resolves when that day's
+maximum falls below the threshold. See the [response runbook](runbooks/rpc-health.md#ignored-transfer-volume).
+
 ### Slow confirmation lane L
 
 L receives a deposit only when its normal confirmation window ran out solely because a required

@@ -47,8 +47,25 @@ keeps the indexes and uses its retained configuration and full-address RPC budge
 The `20261111000001` deposit observation-time index follows the same concurrent build/retry
 protocol for the UTC-day D tally. `20261111000000` stores RPC day/endpoint/method cumulative
 epoch counters. Monotonic upserts make background flush retries idempotent; daily usage sums
-all process epochs, including those before a restart. Both additions preserve the compatibility
-floor. Binary rollback retains the usage evidence and restores the target release's configuration.
+all process epochs, including those before a restart. These additions do not require a higher
+compatibility floor; the ignored-transfer accounting boundary below still applies. Binary rollback retains the usage evidence and restores the target release's configuration.
+
+## Ignored transfer accounting
+
+`20261110000000` records exact dual-agreed finalized amounts/counts per address/token/block,
+including unsupported tokens that might gain a route later. Custody includes these immutable
+totals through its pinned block, respecting the original issuance/opening boundary. Raw samples
+are capped at 20 per address/token/UTC observation day; samples and daily counters expire after
+30 days in bounded cleanup batches. Accounting totals follow the financial-record retention
+policy and cannot be deleted while custody needs them. Growth remains proportional to distinct
+tokens × addresses × blocks. The signed admin report exposes totals and available samples.
+
+This release raises `COMPATIBILITY_FLOOR` to `20261110000000` and declares restore-only rollback:
+v0.13.4 cannot read the accounting totals. Its required Compose migration step rejects the floor;
+bypassing the gate would cause custody mismatch, freezing the chain and stopping crediting.
+The down migration preserves evidence. Recover using the pre-upgrade backup, its matching
+image/config, and delivered-event reconciliation as described in the
+[restore runbook](../../../deploy/RESTORE.md), then unfreeze after verification.
 
 ## Roles and privileges
 
@@ -74,6 +91,9 @@ the owner creates; no application table grants `TRUNCATE`. The migration narrows
 | `topup_migration_compatibility` (owner-written rollback ledger) | None |
 | `transitions`, `audit`, `reconciliation_findings`, `heartbeat`, `events` | `SELECT`, `INSERT` (append-only) |
 | `custody_opening_balances` | `SELECT`, `INSERT` (immutable dual-verified state before discovery) |
+| `ignored_transfer_totals` | `SELECT`, `INSERT` (immutable finalized custody amounts) |
+| `ignored_transfer_samples` | `SELECT`, `INSERT`, `DELETE` (bounded operational samples) |
+| `ignored_transfer_daily` | `SELECT`, `INSERT`, `UPDATE`, `DELETE` (retained daily volume) |
 | `custody_opening_jobs` | `SELECT`, `INSERT`; `UPDATE` of `attempts`, `next_attempt_at` only |
 | `flushed`, `flush_failures` | `SELECT`, `INSERT` (finalized chain facts) |
 | `reconciliation_blocks`, `deposit_address_client_secrets` | `SELECT`, `INSERT`, `DELETE` |

@@ -190,6 +190,7 @@ fn runbook(alert: &str, tags: &BTreeMap<String, String>) -> &'static str {
         "TopupContractCodeMismatch"
         | "TopupFinalizedCheckpointConflict"
         | "TopupUnverifiedEvidenceMismatch" => "chain-frozen.md",
+        "TopupIgnoredTransferVolume" => "rpc-health.md#ignored-transfer-volume",
         "TopupRpcEndpointUnavailable"
         | "TopupRpcAddressBackfillLag"
         | "TopupRpcCoverageLag"

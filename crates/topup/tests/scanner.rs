@@ -226,7 +226,11 @@ impl ChainReader for Reader {
     }
 }
 fn route() -> RouteFile {
-    serde_saphyr::from_str(include_str!("fixtures/phala-cloud-pha.yaml")).unwrap()
+    let mut route: RouteFile =
+        serde_saphyr::from_str(include_str!("fixtures/phala-cloud-pha.yaml")).unwrap();
+    // Most scanner fixtures use tiny synthetic amounts; dedicated dust tests set a floor.
+    route.merchant.min_deposit_atomic.min = AtomicAmount::default();
+    route
 }
 fn routes() -> RouteSet {
     RouteSet::new(vec![route()]).unwrap()
@@ -381,31 +385,13 @@ async fn custody_new_token_route_includes_transfers_recorded_before_route_activa
                 reader.receipt = Some(log.clone());
             }
             scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await?;
-            let before: (String, Option<String>, bool) = sqlx::query_as(
-                "SELECT state,route,dual_verified_at IS NOT NULL FROM deposits WHERE address_id=$1",
-            )
-            .bind(address.id)
-            .fetch_one(&d.app_pool)
-            .await?;
-            ensure!(before == ("rejected".into(), None, true));
-            let watcher = topup::finality::FinalityWatch::single(
-                d.app_pool.clone(),
-                Arc::new(routes()),
-                1,
-                read,
-                verify,
-            );
-            let settled = watcher.watch_once(1).await?;
-            ensure!(settled.finalized == 1 && settled.failed == 0, "{settled:?}");
-            let final_at: bool =
-                sqlx::query_scalar("SELECT final_at IS NOT NULL FROM deposits WHERE address_id=$1")
-                    .bind(address.id)
-                    .fetch_one(&d.app_pool)
-                    .await?;
-            ensure!(
-                final_at,
-                "unsettled exclusion would make this a false-positive regression"
-            );
+            let recorded: (String,i64) = sqlx::query_as(
+                "SELECT amount_atomic::text,event_count FROM ignored_transfer_totals WHERE address_id=$1",
+            ).bind(address.id).fetch_one(&d.app_pool).await?;
+            ensure!(recorded == ("1000".into(),1));
+            ensure!(*read.receipt_reads.lock().unwrap() == 0 && *verify.receipt_reads.lock().unwrap() == 0);
+            let deposits: i64 = sqlx::query_scalar("SELECT count(*) FROM deposits").fetch_one(&d.app_pool).await?;
+            ensure!(deposits == 0);
             let mut later = route();
             later.route = "later-token".into();
             later.asset.contract = log.token;
@@ -1217,7 +1203,12 @@ async fn coverage_with_transient_reversed_history(changed: Option<&'static str>)
             verify.receipt = Some(cached.clone());
             let started = Arc::new(Notify::new());
             let resume = Arc::new(Notify::new());
-            read.receipt_gate = Some((started.clone(), resume.clone()));
+            if changed == Some("token") {
+                verify.logs.push(cached.clone());
+                read.logs_gate = Some((started.clone(), resume.clone()));
+            } else {
+                read.receipt_gate = Some((started.clone(), resume.clone()));
+            }
             let mut fast_read = Reader::new(200);
             fast_read.logs.push(old.clone());
             let mut fast_chain = chain();
@@ -1259,7 +1250,13 @@ async fn coverage_with_transient_reversed_history(changed: Option<&'static str>)
                 "SELECT id,state,revision,replaces,dual_verified_at IS NOT NULL FROM deposits ORDER BY revision",
             ).fetch_all(&d.app_pool).await?;
             ensure!(history[0] == (id, "reversed".into(), 0, None, true));
-            if changed.is_none() {
+            if changed == Some("token") {
+                ensure!(history.len()==1 && stats.inserted==0,"unsupported successor must stay outside merchant deposits");
+                let amount:String=sqlx::query_scalar("SELECT amount_atomic::text FROM ignored_transfer_totals WHERE token=$1")
+                    .bind(format!("{:#x}",cached.token)).fetch_one(&d.app_pool).await?;
+                ensure!(amount==cached.amount.value().to_string(),"reversed old evidence hid the canonical token balance");
+                ensure!(*read.receipt_reads.lock().unwrap()==0,"unsupported successor triggered a receipt read");
+            } else if changed.is_none() {
                 ensure!(history.len() == 1 && stats.inserted == 0,
                     "cached evidence resurrected the already reversed payment");
                 ensure!(db::claim_deposit(&d.app_pool, Uuid::new_v4()).await?.is_none(),
@@ -2585,4 +2582,113 @@ async fn with_database_counted(count: usize) -> Result<Option<(usize, std::time:
     .await?;
     let result = output.lock().unwrap().take();
     Ok(result)
+}
+
+#[tokio::test]
+async fn ignored_spam_is_aggregated_sampled_and_atomic_without_receipt_or_price_work() -> Result<()>
+{
+    with_database(|d| Box::pin(async move {
+        let address = address(d,0).await?;
+        let mut r = route();
+        r.merchant.min_deposit_atomic.min = AtomicAmount::new(U256::from(1000));
+        let chain = scanner::chain_routes(&RouteSet::new(vec![r]).map_err(anyhow::Error::msg)?).remove(0);
+        let mut read = Reader::new(140);
+        let mut verify = Reader::new(140);
+        for i in 0..150_u64 {
+            let mut log = transfer(&address,110);
+            log.tx_hash = hash(1000+i);
+            log.log_index = i;
+            log.amount = AtomicAmount::new(U256::from(1));
+            if i >= 100 { log.token = Address::repeat_byte(0x82); }
+            read.logs.push(log);
+        }
+        verify.logs = read.logs.clone();
+        scanner::coverage_once(&d.app_pool,&read,&verify,&chain).await?;
+        for reader in [&read,&verify] { ensure!(*reader.receipt_reads.lock().unwrap()==0); }
+        let counts: (i64,i64,i64,i64) = sqlx::query_as(
+            "SELECT (SELECT count(*) FROM deposits),(SELECT count(*) FROM events), \
+             (SELECT count(*) FROM ignored_transfer_totals),(SELECT count(*) FROM ignored_transfer_samples)"
+        ).fetch_one(&d.app_pool).await?;
+        ensure!(counts==(0,0,2,40),"{counts:?}");
+        let totals: (String,i64) = sqlx::query_as("SELECT sum(amount_atomic)::text,sum(event_count)::bigint FROM ignored_transfer_totals")
+            .fetch_one(&d.app_pool).await?;
+        ensure!(totals == ("150".into(),150));
+        // Replay after restore/reissue remains idempotent, even if the former fake token now has a route.
+        sqlx::query("UPDATE addresses SET dual_covered_through=NULL,backfilled=false,backfilled_through=NULL WHERE id=$1")
+            .bind(address.id).execute(&d.app_pool).await?;
+        let mut later = route(); later.route="later-token".into();later.asset.contract=Address::repeat_byte(0x82);
+        let later_chain=scanner::chain_routes(&RouteSet::new(vec![route(),later]).map_err(anyhow::Error::msg)?).remove(0);
+        // Fast replay and a stale hint cannot promote finalized ignored amounts after a route/floor change.
+        sqlx::query("UPDATE cursors SET confirmed_block=100 WHERE chain_id=1").execute(&d.app_pool).await?;
+        ensure!(scanner::fast_once(&d.app_pool,&read,&later_chain,Default::default()).await?.inserted==0);
+        let owner=db::list_scan_addresses(&d.app_pool,1).await?.remove(0);
+        let mut candidate=read.logs[0].clone();
+        candidate.token=route().asset.contract;
+        let candidate=provisional(candidate,&owner);
+        let mut tx=d.app_pool.begin().await?;
+        for evidence in [db::Evidence::Confirmed,db::Evidence::Finalized] {
+            ensure!(db::insert_scanned_deposit_in(&mut tx,&candidate,evidence).await?.is_none());
+        }
+        tx.commit().await?;
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM deposits").fetch_one(&d.app_pool).await?==0);
+        scanner::coverage_once(&d.app_pool,&read,&verify,&later_chain).await?;
+        let after: (String,i64) = sqlx::query_as("SELECT sum(amount_atomic)::text,sum(event_count)::bigint FROM ignored_transfer_totals")
+            .fetch_one(&d.app_pool).await?;
+        ensure!(after==totals);
+        let daily:i64=sqlx::query_scalar("SELECT sum(event_count)::bigint FROM ignored_transfer_daily").fetch_one(&d.app_pool).await?;
+        ensure!(daily==150);
+        ensure!(*read.receipt_reads.lock().unwrap()==0);
+        struct Balances;
+        #[async_trait::async_trait]
+        impl topup::reconciler::ReconciliationChain for Balances {
+            async fn token_balances_pinned(&self,token:Address,addresses:&[Address],pin:B256)
+                -> Result<Vec<U256>,topup::reconciler::ReconciliationError> {
+                assert_eq!(pin,hash(140));
+                Ok(vec![U256::from(if token==Address::repeat_byte(0x82) {50} else {100});addresses.len()])
+            }
+        }
+        let mut later=route();later.route="later-token".into();later.asset.contract=Address::repeat_byte(0x82);
+        let reconciler=topup::reconciler::Reconciler::with_dependencies(d.app_pool.clone(),
+            Arc::new(RouteSet::new(vec![route(),later]).map_err(anyhow::Error::msg)?),
+            std::collections::BTreeMap::from([(1,Arc::new(Balances) as Arc<dyn topup::reconciler::ReconciliationChain>)]));
+        ensure!(reconciler.check(topup::reconciler::CheckName::CustodyBalance).await?.is_empty());
+        // Diagnostic retention removes samples, never the accounting that keeps custody exact.
+        sqlx::query("UPDATE ignored_transfer_samples SET created_at=now()-interval '31 days'")
+            .execute(&d.owner_pool).await?;
+        scanner::coverage_once(&d.app_pool,&read,&verify,&later_chain).await?;
+        let samples:i64=sqlx::query_scalar("SELECT count(*) FROM ignored_transfer_samples").fetch_one(&d.app_pool).await?;
+        ensure!(samples==0);
+        ensure!(reconciler.check(topup::reconciler::CheckName::CustodyBalance).await?.is_empty());
+        Ok(())
+    })).await
+}
+
+#[tokio::test]
+async fn ignored_logs_disagreement_commits_no_accounting_or_coverage() -> Result<()> {
+    with_database(|d| {
+        Box::pin(async move {
+            let address = address(d, 0).await?;
+            let mut read = Reader::new(140);
+            let verify = Reader::new(140);
+            let mut log = transfer(&address, 110);
+            log.token = Address::repeat_byte(0x82);
+            read.logs.push(log);
+            ensure!(matches!(
+                scanner::coverage_once(&d.app_pool, &read, &verify, &chain()).await,
+                Err(scanner::ScannerError::Disagreement)
+            ));
+            let count: i64 = sqlx::query_scalar("SELECT count(*) FROM ignored_transfer_totals")
+                .fetch_one(&d.app_pool)
+                .await?;
+            ensure!(count == 0);
+            let through: Option<i64> =
+                sqlx::query_scalar("SELECT dual_covered_through FROM addresses WHERE id=$1")
+                    .bind(address.id)
+                    .fetch_one(&d.app_pool)
+                    .await?;
+            ensure!(through.is_none());
+            Ok(())
+        })
+    })
+    .await
 }

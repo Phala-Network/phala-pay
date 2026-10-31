@@ -4,7 +4,7 @@
 pub mod endpoint;
 pub mod metrics;
 
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fmt::{self, Formatter};
 use std::future::{Future, IntoFuture};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -245,6 +245,16 @@ impl ChainError {
     }
 }
 
+/// Ordinary transfer candidates, uncompleted ignored evidence and factory coverage.
+pub struct CoveragePartition {
+    /// Candidates whose receipt-local identities are complete.
+    pub transfers: Vec<TransferLog>,
+    /// Raw logs requiring exact dual agreement before finalized accounting.
+    pub ignored: Vec<RawTransfer>,
+    /// Configured factory's events for the selected forwarders.
+    pub factory: Vec<FactoryLog>,
+}
+
 /// Chain reads required by the scanner, the confirm step, and the finality watch.
 pub trait ChainReader: Send + Sync {
     /// Returns the provider's current finalized block number and time.
@@ -306,6 +316,58 @@ pub trait ChainReader: Send + Sync {
                     .await?,
                 self.factory_logs(factory, addresses, from, to).await?,
             ))
+        }
+    }
+
+    /// Fast discovery restricted to route contracts; discard dust before completion.
+    fn discovery_logs(
+        &self,
+        addresses: &[Address],
+        from: u64,
+        to: u64,
+        rules: &TransferRules,
+        proven: &BTreeSet<(B256, B256, u64)>,
+    ) -> impl Future<Output = Result<Vec<TransferLog>, ChainError>> + Send {
+        async move {
+            Ok(self
+                .transfer_logs_to_excluding(addresses, from, to, proven)
+                .await?
+                .into_iter()
+                .filter(|log| rules.ignored_reason(&RawTransfer::from(log)).is_none())
+                .collect())
+        }
+    }
+
+    /// Finalized coverage partitions ignored raw logs without receipt, origin or timestamp RPC.
+    /// Callers must compare ignored evidence from both endpoints before recording any of it.
+    fn coverage_partition(
+        &self,
+        factory: Address,
+        addresses: &[Address],
+        from: u64,
+        to: u64,
+        rules: &TransferRules,
+        proven: &BTreeSet<(B256, B256, u64)>,
+    ) -> impl Future<Output = Result<CoveragePartition, ChainError>> + Send {
+        async move {
+            let (logs, factory) = self
+                .coverage_logs_excluding(factory, addresses, from, to, proven)
+                .await?;
+            let mut accepted = Vec::new();
+            let mut ignored = Vec::new();
+            for log in logs {
+                let raw = RawTransfer::from(&log);
+                if rules.ignored_reason(&raw).is_some() {
+                    ignored.push(raw);
+                } else {
+                    accepted.push(log);
+                }
+            }
+            Ok(CoveragePartition {
+                transfers: accepted,
+                ignored,
+                factory,
+            })
         }
     }
 
@@ -1148,14 +1210,15 @@ impl HintReceipt<'_> {
     pub fn block_hash(&self) -> B256 {
         self.block_hash
     }
+    /// Complete eligible transfers only; ignored receipts need no header/origin completion.
     /// Read this endpoint's canonical header independently and reuse only immutable endpoint facts.
     pub async fn complete(
         self,
         recipient: Address,
-        tokens: &[Address],
-    ) -> Result<HintEvidence, ChainError> {
+        rules: &TransferRules,
+    ) -> Result<Option<HintEvidence>, ChainError> {
         self.reader
-            .complete_hint(&self.receipt, recipient, tokens)
+            .complete_hint(&self.receipt, recipient, rules)
             .await
     }
 }
@@ -1228,18 +1291,70 @@ enum Recipients<'a> {
 }
 
 /// A decoded `Transfer` log before its receipt position and transaction origin are known.
-struct DecodedTransfer {
-    tx_hash: B256,
-    log_index: u64,
-    block_number: u64,
-    block_hash: B256,
-    token: Address,
-    from: Address,
-    to: Address,
-    amount: AtomicAmount,
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+pub struct RawTransfer {
+    /// Transaction containing the event (no receipt lookup).
+    pub tx_hash: B256,
+    /// Block-wide log index, meaningful only with the block hash.
+    pub log_index: u64,
+    /// Including finalized block number.
+    pub block_number: u64,
+    /// Including finalized block hash.
+    pub block_hash: B256,
+    /// Emitting token contract.
+    pub token: Address,
+    /// Token sender.
+    pub from: Address,
+    /// Token recipient.
+    pub to: Address,
+    /// Atomic token amount.
+    pub amount: AtomicAmount,
 }
 
-impl DecodedTransfer {
+impl From<&TransferLog> for RawTransfer {
+    fn from(log: &TransferLog) -> Self {
+        Self {
+            tx_hash: log.tx_hash,
+            log_index: log.log_index,
+            block_number: log.block_number,
+            block_hash: log.block_hash,
+            token: log.token,
+            from: log.from,
+            to: log.to,
+            amount: log.amount,
+        }
+    }
+}
+
+/// Conservative operator floors; transfers outside them cannot enter the credit pipeline.
+#[derive(Clone, Debug, Default)]
+pub struct TransferRules {
+    /// Lowest permitted atomic minimum across attested route versions.
+    pub minimums: BTreeMap<Address, AtomicAmount>,
+    /// Previously finalized ignored groups remain accounting evidence on restore/reissue.
+    pub ignored_blocks: BTreeSet<(B256, Address, Address)>,
+}
+
+impl TransferRules {
+    /// Stable reason for evidence kept outside merchant deposits.
+    #[must_use]
+    pub fn ignored_reason(&self, log: &RawTransfer) -> Option<&'static str> {
+        if self
+            .ignored_blocks
+            .contains(&(log.block_hash, log.token, log.to))
+        {
+            return Some("previously_ignored");
+        }
+        match self.minimums.get(&log.token) {
+            None => Some("unsupported_asset"),
+            Some(_) if log.amount.value().is_zero() => Some("zero_amount"),
+            Some(floor) if log.amount < *floor => Some("below_route_minimum"),
+            Some(_) => None,
+        }
+    }
+}
+
+impl RawTransfer {
     fn complete(
         self,
         receipt_log_index: u64,
@@ -1429,7 +1544,7 @@ impl FinalizedReader {
         Ok((position, facts.deposit_origin))
     }
 
-    async fn complete(&self, decoded: DecodedTransfer) -> Result<TransferLog, ChainError> {
+    async fn complete(&self, decoded: RawTransfer) -> Result<TransferLog, ChainError> {
         let block_time = self.block_time(decoded.block_hash).await?;
         let (position, deposit_origin) = self
             .receipt_position(decoded.tx_hash, decoded.block_hash, decoded.log_index)
@@ -1539,6 +1654,56 @@ impl FinalizedReader {
         Ok(transfers)
     }
 
+    async fn partitioned_transfers(
+        &self,
+        addresses: &[Address],
+        from: u64,
+        to: u64,
+        rules: &TransferRules,
+        proven: &BTreeSet<(B256, B256, u64)>,
+        discovery: bool,
+    ) -> Result<(Vec<TransferLog>, Vec<RawTransfer>), ChainError> {
+        let tokens: Vec<_> = if discovery {
+            rules.minimums.keys().copied().collect()
+        } else {
+            Vec::new()
+        };
+        if addresses.is_empty() || (discovery && tokens.is_empty()) {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let mut accepted = Vec::new();
+        let mut ignored = Vec::new();
+        for (start, end) in log_windows(from, to, self.client.max_log_blocks)? {
+            for batch in addresses.chunks(MAX_ADDRESSES_PER_REQUEST) {
+                for log in self
+                    .raw_transfer_logs(&tokens, Recipients::Topic(batch), start, end)
+                    .await?
+                {
+                    let Some(raw) = decode_transfer_log(&log)? else {
+                        continue;
+                    };
+                    if log.removed
+                        || !batch.contains(&raw.to)
+                        || !(start..=end).contains(&raw.block_number)
+                    {
+                        return Err(ChainError::Reorganized("transfer log range"));
+                    }
+                    if proven.contains(&(raw.tx_hash, raw.block_hash, raw.log_index)) {
+                        continue;
+                    }
+                    if rules.ignored_reason(&raw).is_some() {
+                        if !discovery {
+                            ignored.push(raw);
+                        }
+                    } else {
+                        accepted.push(self.complete(raw).await?);
+                    }
+                }
+            }
+        }
+        Ok((accepted, ignored))
+    }
+
     /// Every factory event in the range, one request whatever the forwarder count, kept when it
     /// is about one of `forwarders`.
     async fn factory_logs_request(
@@ -1590,7 +1755,7 @@ fn utc_timestamp(timestamp: u64) -> Result<DateTime<Utc>, ChainError> {
         .ok_or(ChainError::InvalidTimestamp(timestamp))
 }
 
-fn decode_transfer_log(log: &Log) -> Result<Option<DecodedTransfer>, ChainError> {
+fn decode_transfer_log(log: &Log) -> Result<Option<RawTransfer>, ChainError> {
     let topic_count = log.topics().len();
     let data_length = log.data().data.len();
     if topic_count != 3 || data_length != 32 {
@@ -1615,7 +1780,7 @@ fn decode_transfer_log(log: &Log) -> Result<Option<DecodedTransfer>, ChainError>
             return Ok(None);
         }
     };
-    Ok(Some(DecodedTransfer {
+    Ok(Some(RawTransfer {
         tx_hash: decoded
             .transaction_hash
             .ok_or(ChainError::MissingField("log.transaction_hash"))?,
@@ -1820,6 +1985,39 @@ impl ChainReader for FinalizedReader {
         self.transfer_logs(addresses, from, to, proven).await
     }
 
+    async fn discovery_logs(
+        &self,
+        addresses: &[Address],
+        from: u64,
+        to: u64,
+        rules: &TransferRules,
+        proven: &BTreeSet<(B256, B256, u64)>,
+    ) -> Result<Vec<TransferLog>, ChainError> {
+        Ok(self
+            .partitioned_transfers(addresses, from, to, rules, proven, true)
+            .await?
+            .0)
+    }
+
+    async fn coverage_partition(
+        &self,
+        factory: Address,
+        addresses: &[Address],
+        from: u64,
+        to: u64,
+        rules: &TransferRules,
+        proven: &BTreeSet<(B256, B256, u64)>,
+    ) -> Result<CoveragePartition, ChainError> {
+        let (accepted, ignored) = self
+            .partitioned_transfers(addresses, from, to, rules, proven, false)
+            .await?;
+        Ok(CoveragePartition {
+            transfers: accepted,
+            ignored,
+            factory: self.factory_logs(factory, addresses, from, to).await?,
+        })
+    }
+
     async fn token_transfers(
         &self,
         tokens: &[Address],
@@ -1932,8 +2130,8 @@ impl FinalizedReader {
         &self,
         receipt: &AnyTransactionReceipt,
         recipient: Address,
-        tokens: &[Address],
-    ) -> Result<HintEvidence, ChainError> {
+        rules: &TransferRules,
+    ) -> Result<Option<HintEvidence>, ChainError> {
         let tx_hash = receipt.transaction_hash;
         let mut candidates = Vec::new();
         if receipt.status() {
@@ -1941,7 +2139,7 @@ impl FinalizedReader {
                 if is_transfer(log)
                     && let Some(decoded) = decode_transfer_log(log)?
                     && decoded.to == recipient
-                    && tokens.contains(&decoded.token)
+                    && rules.ignored_reason(&decoded).is_none()
                 {
                     if log.transaction_hash != Some(tx_hash)
                         || log.block_number != receipt.block_number
@@ -1955,8 +2153,11 @@ impl FinalizedReader {
                 }
             }
         }
+        if candidates.is_empty() {
+            return Ok(None);
+        }
         let (time, origin) = self.receipt_details(tx_hash, receipt).await?;
-        Ok(HintEvidence {
+        Ok(Some(HintEvidence {
             transfers: candidates
                 .into_iter()
                 .map(|(position, log)| log.complete(position, time, origin))
@@ -1970,7 +2171,7 @@ impl FinalizedReader {
             block_hash: receipt
                 .block_hash
                 .ok_or(ChainError::MissingField("receipt.block_hash"))?,
-        })
+        }))
     }
 
     async fn receipt_details(
@@ -2312,6 +2513,194 @@ mod tests {
             node.abort();
             let _ = node.await;
         }
+        server.abort();
+        let _ = server.await;
+    }
+
+    #[tokio::test]
+    async fn supported_discovery_retains_complete_receipt_identity() {
+        let (reader, server, methods) = replay_counted_node(
+            vec![
+                ("eth_getLogs", base_sepolia("transfer-logs")),
+                ("eth_getTransactionReceipt", base_sepolia("receipt")),
+                ("eth_getTransactionByHash", base_sepolia("transaction")),
+                ("eth_getBlockByHash", base_sepolia("block-47445875")),
+            ],
+            Vec::new(),
+        )
+        .await;
+        let raw: Log = serde_json::from_value(base_sepolia("transfer-logs")[0].clone()).unwrap();
+        let token = raw.address();
+        let recipient = address!("0xfa810b787da3f2ca13fc13082762e78c4104ab10");
+        let rules = TransferRules {
+            minimums: BTreeMap::from([(token, AtomicAmount::new(U256::from(1)))]),
+            ..Default::default()
+        };
+        let logs = reader
+            .discovery_logs(
+                &[recipient],
+                47_445_875,
+                47_445_875,
+                &rules,
+                &BTreeSet::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(logs.len(), 1);
+        let log = &logs[0];
+        assert_eq!(log.token, token);
+        assert_ne!(log.tx_from, Address::ZERO);
+        assert!(log.block_time.timestamp() > 0);
+        assert_eq!(
+            methods.lock().unwrap().len(),
+            4,
+            "ordinary discovery keeps header/receipt/origin evidence"
+        );
+        let old = reader
+            .transfer_logs_to(&[recipient], 47_445_875, 47_445_875)
+            .await
+            .unwrap();
+        assert_eq!(logs, old);
+        server.abort();
+        let _ = server.await;
+    }
+
+    #[tokio::test]
+    async fn ignored_hints_do_not_complete_receipts() {
+        let original = base_sepolia("receipt");
+        let raw: Log = serde_json::from_value(original["logs"][0].clone()).unwrap();
+        let raw = decode_transfer_log(&raw).unwrap().unwrap();
+        for case in ["dust", "unsupported", "zero", "historical"] {
+            let mut receipt = original.clone();
+            let mut rules = TransferRules {
+                minimums: BTreeMap::from([(raw.token, raw.amount)]),
+                ..Default::default()
+            };
+            match case {
+                "dust" => rules.minimums.insert(
+                    raw.token,
+                    AtomicAmount::new(raw.amount.value() + U256::from(1)),
+                ),
+                "unsupported" => rules.minimums.remove(&raw.token),
+                "zero" => {
+                    receipt["logs"][0]["data"] = serde_json::json!(format!("{:#066x}", U256::ZERO));
+                    None
+                }
+                "historical" => {
+                    rules
+                        .ignored_blocks
+                        .insert((raw.block_hash, raw.token, raw.to));
+                    None
+                }
+                _ => unreachable!(),
+            };
+            let (reader, server, methods) =
+                replay_counted_node(vec![("eth_getTransactionReceipt", receipt)], Vec::new()).await;
+            assert!(
+                reader
+                    .hint_receipt(raw.tx_hash)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .complete(raw.to, &rules)
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "{case}"
+            );
+            assert_eq!(
+                *methods.lock().unwrap(),
+                ["eth_getTransactionReceipt"],
+                "{case}"
+            );
+            server.abort();
+            let _ = server.await;
+        }
+    }
+
+    #[tokio::test]
+    async fn spam_partition_only_reads_logs_and_discovery_filters_route_contracts() {
+        use axum::{Json, Router, routing::post};
+        use serde_json::json;
+        let original = base_sepolia("transfer-logs")[0].clone();
+        let token: Address = original["address"].as_str().unwrap().parse().unwrap();
+        let recipient = address!("0xfa810b787da3f2ca13fc13082762e78c4104ab10");
+        let filters = Arc::new(Mutex::new(Vec::new()));
+        let captured = filters.clone();
+        let node = Router::new().route(
+            "/",
+            post(move |Json(body): Json<Value>| {
+                let captured = captured.clone();
+                let original = original.clone();
+                async move {
+                    assert_eq!(
+                        body["method"], "eth_getLogs",
+                        "spam triggered completion or price RPC"
+                    );
+                    let filter = body["params"][0].clone();
+                    captured.lock().unwrap().push(filter.clone());
+                    let logs = if filter["topics"][0].is_array() {
+                        json!([])
+                    } else {
+                        let mut dust = original.clone();
+                        dust["data"] = json!(format!("{:#066x}", U256::from(1)));
+                        let mut zero = dust.clone();
+                        zero["data"] = json!(format!("{:#066x}", U256::ZERO));
+                        zero["logIndex"] = json!("0x24");
+                        let mut fake = dust.clone();
+                        fake["address"] = json!(Address::repeat_byte(0x82));
+                        fake["logIndex"] = json!("0x25");
+                        json!([dust, zero, fake])
+                    };
+                    Json(json!({"jsonrpc":"2.0","id":body["id"],"result":logs}))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, node).await.unwrap() });
+        let reader = FinalizedReader::new(Arc::new(EvmClient::new(&url).unwrap()));
+        let rules = TransferRules {
+            minimums: BTreeMap::from([(token, AtomicAmount::new(U256::from(2)))]),
+            ..Default::default()
+        };
+        assert!(
+            reader
+                .discovery_logs(
+                    &[recipient],
+                    47_445_875,
+                    47_445_875,
+                    &rules,
+                    &BTreeSet::new()
+                )
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let CoveragePartition {
+            transfers: accepted,
+            ignored,
+            factory,
+        } = reader
+            .coverage_partition(
+                Address::repeat_byte(0xab),
+                &[recipient],
+                47_445_875,
+                47_445_875,
+                &rules,
+                &BTreeSet::new(),
+            )
+            .await
+            .unwrap();
+        assert!(accepted.is_empty() && factory.is_empty());
+        assert_eq!(ignored.len(), 3);
+        let filters = filters.lock().unwrap().clone();
+        assert_eq!(filters.len(), 3);
+        assert_eq!(filters[0]["address"], json!(token));
+        assert!(
+            filters[1].get("address").is_none(),
+            "coverage must still find unsupported tokens"
+        );
         server.abort();
         let _ = server.await;
     }

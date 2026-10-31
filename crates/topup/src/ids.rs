@@ -25,6 +25,8 @@ pub const REFUND: &str = "re_";
 pub const TREASURY: &str = "trs_";
 /// Event ids; the UUID is the event's derived id (architecture §11).
 pub const EVENT: &str = "evt_";
+/// Operator-only ignored transfer block aggregate ids.
+pub const IGNORED_TRANSFER: &str = "igt_";
 /// Durable alert instance ids.
 pub const ALERT: &str = "al_";
 

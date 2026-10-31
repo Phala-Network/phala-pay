@@ -205,6 +205,8 @@ async fn harness_with_policy_and_hint_budget(
     });
     route.chain.confirmations = policy;
     route.asset.contract = TOKEN.parse()?;
+    // Re-inclusion fixtures use tiny synthetic amounts; dust classification is tested separately.
+    route.merchant.min_deposit_atomic.min = Default::default();
     let routes = Arc::new(
         RouteSet::with_rpc(
             vec![route.clone()],
@@ -1041,6 +1043,7 @@ async fn unrelated_reverted_unsupported_and_disagreed_receipts_never_record_or_c
         "other-object",
         "reverted",
         "unsupported",
+        "zero",
         "wrong-chain",
         "forged-hash",
         "verify-amount",
@@ -1056,6 +1059,11 @@ async fn unrelated_reverted_unsupported_and_disagreed_receipts_never_record_or_c
                 "other-object" => read.receipt.lock().unwrap()["logs"][0]["topics"][2] = json!(format!("0x{}", "99".repeat(32))),
                 "reverted" => read.receipt.lock().unwrap()["status"] = json!("0x0"),
                 "unsupported" => read.receipt.lock().unwrap()["logs"][0]["address"] = json!(format!("0x{}", "99".repeat(20))),
+                "zero" => {
+                    for rpc in [&read,&verify] {
+                        rpc.receipt.lock().unwrap()["logs"][0]["data"] = json!(format!("0x{:064x}",0));
+                    }
+                }
                 "wrong-chain" => read.transaction.lock().unwrap()["chainId"] = json!("0x1"),
                 "forged-hash" => read.receipt.lock().unwrap()["transactionHash"] = json!(format!("0x{}", "99".repeat(32))),
                 "verify-amount" => verify.receipt.lock().unwrap()["logs"][0]["data"] = json!(format!("0x{:064x}", 1)),

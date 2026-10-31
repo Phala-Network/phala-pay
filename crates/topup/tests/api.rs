@@ -2006,3 +2006,49 @@ async fn alerts_lists_filter_and_page_in_both_directions_newest_first() -> Resul
         Ok(())
     })).await
 }
+
+#[tokio::test]
+async fn ignored_transfer_admin_report_is_authenticated_filtered_and_paginated() -> Result<()> {
+    support::with_database(|d| Box::pin(async move {
+        let owner=NewAccount::named("ignored transfer report");
+        let (_,customer)=seed::create_account_and_customer(&d.app_pool,&owner,"ignored").await?;
+        let address=seed::insert_address(&d.app_pool,&NewAddress{
+            id:Uuid::new_v4(),customer_id:customer.id,chain_id:1,route:"phala-cloud-ethereum-pha-usd".into(),
+            salt:B256::repeat_byte(0x45),address:Address::repeat_byte(0x56),
+        }).await?;
+        let ids=[Uuid::new_v4(),Uuid::new_v4()];
+        for (index,id) in ids.into_iter().enumerate() {
+            sqlx::query("INSERT INTO ignored_transfer_totals \
+                (id,chain_id,address_id,token,block_number,block_hash,amount_atomic,event_count,evidence_hash,observed_day,created_at) \
+                VALUES ($1,1,$2,$3,$4,$5,123,30,'fixture',CURRENT_DATE,now()+$4*interval '1 second')")
+                .bind(id).bind(address.id).bind(format!("{:#x}",Address::repeat_byte(0x82)))
+                .bind(i64::try_from(index)?).bind(format!("{:#x}",B256::repeat_byte(u8::try_from(index)?)))
+                .execute(&d.app_pool).await?;
+        }
+        sqlx::query("INSERT INTO ignored_transfer_samples \
+            (total_id,chain_id,address_id,token,observed_day,block_hash,log_index,tx_hash,from_address,amount_atomic,reason) \
+            VALUES ($1,1,$2,$3,CURRENT_DATE,$4,7,$5,$6,123,'unsupported_asset')")
+            .bind(ids[1]).bind(address.id).bind(format!("{:#x}",Address::repeat_byte(0x82)))
+            .bind(format!("{:#x}",B256::repeat_byte(1))).bind(format!("{:#x}",B256::repeat_byte(0xab)))
+            .bind(format!("{:#x}",Address::repeat_byte(0x44))).execute(&d.app_pool).await?;
+        let admin=SigningKey::from_bytes(&[29;32]);let (app,_)=topup::api::router(app_state(d.app_pool.clone(),&admin));
+        let path=format!("/v1/admin/ignored_transfers?limit=1&forwarder={}",topup::ids::format(topup::ids::FORWARDER,address.id));
+        let unsigned=app.clone().oneshot(axum::http::Request::get(&path).body(Body::empty())?).await?;
+        ensure!(unsigned.status()==StatusCode::UNAUTHORIZED);
+        let get=|path:&str| signed_request(Method::GET,path,vec![],ADMIN_KID,&admin,Utc::now().timestamp());
+        let response=app.clone().oneshot(get(&path)).await?;ensure!(response.status()==StatusCode::OK);
+        let first=response_json(response).await?;
+        ensure!(first["has_more"]==true && first["data"][0]["event_count"]==30);
+        ensure!(first["data"][0]["amount_atomic"]=="123" && first["data"][0]["samples"][0]["log_index"]==7);
+        let next=format!("{path}&starting_after={}",first["data"][0]["id"].as_str().context("aggregate id")?);
+        let second=response_json(app.clone().oneshot(get(&next)).await?).await?;
+        ensure!(second["has_more"]==false && second["data"][0]["id"]!=first["data"][0]["id"]);
+        let empty=response_json(app.clone().oneshot(get("/v1/admin/ignored_transfers?chain_id=2")).await?).await?;
+        ensure!(empty["data"]==json!([]));
+        for invalid in ["chain_id=0","token=invalid","limit=101","starting_after=bad","unexpected=true"] {
+            let path=format!("/v1/admin/ignored_transfers?{invalid}");
+            ensure!(app.clone().oneshot(get(&path)).await?.status()==StatusCode::BAD_REQUEST);
+        }
+        Ok(())
+    })).await
+}

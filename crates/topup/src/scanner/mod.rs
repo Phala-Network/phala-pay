@@ -1,6 +1,6 @@
 //! Read-only fast discovery and atomic dual-source finalized coverage (§2.1–2.2).
 use crate::{db, routes::RouteSet};
-use alloy_primitives::{Address, B256};
+use alloy_primitives::{Address, B256, U256};
 use chrono::{DateTime, Utc};
 use db::chain_reads::{self, Boundary};
 use sqlx::PgPool;
@@ -9,7 +9,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use topup_adapters::chain::evm::{
-    ChainError, ChainReader, FactoryLog, FinalizedHead, FinalizedReader, TransferLog,
+    ChainError, ChainReader, FactoryLog, FinalizedHead, FinalizedReader, RawTransfer, TransferLog,
+    TransferRules,
 };
 use topup_core::deposit::{DepositState, RejectReason};
 use topup_core::route::{ChainConfig, Confirmations};
@@ -116,7 +117,42 @@ pub struct ChainRoutes {
     /// Attested chain configuration.
     pub chain: ChainConfig,
     pub(crate) routes: BTreeMap<Address, (String, u64)>,
+    pub(crate) rules: TransferRules,
 }
+/// A conservative floor, independent of live prices or customer settings. Stablecoins are
+/// valued at $1; using the upper peg-band price is deliberately more permissive. Quote locks
+/// bypass the spot credit minimum, so lower this bound by the largest allowed tolerance too.
+fn guaranteed_floor(route: &topup_core::route::RouteFile) -> topup_core::money::AtomicAmount {
+    use topup_core::{money::AtomicAmount, route::PricingMode};
+    let atomic = route.merchant.min_deposit_atomic.min;
+    if route.pricing.mode != PricingMode::Stablecoin {
+        return atomic;
+    }
+    let derived = (|| {
+        let ceil_div = |n: U256, d: U256| {
+            n.checked_div(d)?
+                .checked_add(U256::from(!n.checked_rem(d)?.is_zero()))
+        };
+        let scale = U256::from(10).checked_pow(U256::from(route.asset.decimals))?;
+        let numerator = U256::from(route.merchant.min_amount.min)
+            .checked_mul(scale)?
+            .checked_mul(U256::from(10_000_u16))?;
+        let denominator = U256::from(100_u16).checked_mul(U256::from(
+            10_000_u32.checked_add(u32::from(route.pricing.peg_band_bps.value()))?,
+        ))?;
+        let smallest_quote = ceil_div(numerator, denominator)?;
+        ceil_div(
+            smallest_quote.checked_mul(U256::from(
+                10_000_u16.checked_sub(route.merchant.quote_tolerance_bps.max.value())?,
+            ))?,
+            U256::from(10_000_u16),
+        )
+    })()
+    .map(AtomicAmount::new)
+    .unwrap_or_default();
+    atomic.max(derived)
+}
+
 /// Group current token routes by payment chain.
 pub fn chain_routes(routes: &RouteSet) -> Vec<ChainRoutes> {
     routes
@@ -124,6 +160,22 @@ pub fn chain_routes(routes: &RouteSet) -> Vec<ChainRoutes> {
         .filter_map(|chain| {
             Some(ChainRoutes {
                 chain: routes.chain(chain)?.clone(),
+                rules: TransferRules {
+                    minimums: routes
+                        .routes()
+                        .iter()
+                        .filter(|r| r.chain.chain_id == chain)
+                        .fold(BTreeMap::new(), |mut floors, r| {
+                            floors
+                                .entry(r.asset.contract)
+                                .and_modify(|floor: &mut topup_core::money::AtomicAmount| {
+                                    *floor = (*floor).min(guaranteed_floor(r))
+                                })
+                                .or_insert(guaranteed_floor(r));
+                            floors
+                        }),
+                    ignored_blocks: BTreeSet::new(),
+                },
                 routes: routes
                     .current()
                     .filter(|r| r.chain.chain_id == chain)
@@ -302,8 +354,11 @@ pub async fn fast_once<R: ChainReader>(
             let mut deposits = Vec::new();
             let mut pending = Vec::new();
             let proven = db::scanner::proven_log_positions(pool, chain, &ids, from, latest).await?;
+            let mut rules = routes.rules.clone();
+            rules.ignored_blocks =
+                db::ignored::historical_groups(pool, chain, &ids, from, latest).await?;
             for log in read
-                .transfer_logs_to_excluding(&recipients, from, latest, &proven)
+                .discovery_logs(&recipients, from, latest, &rules, &proven)
                 .await?
             {
                 let Some(address) = index.get(&log.to) else {
@@ -509,6 +564,7 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
         }
     }
     let mut candidates = BTreeSet::new();
+    let mut ignored_logs = BTreeMap::new();
     // Insert-only factory evidence must be reverified even when both log responses omit it.
     // One set-based lookup covers every address's own inclusive range.
     let hashes: Vec<String> = sqlx::query_scalar(
@@ -554,19 +610,24 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
             .collect();
         let proven =
             db::scanner::proven_log_positions(pool, chain, &ids, range.from, range.end).await?;
+        let mut rules = routes.rules.clone();
+        rules.ignored_blocks =
+            db::ignored::historical_groups(pool, chain, &ids, range.from, range.end).await?;
         let (a, b) = tokio::try_join!(
-            read.coverage_logs_excluding(
+            read.coverage_partition(
                 routes.chain.contracts.forwarder_factory,
                 &recipients,
                 range.from,
                 range.end,
+                &rules,
                 &proven
             ),
-            verify.coverage_logs_excluding(
+            verify.coverage_partition(
                 routes.chain.contracts.forwarder_factory,
                 &recipients,
                 range.from,
                 range.end,
+                &rules,
                 &proven
             )
         )?;
@@ -578,7 +639,40 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
                 (address.address.address, range.start(address))
             })
             .collect();
-        for (endpoint, (transfers, factory)) in [a, b].into_iter().enumerate() {
+        let ignored = |logs: Vec<RawTransfer>| -> Result<BTreeMap<_, _>, ScannerError> {
+            let mut kept = BTreeMap::new();
+            for log in logs {
+                if starts
+                    .get(&log.to)
+                    .is_none_or(|start| log.block_number < *start)
+                {
+                    continue;
+                }
+                let key = (log.block_hash, log.log_index);
+                if let Some(previous) = kept.insert(key, log.clone())
+                    && previous != log
+                {
+                    return Err(ScannerError::Disagreement);
+                }
+            }
+            Ok(kept)
+        };
+        let ignored_a = ignored(a.ignored)?;
+        let ignored_b = ignored(b.ignored)?;
+        if ignored_a != ignored_b {
+            return Err(ScannerError::Disagreement);
+        }
+        for (key, log) in ignored_a {
+            if let Some(previous) = ignored_logs.insert(key, log.clone())
+                && previous != log
+            {
+                return Err(ScannerError::Disagreement);
+            }
+        }
+        for (endpoint, (transfers, factory)) in [(a.transfers, a.factory), (b.transfers, b.factory)]
+            .into_iter()
+            .enumerate()
+        {
             for log in transfers {
                 if starts
                     .get(&log.to)
@@ -927,6 +1021,15 @@ pub async fn coverage_once<R: ChainReader, V: ChainReader>(
             return Err(ScannerError::SnapshotChanged);
         }
     }
+    db::ignored::record_in(
+        &mut tx,
+        chain,
+        &ignored_logs,
+        &index,
+        &routes.rules,
+        Utc::now(),
+    )
+    .await?;
     stats.factory = db::sweeps::commit_factory_logs_in(&mut tx, chain, &factory).await?;
     let changed = sqlx::query(
         "UPDATE addresses a SET dual_covered_through=p.end_block, \
@@ -1241,5 +1344,72 @@ pub(crate) fn resolve_log(
         tx_from: log.tx_from,
         tx_nonce: log.tx_nonce,
         is_final: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use topup_core::{
+        money::{AtomicAmount, Bps, PRICE_SCALE, ScaledPrice, credit},
+        route::PricingMode,
+        valuation::{LockTerms, RouteValuation, lock_applies},
+    };
+
+    #[test]
+    fn stablecoin_floor_preserves_spot_and_tolerated_quote_payments() {
+        let mut route: topup_core::route::RouteFile =
+            serde_saphyr::from_str(include_str!("../../tests/fixtures/phala-cloud-pha.yaml"))
+                .unwrap();
+        route.pricing.mode = PricingMode::Stablecoin;
+        route.asset.decimals = 6;
+        route.merchant.min_deposit_atomic.min = AtomicAmount::default();
+        route.merchant.min_amount.min = 500;
+        route.merchant.quote_tolerance_bps.max = Bps::new(1000).unwrap();
+        route.pricing.peg_band_bps = Bps::new(100).unwrap();
+        let floor = guaranteed_floor(&route);
+        assert_eq!(floor.value(), U256::from(4_455_447));
+        let below = AtomicAmount::new(floor.value() - U256::from(1));
+        let rules = TransferRules {
+            minimums: BTreeMap::from([(route.asset.contract, floor)]),
+            ..Default::default()
+        };
+        let mut raw = RawTransfer {
+            tx_hash: B256::ZERO,
+            log_index: 0,
+            block_number: 0,
+            block_hash: B256::ZERO,
+            token: route.asset.contract,
+            from: Address::ZERO,
+            to: Address::ZERO,
+            amount: below,
+        };
+        assert!(rules.ignored_reason(&raw).is_some());
+        raw.amount = floor;
+        assert!(rules.ignored_reason(&raw).is_none());
+        let highest_price = ScaledPrice::new(101_000_000, PRICE_SCALE).unwrap();
+        assert!(credit(below, highest_price, 6, 2).unwrap().value() < 500);
+        // At the largest possible price, this is the smallest quoted amount for $5.
+        let lock = LockTerms {
+            asset: route.asset.contract,
+            amount: AtomicAmount::new(U256::from(4_950_496)),
+            price: highest_price,
+            credit_minor: topup_core::money::MinorAmount::new(500),
+            expires_at: topup_core::valuation::UnixSeconds::new(100),
+            block_time: topup_core::valuation::UnixSeconds::new(99),
+        };
+        let terms = RouteValuation {
+            asset: &route.asset,
+            min_credit_minor: 500,
+            lock_tolerance_bps: route.merchant.quote_tolerance_bps.max,
+        };
+        assert!(!lock_applies(below, &terms, &lock));
+        assert!(lock_applies(floor, &terms, &lock));
+        let tolerated = AtomicAmount::new(U256::from(4_500_000));
+        raw.amount = tolerated;
+        assert!(rules.ignored_reason(&raw).is_none());
+        // The explicit atomic floor still applies to volatile assets; no price guess is used.
+        route.pricing.mode = PricingMode::Spot;
+        assert_eq!(guaranteed_floor(&route), AtomicAmount::default());
     }
 }

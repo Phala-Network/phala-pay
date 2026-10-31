@@ -382,8 +382,10 @@ customer, an address to its quote, a deposit to its address and customer, a refu
 deposit), so no row joins two accounts or two modes. `flushed` and `flush_failures` are finalized chain facts: the service inserts them
 and never rewrites them.
 
-Any ERC-20 transfer to one of our addresses becomes a deposit row. The route is chosen by
-`(chain_id, asset_contract)`; no route → `rejected(unsupported_asset)`. The same insert binds the
+An eligible ERC-20 transfer to one of our addresses becomes a deposit row. Unsupported-token,
+zero-amount and guaranteed-sub-floor transfers instead enter finalized dual-log accounting with
+bounded samples and no merchant event (see [spam accounting](../deploy/RPC.md#ignored-transfer-spam)).
+The route is chosen by `(chain_id, asset_contract)`. The deposit insert binds the
 deposit to the payment settings of its account and mode (§9).
 
 Credit: `exp = asset_decimals + price_scale − unit_decimals`, where `unit_decimals` is 2 on every
@@ -397,7 +399,6 @@ monotone; splitting into `n` parts loses at most `n − 1` minor units.
 ```mermaid
 stateDiagram-v2
     [*] --> detected: transfer of the route's token at the route's confirmation
-    [*] --> rejected: transfer of another token (unsupported)
     detected --> confirmed: verify endpoint agrees at the confirmation, valued
     detected --> rejected: below the minimum credit, or an asset its settings do not accept
     confirmed --> credited: screened, deposit.credited written
@@ -833,7 +834,7 @@ version on every chain. Each network is an `addresses` row owned by the deposit 
 its chain's treasury effective at issue; every transfer of a supported token to it, active or
 retired, is a deposit valued at spot and runs the same states, events, sweeps, refunds, and
 reconciliation as a quote payment, with `quote: null` and `deposit_address` set; a routed token
-the binding does not accept is `rejected(asset_not_accepted)`, and an unsupported token is
+the binding does not accept is `rejected(asset_not_accepted)`, and a legacy unsupported-token deposit is
 rejected. The networks and assets shown are read from the effective config on each read. Creation adds a network on a chain supported since and supersedes a network
 whose treasury is no longer the current one; a treasury change that applies on a chain does the
 same, in the same transaction, for that chain's network of every address of the account and mode,
@@ -1502,7 +1503,8 @@ states. The service reports a deposit once it reaches the route's confirmation (
 state comes from its display-only pending view (§12): the quote's `payment` with
 `status: "seen"`. That view is not a
 credit and can disappear in a reorg, and only routed tokens
-appear in it; other tokens first show as `rejected(unsupported_asset)` once final (§13). Drive the UI
+appear in it; ignored unsupported-token/zero/sub-floor transfers produce no merchant deposit or
+webhook (see [integration notes](integration.md)). Drive the UI
 from fetched state, never from webhook order.
 
 | UI state | Service state | Copy |
@@ -1813,12 +1815,12 @@ which are stable across releases; a production CVM exposes no logs or shell. `to
 |---|---|
 | Addresses | Quotes use the customer's fixed deposit address. One nonoverlapping price window per customer and route can credit the first eligible transfer at the locked price; other transfers use spot. Deposit addresses are rotatable and retired networks stay monitored. |
 | Dust and mistakes | Below-minimum and unsupported-asset deposits are recorded, visible, and not credited. Rejected deposits of a routed token reach the treasury with everything else when the forwarder is flushed; an unsupported token stays in its forwarder until someone flushes that token. |
-| Refunds | Only a final deposit is refunded (`400 deposit_not_final` before), so nothing is paid back for a payment that could still be reversed; a reversed deposit is not refundable. Refundable: wrong token (`unsupported_asset`, `asset_not_accepted`); below the minimum credit but at or above the refund floor of the deposit's governing terms, or the route's default floor for a deposit no terms govern; rejected for any reason other than sanctions; funds arriving after the merchant closed the customer. A credited deposit is refunded only by the merchant's decision, for a credit it did not apply or has reversed; an overpayment beyond tolerance is credited at spot for the full amount (§9) like any other credit. Not refundable: sanctioned funds and dust under the refund floor. The merchant's staff request a refund by deposit id with a destination address the payer controls (never defaulted to `from_address`, which may be an exchange hot wallet), screened for sanctions; the merchant pays it from the treasury of the deposit's address and attaches the transaction; the service verifies it at finality and emits `deposit.refunded`. Refunds are in the original token. |
+| Refunds | Only a final deposit is refunded (`400 deposit_not_final` before), so nothing is paid back for a payment that could still be reversed; a reversed deposit is not refundable. Refundable: a wrong-token deposit already recorded (`unsupported_asset`, `asset_not_accepted`); new ignored transfers use operator recovery (integration notes); below the minimum credit but at or above the refund floor of the deposit's governing terms, or the route's default floor for a deposit no terms govern; rejected for any reason other than sanctions; funds arriving after the merchant closed the customer. A credited deposit is refunded only by the merchant's decision, for a credit it did not apply or has reversed; an overpayment beyond tolerance is credited at spot for the full amount (§9) like any other credit. Not refundable: sanctioned funds and dust under the refund floor. The merchant's staff request a refund by deposit id with a destination address the payer controls (never defaulted to `from_address`, which may be an exchange hot wallet), screened for sanctions; the merchant pays it from the treasury of the deposit's address and attaches the transaction; the service verifies it at finality and emits `deposit.refunded`. Refunds are in the original token. |
 | Customer closure | Unused credit and in-flight deposits follow the merchant's closure policy; the customer's addresses stay monitored, and later funds are held for refund: the merchant holds a `deposit.credited` for a closed customer instead of crediting it and refunds it (§11); the service has no closure check of its own. Account closure is an operator action at the merchant's request (design §13, PR 13). |
 | Compliance | Direct sanctions screening of payers, refund destinations, and treasuries (§8, §9); the operator screens each merchant, its owners, and its jurisdiction in offline due diligence (design D8). Phala Pay is software: each operator is responsible for its own compliance, and each merchant for its customers' (KYC, KYT, the Travel Rule, customer information requests). |
 | Fees and exposure | No fee. The merchant pays its own sweep and refund gas and the payer its payment gas; the service pays none, and credit is never reduced. The merchant bears price exposure between valuation and its sale of the tokens, open quote exposure up to the caps (§9), and credit before finality up to `max_unfinalized_credit` (§7). |
 | Rotation | Webhook key: the merchant rolls it (`POST /v1/account/webhook_keys/roll`); both keys sign every delivery for 48 hours (live minimum) to 7 days while the merchant pins the new one from attestation, and the roll's notice is always signed by the retiring key. API key: the merchant rolls it (`POST /v1/api_keys/{id}/roll`), the old key working for up to 7 days; the operator issues a recovery key to an account that lost its keys (§12, design D7). Backup key: a new domain and a new prefix; the old prefix is kept until the new one holds a full retention window. |
-| Retention | Deposits, refunds, events, transitions, and audit: 7 years *(policy)*; transitions, audit, and events are append-only. |
+| Retention | Deposits, ignored-transfer accounting totals, refunds, events, transitions, and audit: 7 years *(policy)*; transitions, audit, and events are append-only. |
 | Kill switches | Pause scopes (`quotes`, `settlement`, `refunds`) at account, customer, or route level, and a crediting pause per treasury (merchant or operator, each lifting only its own) that holds deposits to every forwarder over it; no pause stops a sweep, since anyone can flush a forwarder to its own treasury. Each scope's customer-facing effect is documented and shown; `settlement` stops crediting (deposits wait in `confirmed`); pausing never rolls back a credited fact. Incidents are announced to affected merchants through their recorded contact, and by each merchant to its customers. |
 | Runbooks | [deploy/runbooks](../deploy/runbooks/README.md), one per alert or incident: among them API key compromise and key recovery, provider disagreement, price outage, outbox backlog (undelivered credits), restore and reconciliation after it, chain frozen, treasury crediting pause, and deposit reversed. |
 

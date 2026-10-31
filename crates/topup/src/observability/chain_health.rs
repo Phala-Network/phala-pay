@@ -27,6 +27,7 @@ pub(super) struct Snapshot {
     pub unresolved: Vec<(i64, i64, i64)>,
     pub slow: Vec<(i64, i64, i64)>,
     pub activity: Vec<(i64, i64, i64)>,
+    pub ignored: Vec<(i64, i64)>,
 }
 
 pub(super) async fn snapshot(
@@ -35,7 +36,7 @@ pub(super) async fn snapshot(
     now: DateTime<Utc>,
 ) -> Result<Snapshot, sqlx::Error> {
     let discovery = routes.discovery();
-    let (coverage, budgets, issued, unresolved, slow, activity) = tokio::try_join!(
+    let (coverage, budgets, issued, unresolved, slow, activity, ignored) = tokio::try_join!(
         sqlx::query_as::<_, (i64, i64, i64)>("SELECT c.chain_id,GREATEST(0,extract(epoch FROM $1::timestamptz-c.through_time)::bigint),(SELECT count(*) FROM addresses a WHERE a.chain_id=c.chain_id AND (a.dual_covered_through IS NULL OR a.dual_covered_through < c.through_block)) FROM chain_coverage c").bind(now).fetch_all(pool),
         sqlx::query_as::<_, (String, i32)>("SELECT name,used FROM daily_budgets WHERE day=($1::timestamptz AT TIME ZONE 'UTC')::date").bind(now).fetch_all(pool),
         sqlx::query_as::<_, (i64, i64)>(ADDRESS_COUNTS_SQL).fetch_all(pool),
@@ -44,7 +45,10 @@ pub(super) async fn snapshot(
         sqlx::query_as::<_, (i64, i64, i64)>(ACTIVITY_SQL).bind(now)
             .bind(now - chrono::Duration::hours(i64::from(discovery.quote_window_hours)))
             .bind(now - chrono::Duration::days(i64::from(discovery.deposit_window_days)))
-            .fetch_all(pool)
+            .fetch_all(pool),
+        sqlx::query_as::<_, (i64,i64)>("SELECT c.chain_id,COALESCE(max(d.event_count),0) FROM chain_coverage c \
+            LEFT JOIN ignored_transfer_daily d ON d.chain_id=c.chain_id AND d.day=($1::timestamptz AT TIME ZONE 'UTC')::date \
+            GROUP BY c.chain_id").bind(now).fetch_all(pool)
     )?;
     Ok(Snapshot {
         coverage,
@@ -53,6 +57,7 @@ pub(super) async fn snapshot(
         unresolved,
         slow,
         activity,
+        ignored,
     })
 }
 

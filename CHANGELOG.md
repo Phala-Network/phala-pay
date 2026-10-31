@@ -14,6 +14,18 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Breaking (operators)
+
+- **no rollback to 0.13.4; restore required**. Ignored-transfer accounting moves outside the
+  deposits table; once totals exist, pre-change binaries cannot reconcile custody. The schema
+  compatibility floor is `20261110000000`, so their required Compose migration step fails
+  before service startup. A directly launched old binary bypasses that deployment gate; custody
+  then freezes the affected chain on mismatch and crediting stops. Do not bypass the gate.
+  Take and verify a pre-upgrade backup and exercise the [restore/reconciliation procedure](deploy/RESTORE.md)
+  before upgrading. Recovery uses that backup and the matching pre-upgrade image/config, followed
+  by delivered-event reconciliation and operator unfreeze; retain merchant event exports to
+  recover credits delivered after the backup. The down migration never deletes accounting.
+
 ### Added
 
 - Restart-safe UTC-day RPC usage by endpoint/method, with configurable Ankr call, BlockPI RU,
@@ -26,6 +38,22 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   stop line. Provider dashboards remain authoritative for billing. Disabled quota configuration
   is omitted; older binaries require their retained configuration without `quota_alerts`, as
   exercised by the rollback drill.
+- Signed, cursor-paginated `GET /v1/admin/ignored_transfers` exposes exact finalized per-block
+  accounting and bounded raw samples for unsupported-token and sub-floor transfers.
+- `TopupIgnoredTransferVolume` warns per chain when one address accumulates 100 ignored logs
+  in a UTC observation day; the existing alerts API supports acknowledgement and silence.
+
+### Changed
+
+- **Merchant webhook behavior:** newly discovered unsupported-token, zero-amount and
+  guaranteed-sub-floor transfers no longer create merchant deposit objects or `deposit.rejected`
+  events. Staff can inspect the operator report. Existing deposits and ordinary rejections keep
+  their contracts. Stablecoin floors account for the lowest permitted credit minimum and largest
+  quote tolerance across route versions, so valid quote underpayments still use the normal flow.
+- Fast discovery filters route contracts and discards dust before receipt/origin completion.
+  Hourly coverage retains exact dual-agreed accounting for every ignored token, including tokens
+  routed later, without completion or price RPC. At most 20 raw samples per address/token/UTC
+  observation day remain for 30 days; block totals retain the financial-record policy.
 
 ## [0.13.4] - 2026-10-31
 

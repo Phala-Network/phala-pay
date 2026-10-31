@@ -158,6 +158,11 @@ pub(crate) async fn forwarder_ledgers(
             FROM deposits d JOIN addresses owner ON owner.id=d.address_id
             WHERE d.block_number >= owner.created_block AND d.chain_id = $1 AND d.asset_contract = $2 AND d.block_number <= $3
             GROUP BY d.address_id
+        ), ignored_totals AS (
+            SELECT t.address_id, SUM(t.amount_atomic) AS total
+            FROM ignored_transfer_totals t JOIN addresses owner ON owner.id=t.address_id
+            WHERE t.block_number >= owner.created_block AND t.chain_id=$1 AND t.token=$2 AND t.block_number <= $3
+            GROUP BY t.address_id
         ), flushed_totals AS (
             SELECT f.address_id, SUM(f.amount_atomic) AS total
             FROM flushed f JOIN addresses owner ON owner.id=f.address_id
@@ -166,10 +171,11 @@ pub(crate) async fn forwarder_ledgers(
         )
         SELECT a.id, a.address,
                COALESCE(b.amount_atomic, 0)::text AS opening,
-               COALESCE(d.total, 0)::text AS deposits,
+               (COALESCE(d.total, 0) + COALESCE(i.total, 0))::text AS deposits,
                COALESCE(f.total, 0)::text AS flushed
         FROM addresses a
         LEFT JOIN deposit_totals d ON d.address_id = a.id
+        LEFT JOIN ignored_totals i ON i.address_id = a.id
         LEFT JOIN flushed_totals f ON f.address_id = a.id
         LEFT JOIN custody_opening_balances b
           ON b.address_id=a.id AND b.token=$2 AND b.start_block=a.created_block

@@ -13,6 +13,36 @@ The service evaluates readiness/backfill/coverage and S/L/H/Q in its existing bu
 [rpc-alerts.yaml](../rpc-alerts.yaml) are the optional Prometheus equivalents. Rolling provider
 quotas still require a time-series collector or daily provider-dashboard checks.
 
+## Ignored transfer volume
+
+`TopupIgnoredTransferVolume` fires at 100 ignored events for any one address on a chain in the
+current UTC observation day (5 PM PDT / 4 PM PST reset). The existing business monitor evaluates
+persisted daily counters, including unsampled events; one `component=chain:<id>` alert covers the
+chain. Address/token/transaction values never become alert grouping tags. Historical backfill
+can cause a one-day spike. The alert resolves below the threshold on the next observation day.
+
+Use the [signed admin helper](README.md#environment) to inspect the affected chain, then narrow
+the report by `forwarder=fwd_...` and/or `token=0x...`. Use `limit` (1–100), `starting_after` or
+`ending_before` to page. `event_count` and `amount_atomic` are exact per-block totals; raw samples
+are capped at 20 per address/token/UTC observation day and expire after 30 days. Ask the payer
+for a transaction hash for a mistaken transfer that is absent from the samples.
+
+```sh
+admin GET '/v1/admin/ignored_transfers?chain_id=1&limit=100'
+```
+
+Compare the block totals and samples with both providers, the payer's evidence and the block
+explorer. Unsupported tokens and guaranteed-sub-floor dust create no merchant deposit or
+webhook and consume no per-log completion/price RPC. A mistaken payment has no deposit id for
+merchant refund APIs; use the existing operator recovery process and compliance checks. Do not
+insert a synthetic deposit, bypass dual agreement, reset coverage markers, or delete custody
+amounts to clear the alert. Inspect DB disk growth, coverage lag, `eth_getLogs` response-size
+errors and provider dashboards; distinct token/block groups remain attacker-controlled growth.
+If those budgets are threatened, pause new quotes on the chain through the normal intake
+procedure while keeping existing funded verification and coverage running. Acknowledge/silence
+through the [alerts API](README.md#manage-alerts); investigate recurring spikes before resuming
+growth. Never trim the accounting token set or drop dust amounts from custody.
+
 ## Hot set and issuance budgets
 
 `TopupRpcHotAddressBudget` / `RpcHotAddressBudget` fires when
