@@ -1627,7 +1627,7 @@ async fn scale_indexes_resume_unrecorded_builds_and_round_trip() -> Result<()> {
             "SELECT count(*) FROM _sqlx_migrations m \
              JOIN topup_migration_compatibility c ON c.version=m.version AND c.checksum=m.checksum \
              WHERE m.version BETWEEN 20261029030000 AND 20261029030005 \
-               AND m.success AND c.compatibility_floor=20261104000000",
+               AND m.success AND c.compatibility_floor=20261105000000",
         )
         .fetch_one(pool)
         .await?;
@@ -1689,7 +1689,7 @@ async fn service_indexes_resume_unrecorded_builds_and_round_trip() -> Result<()>
                 "SELECT count(*) FROM _sqlx_migrations m \
                  JOIN topup_migration_compatibility c ON c.version=m.version AND c.checksum=m.checksum \
                  WHERE m.version BETWEEN 20261029040000 AND 20261029040003 \
-                   AND m.success AND c.compatibility_floor=20261104000000",
+                   AND m.success AND c.compatibility_floor=20261105000000",
             )
             .fetch_one(pool)
             .await?;
