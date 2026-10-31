@@ -116,7 +116,7 @@ from [crates/topup/openapi.json](crates/topup/openapi.json), the API's OpenAPI d
 ## Status
 
 Phala Pay is pre-1.0 and has had no third-party security audit. Phala's production instance,
-`https://pay-api.phala.com`, runs v0.13.1 for RedPill with live Ethereum USDC/USDT and Base USDC.
+`https://pay-api.phala.com`, runs v0.13.4 for RedPill with live Ethereum USDC/USDT and Base USDC.
 Staging (`https://pay-api-staging.phala.com`) serves test routes on Sepolia and Base Sepolia.
 [Post-launch status](docs/plan.md) records the remaining onboarding and pilot gates.
 

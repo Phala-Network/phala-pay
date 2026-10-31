@@ -22,7 +22,8 @@ ACCEPT/SEND to its private listener on 8082 together; the staging reference prod
 off and uses its plain HTTP backend. Topup carries the client address without per-IP limits and
 never logs it; HAProxy's private access logs are the documented privacy exception. See
 [Custom domain](README.md#custom-domain) for the attested policy and verification checks.
-The current [rollback floor](README.md#rollback-compatibility) is v0.13.0.
+Follow the [rollback policy](README.md#rollback-compatibility), including the release's schema
+floor and restore-only declarations, before selecting a prior deployment.
 
 ## Onboarding policy
 
@@ -35,7 +36,7 @@ instance, is responsible for its compliance, as every operator is for its own (a
 
 ## Production
 
-Production has been live since October 23, 2026 PDT. `https://pay-api.phala.com` runs v0.13.1
+Production has been live since October 23, 2026 PDT. `https://pay-api.phala.com` runs v0.13.4
 for RedPill; Phala Cloud onboarding is pending. Its
 [configuration](environments/phala-network/production/topup/topup.yaml) serves live routes only:
 
@@ -54,6 +55,8 @@ snapshots and audited operator supplements, not the legacy oracle fields.
 
 RPC uses Ankr read and independent BlockPI verify on both chains. Ankr's 25,000-call daily pilot
 budget is shared with staging; BlockPI's chain keys share one 1,250,000-RU daily account budget.
+Staging's independent Infura verify account has a 1,500,000-credit daily stop line.
+The provider dashboards remain authoritative for combined monthly usage, including shared Ankr.
 See the [RPC budget](RPC.md#worst-case-pilot-budget) for reserve and stop lines.
 
 | Pilot limit | Production value | Enforcement |
@@ -62,6 +65,16 @@ See the [RPC budget](RPC.md#worst-case-pilot-budget) for reserve and stop lines.
 | H: hint tasks per UTC day | 300 | Service; excess hints fall back to scanning |
 | Q: fresh quote snapshots per price chain per UTC day | 600 | Service; `503 price_unavailable`, with 12-second snapshot reuse |
 | Issued addresses per chain, all accounts and modes | 12,000 historical | Service; `422 address_capacity_reached` for a missing network or rotation |
+| N: new refund attachments per rolling 24 hours | 10 per environment | Service |
+| R: pending refund attachments | 10 per environment, 3 per account across modes | Service |
+
+Staging retains D10/H20/Q30 and 1,000 historical addresses per chain. The `quota_alerts`
+configuration on `main` adds service-generated daily RPC/D monitoring for the next upgrade;
+it is not part of deployed v0.13.4. Ankr's monitoring allocations are 20,442 calls/day for
+production and 4,558 for staging, including staging's recovery reserve, totaling the shared
+25,000 stop line. Each environment warns at 80% of its allocation. D remains an operational
+stop without a deposit admission gate; before upgrading, keep the manual RPC/D checks.
+See [service quota monitoring](RPC.md#monitoring-and-stop-actions) for persistence and accounting gaps.
 
 Quotes on an existing customer network consume no address capacity and continue at the cap.
 Each new RedPill organization consumes one address on each chain it first quotes on. Closing
@@ -71,10 +84,13 @@ quotes and retiring addresses free no capacity. The
 
 ### Launch evidence
 
-The [v0.13.1 production upgrade](https://github.com/Phala-Network/phala-pay/actions/runs/40652271111)
-records deployment and health/attestation verification. The
-[restore-drill branch run](https://github.com/Phala-Network/phala-pay/actions/runs/40600616231)
-verified the repaired drill, rather than a production-backup drill on v0.13.1.
+The [v0.13.4 production upgrade](https://github.com/Phala-Network/phala-pay/actions/runs/41181934742)
+completed October 31, 2026 at 12:51 AM PDT, with `/healthz` 200 and TCB status `UpToDate`.
+The production-backup restore drill passed on v0.13.2 on October 29: read-only RTO 340 seconds,
+valid attestation, restore CVM deleted, and production health 200 afterward. That read-only
+result does not establish full merchant-service RTO or failure-time RPO.
+The [automated v0.13.4 restore drill](https://github.com/Phala-Network/phala-pay/actions/runs/41200978141)
+passed October 31 on `18508073`; it uses the workflow's disposable stack, not production backups.
 Keep private recovery material and sign-off evidence in the operator recovery store
 specified by the [launch checklist](runbooks/production-launch.md#13-sign-off-checklist).
 No completed production sign-off report is committed here: confirm supplements, all three smoke
@@ -148,7 +164,7 @@ owner, except the workflow runs, which the owner dispatches; agents and CI run n
 exported and the release's verified kit in `kit/`:
 
 ```sh
-version=v0.13.1   # the release deploy-phala.yml pins
+version=v0.13.4   # the release deploy-phala.yml pins
 bash deploy/verify-release.sh "$version" release
 mkdir kit && tar -xzf "release/phala-pay-deploy-$version.tar.gz" -C kit --strip-components=1
 npm ci --prefix kit/deploy/tools --ignore-scripts
