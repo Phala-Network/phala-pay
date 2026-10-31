@@ -328,12 +328,58 @@ fn report_rpc_endpoint(state: &mut AlertState, now: i64, chain: u64, provider: &
     );
 }
 
+fn report_quotas(
+    state: &mut AlertState,
+    now: DateTime<Utc>,
+    quotas: &super::quota::QuotaAlerts,
+    usage: &[crate::db::rpc_usage::Usage],
+    deposits: i64,
+) {
+    for quota in &quotas.rpc {
+        let used = usage
+            .iter()
+            .filter(|row| quota.providers.contains(&row.provider))
+            .fold(0_i64, |total, row| {
+                total.saturating_add(row.calls.saturating_mul(quota.unit.weight(&row.method)))
+            });
+        let stop = i64::from(quota.stop_line.get());
+        let warning = stop.saturating_mul(80).saturating_add(99) / 100;
+        let (severity, threshold) = if used >= stop {
+            (Some("critical"), stop)
+        } else {
+            ((used >= warning).then_some("warning"), warning)
+        };
+        state.observe(
+            now.timestamp(),
+            "TopupRpcQuotaPressure",
+            &quota.name,
+            severity,
+            used,
+            threshold,
+        );
+    }
+    if let Some(limit) = quotas.deposits_per_day {
+        let limit = i64::from(limit.get());
+        state.observe(
+            now.timestamp(),
+            "TopupDepositDailyLimit",
+            "environment",
+            (deposits >= limit).then_some("warning"),
+            deposits,
+            limit,
+        );
+    }
+}
+
 async fn probe_database(
     pool: &PgPool,
     routes: &RouteSet,
     state: &mut AlertState,
 ) -> Result<(), sqlx::Error> {
     let now: DateTime<Utc> = sqlx::query_scalar("SELECT now()").fetch_one(pool).await?;
+    let usage = crate::db::rpc_usage::snapshot(pool, now.date_naive()).await?;
+    let deposits = crate::db::rpc_usage::deposits_on(pool, now.date_naive()).await?;
+    report_quotas(state, now, routes.quota_alerts(), &usage, deposits);
     let health = chain_health::snapshot(pool, routes, now).await?;
     report_pilot(state, now, routes, &health);
     let heartbeat = sqlx::query_scalar("SELECT max(recorded_at) FROM heartbeat")
@@ -442,9 +488,26 @@ pub async fn monitor_business(
         .timeout(Duration::from_secs(20))
         .build();
     let mut state = AlertState::default();
+    let mut accounting_failures = 0;
+    let mut accounting_failed_day = None;
     loop {
         let probes = async {
-            let now = Utc::now().timestamp();
+            let today = Utc::now();
+            let now = today.timestamp();
+            let failures = topup_adapters::chain::evm::metrics::rpc_accounting_failures();
+            let missed = failures.saturating_sub(accounting_failures);
+            accounting_failures = failures;
+            if missed > 0 {
+                accounting_failed_day = Some(today.date_naive());
+            }
+            state.observe(
+                now,
+                "TopupRpcAccountingFailed",
+                "rpc-accounting",
+                (accounting_failed_day == Some(today.date_naive())).then_some("warning"),
+                i64::try_from(missed).unwrap_or(i64::MAX),
+                0,
+            );
             for (chain, pair) in routes.rpc() {
                 for client in [&pair.read, &pair.verify] {
                     report_rpc_endpoint(
@@ -500,6 +563,72 @@ pub async fn monitor_business(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quota_thresholds_weights_and_utc_rollover() {
+        use super::super::quota::{QuotaAlerts, RpcQuota, RpcUnit};
+        use crate::db::rpc_usage::Usage;
+        let quotas = QuotaAlerts {
+            deposits_per_day: std::num::NonZeroU32::new(280),
+            rpc: vec![RpcQuota {
+                name: "ankr".into(),
+                providers: vec!["ankr-mainnet".into(), "ankr-base".into()],
+                unit: RpcUnit::Calls,
+                stop_line: std::num::NonZeroU32::new(101).unwrap(),
+            }],
+        };
+        let mut usage = vec![
+            Usage {
+                provider: "ankr-mainnet".into(),
+                method: "eth_call".into(),
+                calls: 40,
+            },
+            Usage {
+                provider: "ankr-base".into(),
+                method: "eth_getLogs".into(),
+                calls: 40,
+            },
+            Usage {
+                provider: "other".into(),
+                method: "eth_call".into(),
+                calls: 999,
+            },
+        ];
+        let now = DateTime::from_timestamp(1_000_000, 0).unwrap();
+        let mut state = AlertState::default();
+        report_quotas(&mut state, now, &quotas, &usage, 279);
+        assert!(state.active.is_empty());
+        usage[0].calls += 1; // ceil(101 * 0.8) == 81
+        report_quotas(&mut state, now, &quotas, &usage, 280);
+        assert_eq!(state.active.len(), 2);
+        assert_eq!(
+            state.active[&("TopupRpcQuotaPressure", "ankr".into())].0,
+            "warning"
+        );
+        usage[0].calls += 20;
+        report_quotas(&mut state, now, &quotas, &usage, 281);
+        assert_eq!(
+            state.active[&("TopupRpcQuotaPressure", "ankr".into())].0,
+            "critical"
+        );
+        report_quotas(&mut state, now + chrono::Duration::days(1), &quotas, &[], 0);
+        assert!(state.active.is_empty());
+        assert_eq!(RpcUnit::InfuraCredits.weight("eth_getLogs"), 255);
+        assert_eq!(RpcUnit::InfuraCredits.weight("other"), 80);
+        for (method, ru) in [
+            ("eth_chainId", 5),
+            ("eth_blockNumber", 10),
+            ("eth_getCode", 15),
+            ("eth_getTransactionReceipt", 15),
+            ("eth_getBlockByHash", 20),
+            ("eth_call", 20),
+            ("eth_getLogs", 50),
+            ("eth_getTransactionByHash", 35),
+            ("other", 35),
+        ] {
+            assert_eq!(RpcUnit::BlockpiRu.weight(method), ru);
+        }
+    }
 
     fn pilot_routes(hints: i32, quotes: i32) -> RouteSet {
         use topup_adapters::chain::evm::EvmClient;

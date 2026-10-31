@@ -6,6 +6,7 @@ mod capacity;
 mod chain_health;
 mod logging;
 pub mod metrics;
+pub mod quota;
 mod redaction;
 mod reporting;
 mod request;

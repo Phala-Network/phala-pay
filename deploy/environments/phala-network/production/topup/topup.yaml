@@ -25,6 +25,18 @@ maintenance_keys:
 # Operational pilot caps: D=280 deposits/day, 150 factory verifications/day, 10 Safe proof sets/day.
 # At most 2,000 hot addresses/chain and 50 new issuances/chain/day; see deploy/RPC.md.
 # BlockPI log requests use its measured free-tier range limit; see deploy/RPC.md for the budget.
+# Daily monitoring allocations; shared Ankr allocations total 25,000 calls (deploy/RPC.md).
+quota_alerts:
+  deposits_per_day: 280
+  rpc:
+    - name: ankr
+      providers: [ankr-mainnet, ankr-base-mainnet]
+      unit: calls
+      stop_line: 20442
+    - name: blockpi
+      providers: [blockpi-mainnet, blockpi-base-mainnet]
+      unit: blockpi_ru
+      stop_line: 1250000
 rpc:
   - chain_id: 1
     max_issued_addresses: 12000

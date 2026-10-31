@@ -21,6 +21,18 @@ maintenance_keys:
 # Operational caps: D=10/day, 10 new issuances/chain/day; see deploy/RPC.md.
 # Independent Ankr read and Infura verify endpoints, with both sealed keys (deploy/RPC.md).
 # Fast discovery uses read; coverage and money decisions require read/verify agreement.
+# Daily monitoring allocations; shared Ankr allocations total 25,000 calls (deploy/RPC.md).
+quota_alerts:
+  deposits_per_day: 10
+  rpc:
+    - name: ankr
+      providers: [ankr-sepolia, ankr-base-sepolia, ankr-mainnet, ankr-base-mainnet]
+      unit: calls
+      stop_line: 4558
+    - name: infura
+      providers: [infura-sepolia, infura-base-sepolia, infura-mainnet, infura-base-mainnet]
+      unit: infura_credits
+      stop_line: 1500000
 rpc:
   - chain_id: 11155111
     max_issued_addresses: 1000

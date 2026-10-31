@@ -42,6 +42,8 @@ struct ConfigSpec {
     #[serde(default)]
     discovery: crate::scanner::ScanConfig,
     #[serde(default)]
+    quota_alerts: crate::observability::quota::QuotaAlerts,
+    #[serde(default)]
     public_origin: Option<String>,
     admin_key: AdminKeySpec,
     #[serde(default)]
@@ -85,6 +87,8 @@ pub struct Config {
     pub quote_snapshots_per_day: i32,
     /// Fast discovery activity windows; hourly dual coverage still includes cold addresses.
     pub discovery: crate::scanner::ScanConfig,
+    /// Optional RPC account allocations and deposit stop line, used only for alerts.
+    pub quota_alerts: crate::observability::quota::QuotaAlerts,
     /// The API's one public origin: admin signatures and treasury challenges name it. `None` when
     /// `topup run` takes it from its environment.
     pub public_origin: Option<PublicOrigin>,
@@ -124,6 +128,7 @@ struct ResolvedConfig<'a> {
     hints_per_day: i32,
     quote_snapshots_per_day: i32,
     discovery: crate::scanner::ScanConfig,
+    quota_alerts: &'a crate::observability::quota::QuotaAlerts,
     #[serde(skip_serializing_if = "Option::is_none")]
     public_origin: Option<String>,
     admin_key: &'a AdminKeySpec,
@@ -149,6 +154,7 @@ impl Config {
             serde_saphyr::from_str(yaml).map_err(|error| format!("invalid YAML: {error}"))?;
         validate_daily_budgets(spec.hints_per_day, spec.quote_snapshots_per_day)?;
         spec.discovery.validate()?;
+        spec.quota_alerts.validate(&spec.rpc)?;
         validate_capacity(
             "max_refund_attachments_per_day",
             spec.max_refund_attachments_per_day,
@@ -240,6 +246,7 @@ impl Config {
             hints_per_day: spec.hints_per_day,
             quote_snapshots_per_day: spec.quote_snapshots_per_day,
             discovery: spec.discovery,
+            quota_alerts: spec.quota_alerts,
             public_origin,
             admin_key_id: spec.admin_key.id.clone(),
             admin_key,
@@ -319,6 +326,7 @@ impl Config {
         RouteSet::with_rpc(self.routes.clone(), clients)?
             .with_environment(self.environment.clone())
             .with_discovery(self.discovery)
+            .with_quota_alerts(self.quota_alerts.clone())
             .with_daily_budgets(self.hints_per_day, self.quote_snapshots_per_day)
     }
 
@@ -353,6 +361,7 @@ impl Config {
             hints_per_day: self.hints_per_day,
             quote_snapshots_per_day: self.quote_snapshots_per_day,
             discovery: self.discovery,
+            quota_alerts: &self.quota_alerts,
             public_origin: self.public_origin.as_ref().map(ToString::to_string),
             admin_key: &self.admin_key_spec,
             maintenance_keys: &self.maintenance_key_specs,

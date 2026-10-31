@@ -11,6 +11,7 @@ mod outbox;
 pub(crate) mod pending;
 pub mod pricing;
 pub mod rpc;
+pub mod rpc_usage;
 pub(crate) mod scanner;
 pub(crate) mod sweeps;
 mod types;

@@ -543,8 +543,34 @@ N-1 data compatibility preserves history but does not make its binary obey these
 
 ### Monitoring and stop actions
 
-D, factory and Safe limits have no code enforcement. Maintain daily tallies per environment of
-deposits handled, factory verification instances and Safe attempts, including recovery work.
+D, factory and Safe limits remain operational rather than admission gates. The service persists
+UTC-day RPC attempts by configured endpoint and method, including batch items and retries,
+and derives D from newly inserted deposit rows (including rejected deposits). Reprocessing a
+row does not count it again; a backfilled transfer counts on its observation day, not block day.
+The once-per-minute business monitor generates `TopupRpcQuotaPressure` at ceil(80% of each
+configured `quota_alerts.rpc[].stop_line`), critical at the stop line, and
+`TopupDepositDailyLimit` at `quota_alerts.deposits_per_day`. These are managed through the
+existing admin alerts API; no collector or new delivery setup is required.
+
+Ankr's local allocations are **20,442 production + 4,558 staging = 25,000 calls/day**. Staging
+gets its modeled 4,228 plus 330 for shared monthly recovery; production gets the remainder.
+The 80% warning boundaries are 16,354 and 3,647 calls respectively. These allocations do not
+create separate provider quotas. BlockPI is 1,250,000 RU/day and Infura 1,500,000 credits/day,
+warning at 1,000,000 RU and 1,200,000 credits. Configure exact endpoint ids, including staging's
+mainnet price endpoints; a provider label is never inferred from a URL.
+
+Accounting batches one DB upsert per packet on a separate two-connection pool, with a one-second
+deadline. An unavailable tally never blocks RPC: `topup_rpc_accounting_failures_total` increments
+and `TopupRpcAccountingFailed` warns that the day's usage may be incomplete. Successful
+accounting can overcount a packet if the process stops after committing and before sending it.
+A crash before commit, accounting failures, external CLI/preflight calls, another service and
+BlockPI response-size surcharges can undercount billed usage. The provider dashboard remains
+authoritative for combined monthly usage. Counters start at upgrade; reconcile the first day's
+pre-upgrade calls manually. Restarts preserve committed daily tallies and UTC rollover starts a
+new day. A read-only restore process does not write these monitoring tables.
+
+Maintain manual daily tallies of factory verification instances and Safe attempts, including
+recovery work.
 Reconcile reports, events/audit records and application evidence with billed RPC counters;
 distinct factory transaction counts alone omit re-verification. Budget each planned test/proof
 batch before starting it. If a tally cannot be established, stop scheduling that load until

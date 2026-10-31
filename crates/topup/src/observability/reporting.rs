@@ -199,6 +199,9 @@ fn runbook(alert: &str, tags: &BTreeMap<String, String>) -> &'static str {
         | "TopupRpcHintBudgetExhausted"
         | "TopupRpcPriceSnapshotBudgetExhausted"
         | "TopupRpcHotAddressBudget"
+        | "TopupRpcQuotaPressure"
+        | "TopupRpcAccountingFailed"
+        | "TopupDepositDailyLimit"
         | "TopupRpcIssuanceBudget" => "rpc-health.md",
         "TopupRpcUnresolvedDepositStock" | "TopupRpcUnresolvedDepositEntries" => {
             "deposit-reversed.md"
@@ -533,6 +536,9 @@ mod tests {
             "TopupRpcPriceSnapshotBudgetExhausted",
             "TopupRpcHotAddressBudget",
             "TopupRpcIssuanceBudget",
+            "TopupRpcQuotaPressure",
+            "TopupRpcAccountingFailed",
+            "TopupDepositDailyLimit",
         ];
         let events = with_captured_events_options(
             || {
@@ -554,7 +560,7 @@ mod tests {
                 "address-capacity.md"
             } else if alert.starts_with("TopupRpcUnresolvedDeposit") {
                 "deposit-reversed.md"
-            } else if alert.starts_with("TopupRpc") {
+            } else if alert.starts_with("TopupRpc") || alert == "TopupDepositDailyLimit" {
                 "rpc-health.md"
             } else if alert == "TopupRefundProgressAge" {
                 "rejected-funds-at-treasury.md#pending-refund-transaction-alert"

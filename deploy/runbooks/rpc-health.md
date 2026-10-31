@@ -102,7 +102,7 @@ An encoding or database failure fails the scrape; inspect database availability 
 Do not replace an unavailable sample with zero or infer negative payment evidence from metrics.
 Before raising pilot volume, add suitable indexes for the deposits `first_unresolved_at` and
 `first_slow_at` stock/rolling-entry scans, which currently lack timestamp indexes, and verify
-query plans against representative retained history. The internal-alert change adds no migration.
+query plans against representative retained history. The daily quota monitor adds an endpoint/method/day usage table and a deposit observation-time index.
 
 ## Confirmation slow lane
 
@@ -179,3 +179,34 @@ needs Engineering review; an absent or undecodable balance result is never assum
 3. Confirm the custody check completes and the alert stops recurring. Resolve this event-only
    alert through the [alerts procedure](README.md#manage-alerts). A later-added route includes
    already recorded unsupported transfers; it must not establish an activation-time baseline.
+
+## Daily quota pressure
+
+`TopupRpcQuotaPressure` is generated in the service from persisted UTC-day transport attempts,
+aggregated by the exact endpoint ids in `quota_alerts.rpc`. Warning is at ceil(80% of the stop
+line), critical at the line. Ankr uses calls, BlockPI base RU, and Infura credits; numeric values
+are alert fields, and the only grouping component is the configured allocation name. The
+admin alerts API supports listing, acknowledgement and silence as for existing alerts.
+
+At warning, reconcile both environments with the provider dashboard and stop adding onboarding,
+tests, factory/Safe proofs or recovery load until the remaining allocation is understood. At
+the stop line, pause new quotes on affected chains using the existing route-pause procedure;
+continue handling received funds. Do not reset tallies, add accounts, or speed up polling.
+Ankr's production/staging allocations are 20,442/4,558 calls; the combined account has 25,000.
+The local warning boundaries are 16,354/3,647. The dashboard remains authoritative for combined
+monthly billing and surcharges. See the [budget model](../RPC.md#worst-case-pilot-budget).
+
+`TopupDepositDailyLimit` warns at D (production 280, staging 10). Count newly observed deposit
+rows across all chains and modes, including rejected rows; worker retries do not increase D.
+Pause intake and reconcile the remaining RPC budget before resuming. Factory/Safe attempts and
+recovery still require manual tallies; D is an alert, not an automatic rejection gate.
+
+`TopupRpcAccountingFailed` and `topup_rpc_accounting_failures_total` indicate failed/timed-out
+usage writes. Calls continue, so the daily total may undercount; this process keeps the alert active for
+the observed UTC day even if accounting recovers. A process restart resets failure tracking;
+reconcile any accounting incident against the dashboard rather than treating restart as repair. Check database availability and the dedicated
+two-connection accounting pool, then reconcile with the provider dashboard before adding load.
+A database probe failure must never be read as zero usage or recovery. Committed tallies survive
+restarts; the UTC day resets quota conditions. The upgrade day's earlier calls, read-only restore
+processes and standalone CLI calls are outside the tally. A pre-send committed packet can be
+conservatively overcounted if the process dies before sending it.

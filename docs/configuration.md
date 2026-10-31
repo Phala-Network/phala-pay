@@ -357,3 +357,20 @@ required environment-wide `max_attached_pending_refunds` and rolling
 `max_refund_attachments_per_day` limits. A refusal preserves the refund's reservation and
 returns `422 refund_attachment_limit_exceeded`. Repeating an attachment or submitting its one
 replacement candidate consumes no additional quota. See the [refund rules](architecture.md#12-api-and-events).
+
+### Operational quota alerts
+
+`quota_alerts` is optional monitoring configuration, included in `config show` and the attested
+configuration. Omission keeps quota alerts disabled. `deposits_per_day` is a positive integer
+(D); it counts each persisted deposit's first observation in the UTC day, including rejections.
+The `rpc` list has at most eight allocations with unique `[a-z0-9-]{1,40}` names, exact configured
+endpoint ids in `providers` (each endpoint appears at most once), a positive `stop_line`, and
+`unit: calls`, `blockpi_ru`, or `infura_credits`. Calls include every transport attempt and batch
+member; costs use the [RPC budget](../deploy/RPC.md#worst-case-pilot-budget) weights.
+
+RPC warnings start at ceil(80% of the allocation), become critical at the stop line, and deposit
+warnings start at D. Alerts use the existing admin API. These stop lines trigger monitoring;
+they do not reject deposits or RPC calls. For shared provider accounts, allocations across
+environments must sum to no more than the account's stop line. See the shipped production and
+staging configurations for the Ankr split. Provider dashboards remain authoritative for combined
+monthly billing and unrecorded/out-of-service calls. See the [runbook](../deploy/runbooks/rpc-health.md#daily-quota-pressure).

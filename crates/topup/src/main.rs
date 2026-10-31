@@ -139,6 +139,12 @@ enum SyntheticAlert {
     RpcHintBudgetExhausted,
     #[value(name = "TopupRpcPriceSnapshotBudgetExhausted")]
     RpcPriceSnapshotBudgetExhausted,
+    #[value(name = "TopupRpcQuotaPressure")]
+    RpcQuotaPressure,
+    #[value(name = "TopupRpcAccountingFailed")]
+    RpcAccountingFailed,
+    #[value(name = "TopupDepositDailyLimit")]
+    DepositDailyLimit,
 }
 
 #[derive(Subcommand)]
@@ -737,6 +743,16 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
         .await
         .context("failed to connect to database")?;
     check_payment_settings_cutover(&pool).await?;
+    // Monitoring has a separate bounded pool: RPC callers can already hold a transaction.
+    let accounting_pool = connect("run", 2)
+        .await
+        .context("failed to connect RPC accounting")?;
+    let recorder = Arc::new(topup::db::rpc_usage::Recorder(accounting_pool));
+    for pair in routes.rpc().values() {
+        for client in [&pair.read, &pair.verify] {
+            client.record_calls_with(recorder.clone())?;
+        }
+    }
     let pricing_runtimes = topup::locks::pricing::PricingRuntime::build_all(&routes, pool.clone())
         .map_err(anyhow::Error::msg)
         .context("invalid rate-lock pricing configuration")?;

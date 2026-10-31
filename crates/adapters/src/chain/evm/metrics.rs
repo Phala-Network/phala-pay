@@ -6,6 +6,7 @@
 //! configured chain ids, and methods outside [`METHODS`] count as `other`.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 use std::task::{Context, Poll};
 use std::time::SystemTime;
@@ -13,6 +14,31 @@ use std::time::SystemTime;
 use alloy::rpc::json_rpc::{RequestPacket, ResponsePacket};
 use alloy::transports::{TransportError, TransportFut};
 use tower::{Layer, Service};
+
+/// Monitoring-only durable accounting hook, installed on service clients before use.
+#[async_trait::async_trait]
+pub trait RpcCallRecorder: std::fmt::Debug + Send + Sync {
+    /// Persist all methods in a transport packet (including retries and batch members).
+    /// Failure must not prevent the packet from being sent.
+    async fn record(
+        &self,
+        provider: &str,
+        chain: Option<u64>,
+        methods: &[&'static str],
+    ) -> Result<(), RpcAccountingError>;
+}
+
+/// A sanitized accounting failure; never contains a database URL or provider credential.
+#[derive(Debug, thiserror::Error)]
+#[error("RPC usage accounting unavailable")]
+pub struct RpcAccountingError;
+
+static ACCOUNTING_FAILURES: AtomicU64 = AtomicU64::new(0);
+
+/// Failed durable packet writes since process start. Calls still proceed on failure.
+pub fn rpc_accounting_failures() -> u64 {
+    ACCOUNTING_FAILURES.load(Ordering::Relaxed)
+}
 
 tokio::task_local! {
     static HTTP_STATUS: std::cell::Cell<Option<u16>>;
@@ -318,8 +344,22 @@ where
             record(&self.labels, method);
         }
         let labels = self.labels.clone();
+        let recorder = self.state.recorder.get().cloned();
         let future = self.inner.call(request);
         Box::pin(HTTP_STATUS.scope(std::cell::Cell::new(None), async move {
+            if let Some(recorder) = recorder {
+                // Monitoring is bounded independently of the RPC timeout and never admission.
+                if !matches!(
+                    tokio::time::timeout(
+                        std::time::Duration::from_secs(1),
+                        recorder.record(&labels.provider, labels.chain_id, &methods),
+                    )
+                    .await,
+                    Ok(Ok(()))
+                ) {
+                    ACCOUNTING_FAILURES.fetch_add(1, Ordering::Relaxed);
+                }
+            }
             let response = future.await;
             // Alloy prefers a decoded JSON-RPC error over an HTTP error. Retain the status
             // for the one standard retry layer, even when the error body is valid JSON-RPC.
@@ -358,6 +398,59 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug)]
+    struct FailedRecorder;
+
+    #[async_trait::async_trait]
+    impl RpcCallRecorder for FailedRecorder {
+        async fn record(
+            &self,
+            provider: &str,
+            chain: Option<u64>,
+            methods: &[&'static str],
+        ) -> Result<(), RpcAccountingError> {
+            assert_eq!(provider, "accounting-test");
+            assert_eq!(chain, Some(1));
+            assert_eq!(methods, &["eth_blockNumber"]);
+            Err(RpcAccountingError)
+        }
+    }
+
+    #[tokio::test]
+    async fn accounting_failure_does_not_prevent_transport() {
+        use axum::{Json, Router, routing::post};
+        use serde_json::{Value, json};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().route(
+                    "/",
+                    post(|Json(request): Json<Value>| async move {
+                        Json(json!({"jsonrpc":"2.0", "id":request["id"], "result":"0x2a"}))
+                    }),
+                ),
+            )
+            .await
+            .unwrap();
+        });
+        let client = super::super::EvmClient::new(&url)
+            .unwrap()
+            .with_provider("accounting-test")
+            .with_chain_id(1);
+        client.record_calls_with(Arc::new(FailedRecorder)).unwrap();
+        let before = rpc_accounting_failures();
+        assert_eq!(client.latest_head().await.unwrap(), 42);
+        assert!(rpc_accounting_failures() > before);
+        assert_eq!(
+            provider_call_counts("accounting-test")["eth_blockNumber"],
+            1
+        );
+        server.abort();
+        let _ = server.await;
+    }
 
     #[test]
     fn unknown_methods_share_one_label() {

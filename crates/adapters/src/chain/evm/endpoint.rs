@@ -9,6 +9,7 @@ use chrono::Utc;
 /// Health of one independently configured endpoint.
 #[derive(Debug, Default)]
 pub struct EndpointState {
+    pub(super) recorder: std::sync::OnceLock<Arc<dyn super::metrics::RpcCallRecorder>>,
     ready: AtomicBool,
     consecutive_failures: AtomicU32,
     contract_pending: AtomicBool,
