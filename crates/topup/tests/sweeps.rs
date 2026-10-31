@@ -26,7 +26,8 @@ use topup_adapters::chain::flush::{
 };
 use topup_core::address::forwarder_address;
 use topup_core::deposit::StepOutcome;
-use topup_core::route::RouteFile;
+use topup_core::money::AtomicAmount;
+use topup_core::route::{Bounded, RouteFile};
 use uuid::Uuid;
 
 use support::TestDatabase;
@@ -429,6 +430,8 @@ impl<'a> Chain<'a> {
         route.chain.contracts.forwarder_factory = factory;
         route.chain.contracts.implementation = implementation;
         route.asset.contract = token;
+        // These sweep tests need normal deposits rather than ignored sub-floor transfers.
+        route.merchant.min_deposit_atomic = Bounded::at(AtomicAmount::new(U256::from(AMOUNT)));
         let routes = chain_routes(&RouteSet::new(vec![route.clone()]).map_err(anyhow::Error::msg)?)
             .into_iter()
             .next()
