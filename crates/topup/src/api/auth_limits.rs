@@ -1,7 +1,7 @@
 //! Process-local authentication protection. Neither source addresses nor key hashes are logged.
 
 use std::collections::HashMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv6Addr};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -36,11 +36,23 @@ impl AuthLimits {
     }
 
     fn reserve_at(&self, source: IpAddr, now: Instant) -> Option<FailurePermit<'_>> {
+        let source = match source.to_canonical() {
+            IpAddr::V6(address) => {
+                IpAddr::V6(Ipv6Addr::from_bits(address.to_bits() & (u128::MAX << 64)))
+            }
+            source => source,
+        };
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if !state.sources.contains_key(&source) && state.sources.len() >= CAPACITY {
             state.sources.retain(|_, b| b.pending > 0 || b.next > now);
             if state.sources.len() >= CAPACITY {
-                return None;
+                // Tracking exhaustion must not let many attacker sources lock everyone out.
+                // An untracked source still passes through the bounded database auth gate.
+                return Some(FailurePermit {
+                    limits: self,
+                    source: None,
+                    failed: false,
+                });
             }
         }
         let previous = state.sources.get(&source);
@@ -55,7 +67,7 @@ impl AuthLimits {
         state.sources.insert(source, Bucket { next, pending });
         Some(FailurePermit {
             limits: self,
-            source,
+            source: Some(source),
             failed: false,
         })
     }
@@ -93,7 +105,7 @@ impl AuthLimits {
 /// A canceled request, database error or successful authentication automatically refunds its token.
 pub(super) struct FailurePermit<'a> {
     limits: &'a AuthLimits,
-    source: IpAddr,
+    source: Option<IpAddr>,
     failed: bool,
 }
 
@@ -105,13 +117,16 @@ impl FailurePermit<'_> {
 
 impl Drop for FailurePermit<'_> {
     fn drop(&mut self) {
+        let Some(source) = self.source else {
+            return;
+        };
         let now = Instant::now();
         let mut state = self
             .limits
             .state
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        if let Some(bucket) = state.sources.get_mut(&self.source) {
+        if let Some(bucket) = state.sources.get_mut(&source) {
             bucket.pending -= 1;
             if !self.failed {
                 bucket.next = bucket
@@ -120,7 +135,7 @@ impl Drop for FailurePermit<'_> {
                     .map_or(now, |next| next.max(now));
             }
             if bucket.pending == 0 && bucket.next <= now {
-                state.sources.remove(&self.source);
+                state.sources.remove(&source);
             }
         }
     }
@@ -185,7 +200,7 @@ mod tests {
     }
 
     #[test]
-    fn source_capacity_rejects_new_sources_without_evicting_active_buckets() {
+    fn source_capacity_allows_untracked_sources_and_preserves_existing_buckets() {
         let limits = AuthLimits::default();
         let now = Instant::now();
         for index in 0..CAPACITY {
@@ -196,12 +211,57 @@ mod tests {
         }
         assert_eq!(limits.state.lock().unwrap().sources.len(), CAPACITY);
         let extra = Ipv4Addr::BROADCAST.into();
-        assert!(limits.reserve_at(extra, now).is_none());
+        for _ in 0..40 {
+            limits.reserve_at(extra, now).unwrap().fail();
+        }
+        assert_eq!(limits.state.lock().unwrap().sources.len(), CAPACITY);
+        for _ in 1..20 {
+            limits
+                .reserve_at(Ipv4Addr::UNSPECIFIED.into(), now)
+                .unwrap()
+                .fail();
+        }
         assert!(
             limits
-                .reserve_at(extra, now + Duration::from_secs(60))
+                .reserve_at(Ipv4Addr::UNSPECIFIED.into(), now)
+                .is_none()
+        );
+        let later = now + Duration::from_secs(60);
+        for _ in 0..20 {
+            limits.reserve_at(extra, later).unwrap().fail();
+        }
+        assert!(limits.reserve_at(extra, later).is_none());
+        assert!(limits.state.lock().unwrap().sources.len() <= CAPACITY);
+    }
+
+    #[test]
+    fn ipv6_interface_addresses_share_a_64_bit_prefix_and_mapped_ipv4_uses_ipv4() {
+        let limits = AuthLimits::default();
+        let now = Instant::now();
+        for suffix in 1..=20 {
+            let source = format!("2001:db8:1234:5678::{suffix:x}").parse().unwrap();
+            limits.reserve_at(source, now).unwrap().fail();
+        }
+        assert!(
+            limits
+                .reserve_at("2001:db8:1234:5678:ffff::1".parse().unwrap(), now)
+                .is_none()
+        );
+        assert!(
+            limits
+                .reserve_at("2001:db8:1234:5679::1".parse().unwrap(), now)
                 .is_some()
         );
-        assert!(limits.state.lock().unwrap().sources.len() <= CAPACITY);
+        for _ in 0..20 {
+            limits
+                .reserve_at("192.0.2.1".parse().unwrap(), now)
+                .unwrap()
+                .fail();
+        }
+        assert!(
+            limits
+                .reserve_at("::ffff:192.0.2.1".parse().unwrap(), now)
+                .is_none()
+        );
     }
 }

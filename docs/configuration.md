@@ -38,8 +38,10 @@ rate_limit` with `Retry-After: 1`. Unknown key hashes have a 60-second negative 
 misses consume no database slot. Revoked and expired keys are not cached. Committed key
 creation, roll and recovery invalidate the matching entry, including a miss still in flight.
 Direct repository users must call `ApiRateLimiter::invalidate_api_key` after committed issuance.
-Each map has a hard 4,096-entry bound: new source buckets are refused when active entries fill
-the map, and a full unknown-key cache stops adding entries until expired ones can be pruned.
+Each map has a hard 4,096-entry bound. When active sources fill the map, untracked sources
+continue through the existing database auth gate; tracked sources retain their limits. A full
+unknown-key cache stops adding entries until expired ones can be pruned. IPv6 sources share
+one bucket per /64; IPv4-mapped IPv6 addresses use the corresponding IPv4 bucket.
 Addresses are held only in memory, never logged. The bucket uses `ConnectInfo`, including the
 PROXY v2 source; `X-Forwarded-For` and `X-Real-IP` cannot choose it. Requests without connection
 metadata share a fallback bucket. Anonymous `client_secret` reads retain their existing limits.

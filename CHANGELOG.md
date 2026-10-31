@@ -65,10 +65,11 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   immutable pricing mode remain conservatively counted.
 - API-key authentication caches unknown SHA-256 key hashes for 60 seconds and applies an
   in-memory, unlogged source-IP failed-auth token bucket (20-token burst, one token per three
-  seconds), before database admission. Both maps are capped at 4,096 entries. Successful
-  authentication, server errors and canceled requests refund provisional tokens; committed
-  key creation, roll and recovery invalidate the cache. PROXY v2 client addresses are respected;
-  forwarding HTTP headers are ignored.
+  seconds), before database admission. Both maps are capped at 4,096 entries; untracked sources
+  pass through the existing DB auth gate when source tracking is full. IPv6 sources share /64
+  buckets. Successful authentication, server errors and canceled requests refund provisional
+  tokens; committed key creation, roll and recovery invalidate the cache. PROXY v2 client
+  addresses are respected; forwarding HTTP headers are ignored.
 - Quote transaction hints allow at most three submissions per rolling 24 hours, with bounded
   object tracking. Reusable deposit-address hint limits remain three/minute and ten/day.
 
