@@ -1929,16 +1929,17 @@ See the [operator commands](../deploy/runbooks/README.md#manage-alerts).
 
 **Before volume grows:** the deposits scans for `first_unresolved_at` and `first_slow_at` currently
 have no timestamp indexes. Add suitable indexes for the stock and rolling-entry predicates and
-verify query plans against representative retained history before raising pilot volume. This
-change adds no index migration.
+verify query plans against representative retained history before raising pilot volume.
 
 HTTP percentages/percentiles below require an explicitly recorded observation
 interval and counter deltas from the same process; do not claim a continuous 30-day result from
 one snapshot. A restart ends that interval. Phala's pilot records manual external health checks;
 these do not establish continuous 30-day availability. Crons and issue history supply
 worker/incident evidence. The service does not automatically compute rolling RPC quota windows
-or 30-day SLOs. Provider dashboards (including shared Ankr usage), D/recovery, factory and Safe
-work tallies remain manual; rolling accounting needs a real time-series collector.
+or 30-day SLOs. Daily RPC and D monitoring uses persisted UTC-day tallies and service-generated
+alerts ([quota monitoring](../deploy/RPC.md#monitoring-and-stop-actions)); provider dashboards remain
+authoritative for billed usage and shared monthly totals. Recovery, factory and Safe work still
+need operator tallies; rolling accounting needs a real time-series collector.
 
 | Objective | Target and evidence | Operational response |
 |---|---|---|

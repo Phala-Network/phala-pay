@@ -925,7 +925,7 @@ inherited gateway/KMS, public flags, secure time, and legacy features; no curren
 requires different values ([inheritance details](../RESTORE.md#why-the-sealed-names-match-the-service)).
 Preflight checks the Docker compose; verification after boot checks the inherited app-compose.
 
-Use the live release's verified kit and `images.json` (v0.13.1 includes #568). Both the
+Use the live release's verified kit and `images.json` (currently v0.13.4). Both the
 `restore-check` process and the read-only API run RPC preflight in that release; allow for both
 probes on each boot as well as the reconciliation calls. A missing receipt/log sample in eight
 finalized blocks is a warning, while failed endpoint checks still leave that chain unavailable.

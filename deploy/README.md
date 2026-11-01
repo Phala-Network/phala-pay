@@ -642,7 +642,8 @@ per-IP limits, including for transaction-hash hints.
 **Upgrades and rollback.** Gateway `pp:true`, ingress ACCEPT/SEND, the 8082 target, and topup's
 private listener must stay aligned in one app-compose; verify health, attestation, and ingress
 evidence after every change. Product and template keep PROXY off; restore-check inherits the
-service's policy on its unbound 443. The [rollback floor](#rollback-compatibility) is v0.13.0.
+service's policy on its unbound 443. Follow the release's
+[rollback compatibility policy](#rollback-compatibility) before selecting a target.
 
 **HUMAN-ONLY, owner of the domain's DNS zone** (any DNS provider; the Deploy summary's
 wording assumes Cloudflare, as in Phala's instance), once per CVM instance. Every Deploy run
@@ -1112,13 +1113,19 @@ Ingress uses the supported dstack-ingress TCP settings `TIMEOUT_CONNECT=5s`,
 
 ## Rollback compatibility
 
-The rollback floor is **v0.13.0**. Its declared schema break forbids rollback to v0.12.x or older;
-going below it requires [restore and reconciliation](RESTORE.md), not a binary downgrade.
+The deployed v0.13.4 release retains **v0.13.0** as its binary rollback floor. The v0.13.0
+schema break forbids rollback to v0.12.x or older; going below it requires
+[restore and reconciliation](RESTORE.md), not a binary downgrade. Unreleased `main` has since
+raised the schema floor and declared restore-only recovery; follow its
+[`Breaking (operators)` entry](../CHANGELOG.md#unreleased) before the next upgrade. For each
+release, check that entry before choosing a target: the earlier binary floor does not authorize
+rollback across a later breaking migration.
 Use each target's retained verified kit, images, configuration, and RPC alert rules.
 The [client address passthrough requirements](#custom-domain) still apply.
 
-Migrations must be expand-only and preserve N-1 reads, writes, defaults and constraints. Under the
-migration advisory lock, protocol-aware binaries validate every newer applied migration against
+Migrations that retain binary rollback must be expand-only and preserve N-1 reads, writes,
+defaults and constraints. Under the migration advisory lock, protocol-aware binaries validate
+every newer applied migration against
 `public.topup_migration_compatibility`: the applied checksum must match its owner-written ledger
 entry, its compatibility floor must be no greater than the binary's maximum known migration,
 and it must have succeeded. Missing metadata, a higher floor or mismatched checksums fail closed.
@@ -1126,9 +1133,10 @@ SQLx continues checking all known migration checksums and dirty state. The appli
 write the ledger. A rollback never lowers existing floors or edits migration history.
 
 CI resolves the latest stable release other than the current Git ref as N-1 automatically.
-The v0.13.1 release rehearsed v0.13.0; a branch build currently selects v0.13.1.
-The deployment rollback target must also be a recorded prior production deployment at or above
-the v0.13.0 floor ([launch rollback](runbooks/production-launch.md#12-rollback)).
+Consult the run's job summary for the resolved N-1 and whether it ran the image smoke or used
+a restore-only declaration. The deployment rollback target must also be a recorded prior
+production deployment satisfying that release's floor
+([launch rollback](runbooks/production-launch.md#12-rollback)).
 For any N-1, an exact `no rollback to <N-1 version>; restore required` declaration in
 `### Breaking (operators)` under `## [Unreleased]` or the dated section matching the workspace
 version (including the release PR before tagging)

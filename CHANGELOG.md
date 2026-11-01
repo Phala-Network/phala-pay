@@ -69,6 +69,10 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   observation day remain for 30 days; block totals retain the financial-record policy.
   Balances, sweep selection and the daily route report include ignored amounts, so sweeping
   a forwarder's whole token balance never understates a later payment.
+- Refresh Phala's production status to v0.13.4, link its upgrade and automated restore drill,
+  and record the passed October 29 v0.13.2 production-backup drill. Align pilot RPC/refund caps,
+  distinguish pending quota monitoring from deployed behavior, and clarify rollback gates and
+  security-exception deadlines. Owner real-money acceptance remains pending.
 
 ## [0.13.4] - 2026-10-31
 
