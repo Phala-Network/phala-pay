@@ -14,6 +14,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+## [0.13.5] - 2026-11-01
+
 ### Breaking (operators)
 
 - **no rollback to 0.13.4; restore required**. Ignored-transfer accounting moves outside the
@@ -2606,7 +2608,8 @@ happens only from two-provider finalized data.
   events were held for up to an hour at a time. A notice's outcome now neither cools nor clears
   the endpoint.
 
-[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.13.4...HEAD
+[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.13.5...HEAD
+[0.13.5]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.5
 [0.13.4]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.4
 [0.13.3]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.3
 [0.13.2]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.2
