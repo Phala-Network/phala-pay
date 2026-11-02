@@ -23,7 +23,7 @@ RUN SQLX_OFFLINE=true SOURCE_COMMIT="$SOURCE_COMMIT" \
 # compose runs from this image as the `smokescreen` sidecar, so it is pinned and attested with
 # the service's digest (deploy/README.md, "Webhook egress"). Stripe publishes no image: this builds
 # tag v0.1.0's commit with pinned Logrus and x/net security updates and the local toolchain.
-FROM golang:1.27.3-trixie@sha256:fbb7ae40b62ff8afe31662df570d39b4f5052ac32b90dae8e60d7657a20a74f4 AS smokescreen
+FROM golang:1.27.3-trixie@sha256:c65ecfe613b539ac74c62a4c3b2c27e8f8a6076384c8f27e8a3c0f3be17cc385 AS smokescreen
 
 WORKDIR /src
 RUN git init -q . \
