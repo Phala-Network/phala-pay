@@ -137,6 +137,14 @@ with what was credited as `amount_credited`, beside the quoted `amount`.
 Checkout opens the QR code tab when no browser wallet is discovered; the Wallet tab remains
 available.
 
+While waiting, under the payment methods, the checkout says that a sent payment usually shows
+within a minute and not to pay again. Until the wallet tab sends a payment, it also offers "I've
+paid — check now" for a payment sent by address or QR code from another wallet or an exchange,
+which gives the page no transaction: it [requests a quote check](#requesting-a-quote-check) and
+says only "Checking for your payment…"; the status line still says whether the payment was found.
+The button waits 15 seconds after each click and stops after three received checks per quote, as
+the service does; a request that was not received does not count.
+
 ### Your own wallet connection
 
 By default the wallet tab lists the browser's wallets. If your page already connects one, pass its

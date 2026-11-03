@@ -19,11 +19,19 @@ function waiting(overrides: Partial<ClientQuote> = {}): ClientQuote {
   return quote({ address: ADDRESS, expires_at: Math.floor(Date.now() / 1000) + 900, ...overrides });
 }
 
-/** Serves `current()` as the quote's public view on every read. */
+/** Serves `current()` as the quote's public view on every read, and receives every hint and check. */
 async function serve(page: Page, current: () => ClientQuote | number) {
   await page.route(`${API_BASE}/v1/quotes/**`, async (route) => {
+    const headers = { "access-control-allow-origin": "*", "access-control-allow-headers": "Content-Type" };
+    if (route.request().method() === "OPTIONS") {
+      await route.fulfill({ status: 204, headers, body: "" });
+      return;
+    }
+    if (route.request().method() === "POST") {
+      await route.fulfill({ status: 202, headers, json: { status: "received" } });
+      return;
+    }
     const body = current();
-    const headers = { "access-control-allow-origin": "*" };
     await route.fulfill(typeof body === "number" ? { status: body, headers, json: {} } : { headers, json: body });
   });
 }
@@ -189,6 +197,10 @@ for (const width of [390, 1280]) {
       await check(page, `qr-${suffix}`);
       await page.getByRole("tab", { name: "Manual transfer" }).click();
       await check(page, `manual-${suffix}`);
+      await page.getByRole("button", { name: "I've paid — check now" }).click();
+      await expect(page.getByText("Checking for your payment…")).toBeVisible();
+      expect(await axeViolations(page), "checking").toEqual([]);
+      await check(page, `checking-${suffix}`);
 
       await page.getByRole("tab", { name: "Browser wallet" }).click();
       await page.getByRole("button", { name: "Pay with Test Wallet" }).click();
