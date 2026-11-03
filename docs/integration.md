@@ -1330,25 +1330,197 @@ is sent: a page shows the payment from the quote's `payment` or the deposit addr
 
 ### 2.7 Receipts
 
-Recommended if you already bill with Stripe, and not required: record each credited deposit in
-Stripe, so the customer gets the same invoice and receipt as for a card top-up.
+If you bill with Stripe, you can record a credited deposit as an invoice paid outside Stripe.
+The SDK provides pure parameter builders; install the official `stripe` library separately to
+make the calls. Python accepts the generated `Deposit` model; Node accepts the corresponding
+server SDK `Deposit` (or its `ReceiptDeposit` subset). All amounts use the deposit's own currency;
+there is no currency conversion.
 
-- On `deposit.credited`, after the credit commits, create an invoice for the customer with one
-  line of `amount` cents, finalize it, and mark it paid with
-  [`Invoice.pay(paid_out_of_band=True)`](https://docs.stripe.com/api/invoices/pay): no charge
-  is made. Make the line's price tax-inclusive
-  ([`tax_behavior: "inclusive"`](https://docs.stripe.com/tax/products-prices-tax-codes-tax-behavior)),
-  so the invoice total equals the credited amount.
-- Do it once per `dep_` id. Store the invoice id against the deposit right after creating it,
-  and resume from the stored id (finalize, then pay) instead of creating another. Stripe
-  idempotency keys alone are not enough: Stripe
-  [keeps them 24 hours](https://docs.stripe.com/api/idempotent_requests), and a retry can come
-  later.
-- When a deposit's `amount_refunded` or `amount_reversed` grows (§2.3), issue a
-  [credit note](https://docs.stripe.com/api/credit_notes/create) on that invoice with
-  `out_of_band_amount` for the growth, once per change.
-- Do this from a queue, not inside the webhook's `2xx` path: a Stripe outage must not hold a
-  credit (§2.3, obligation 3).
+| Python (`topup_sdk`) | Node (`@phala/pay-server/helpers`) | Stripe call |
+|---|---|---|
+| `stripe_receipt_invoice(deposit, *, customer, description=None)` | `stripeReceiptInvoice(deposit, { customer, description? })` | `Invoice.create` |
+| `stripe_receipt_invoice_item(deposit, *, invoice, customer)` | `stripeReceiptInvoiceItem(deposit, { invoice, customer })` | `InvoiceItem.create` |
+| `stripe_receipt_credit_note(deposit, *, invoice, previous_refunded, previous_reversed)` | `stripeReceiptCreditNote(deposit, { invoice, previousRefunded, previousReversed })` | `CreditNote.create`, or `None` / `null` when nothing grew |
+
+The invoice helper sets `collection_method="send_invoice"`, `days_until_due=0`, and
+`auto_advance=false`. Keep automatic advancement off when finalizing, then call
+[`pay(paid_out_of_band=true)`](https://docs.stripe.com/api/invoices/pay): this records the payment
+without charging a card. With automatic advancement off, Stripe disables automatic invoice
+emails and payment attempts; receipt email availability depends on your
+[Stripe settings](https://docs.stripe.com/invoicing/integration/automatic-advancement-collection).
+Before enabling receipts, confirm `days_until_due=0` with one Stripe test-mode
+create → finalize → pay run in your integration. Show the resulting `invoice_pdf` or
+`hosted_invoice_url` in your billing history after payment.
+A Phala Pay deposit does not itself have a hosted receipt URL.
+
+The line helper uses the documented
+[`amount`, `currency`, and `tax_behavior="inclusive"`](https://docs.stripe.com/api/invoiceitems/create)
+parameters directly, so no Stripe Product or Price is required. It disables discounts so a
+customer's inherited discount cannot reduce the receipt. Tax-inclusive behavior describes how
+to include tax in the amount; it does not enable Stripe Tax or choose a tax rate. Apply your
+usual tax policy, and verify the invoice total matches the credited amount before paying.
+
+Metadata records `phala_pay_deposit`, `phala_pay_quote` (omitted for a spot deposit), `chain_id`,
+`asset` (contract address when the asset code is absent), `tx_hash`, and `livemode` as strings.
+The invoice displays Network, Token, Transaction, and, when it fits, Explorer. The helper respects
+Stripe's [four-field, 40-character name, 140-character value limits](https://docs.stripe.com/api/invoices/create).
+The footer keeps the full explorer link even if it cannot fit in a field; an unknown chain shows
+the hash without inventing a URL. `transaction_url` / `address_url` (`topup_sdk`) and
+`transactionUrl` / `addressUrl` (`@phala/pay-server`, also `/helpers`) expose the same explorers as
+`@phala/pay`; unknown chains or malformed hashes/addresses return `None` / `undefined`.
+Transaction hashes must be `0x` plus 64 hexadecimal characters, addresses `0x` plus 40.
+The builders reject uncredited/unvalued deposits and metadata exceeding [Stripe's limits](https://docs.stripe.com/api/metadata).
+
+Run this from a queue **after the credit commits**, never in the webhook's `2xx` path. Serialize
+jobs per `dep_` id under your database's lock, and persist one invoice id per deposit immediately
+after creation. On retry retrieve that invoice, inspect its lines/status, and resume adding the
+line, finalizing, or paying. Do not create a second invoice for a stored id. Use a Stripe account
+and Customer matching the deposit's `livemode`; metadata does not select Stripe's mode.
+
+Python, using the official `stripe` library (`deposit` is a generated `Deposit`; `receipt` and
+`save_invoice_id` represent your durable per-deposit database record and update):
+
+```python
+import os
+
+import stripe
+from topup_sdk import stripe_receipt_invoice, stripe_receipt_invoice_item
+
+stripe.api_key = os.environ["STRIPE_SECRET_KEY"]
+# Inside a worker holding the per-deposit lock. customer is your Stripe Customer id.
+invoice_id = receipt.invoice_id
+if invoice_id is None:
+    invoice = stripe.Invoice.create(
+        **stripe_receipt_invoice(deposit, customer=customer),
+        idempotency_key=f"{deposit.id}:receipt:create",
+    )
+    invoice_id = invoice.id
+    save_invoice_id(deposit.id, invoice_id)  # durable commit before proceeding
+invoice = stripe.Invoice.retrieve(invoice_id)
+if invoice.status == "draft":
+    if not invoice.lines.data:
+        stripe.InvoiceItem.create(
+            **stripe_receipt_invoice_item(deposit, invoice=invoice_id, customer=customer),
+            idempotency_key=f"{deposit.id}:receipt:item",
+        )
+    invoice = stripe.Invoice.retrieve(invoice_id)
+    if (invoice.lines.has_more or len(invoice.lines.data) != 1
+            or invoice.lines.data[0].metadata.get("phala_pay_deposit") != deposit.id):
+        raise ValueError("Receipt invoice has unexpected lines; reconcile before retrying")
+    invoice = stripe.Invoice.finalize_invoice(invoice_id, auto_advance=False)
+if (invoice.currency != deposit.currency or invoice.total != deposit.amount
+        or invoice.amount_due != deposit.amount):
+    raise ValueError("Receipt total/amount due differs from credit; reconcile before retrying")
+if invoice.status == "open":
+    if invoice.amount_remaining != deposit.amount:
+        raise ValueError("Customer balance changed amount due; reconcile before retrying")
+    invoice = stripe.Invoice.pay(
+        invoice_id, paid_out_of_band=True, idempotency_key=f"{deposit.id}:receipt:pay"
+    )
+if invoice.status != "paid":
+    raise ValueError("Receipt invoice needs reconciliation")
+# Persist invoice.invoice_pdf / invoice.hosted_invoice_url for billing history.
+```
+
+Node, using the official `stripe` library (the same durable record and per-deposit lock):
+
+```ts
+import Stripe from "stripe";
+import { stripeReceiptInvoice, stripeReceiptInvoiceItem } from "@phala/pay-server/helpers";
+
+const stripeKey = process.env.STRIPE_SECRET_KEY;
+if (!stripeKey) throw new Error("STRIPE_SECRET_KEY is required");
+const stripe = new Stripe(stripeKey);
+let invoiceId = receipt.invoiceId;
+if (!invoiceId) {
+  const created = await stripe.invoices.create(
+    stripeReceiptInvoice(deposit, { customer }),
+    { idempotencyKey: `${deposit.id}:receipt:create` },
+  );
+  invoiceId = created.id;
+  await saveInvoiceId(deposit.id, invoiceId); // durable commit before proceeding
+}
+let invoice = await stripe.invoices.retrieve(invoiceId);
+if (invoice.status === "draft") {
+  if (invoice.lines.data.length === 0) {
+    await stripe.invoiceItems.create(
+      stripeReceiptInvoiceItem(deposit, { invoice: invoiceId, customer }),
+      { idempotencyKey: `${deposit.id}:receipt:item` },
+    );
+  }
+  invoice = await stripe.invoices.retrieve(invoiceId);
+  if (invoice.lines.has_more || invoice.lines.data.length !== 1 ||
+      invoice.lines.data[0]?.metadata.phala_pay_deposit !== deposit.id) {
+    throw new Error("Receipt invoice has unexpected lines; reconcile before retrying");
+  }
+  invoice = await stripe.invoices.finalizeInvoice(invoiceId, { auto_advance: false });
+}
+if (invoice.currency !== deposit.currency || invoice.total !== deposit.amount ||
+    invoice.amount_due !== deposit.amount) {
+  throw new Error("Receipt total/amount due differs from credit; reconcile before retrying");
+}
+if (invoice.status === "open") {
+  if (invoice.amount_remaining !== deposit.amount) {
+    throw new Error("Customer balance changed amount due; reconcile before retrying");
+  }
+  invoice = await stripe.invoices.pay(invoiceId, { paid_out_of_band: true },
+    { idempotencyKey: `${deposit.id}:receipt:pay` });
+}
+if (invoice.status !== "paid") throw new Error("Receipt invoice needs reconciliation");
+// Persist invoice.invoice_pdf / invoice.hosted_invoice_url for billing history.
+```
+
+Customer balance adjustments, extra lines, exclusive taxes, or manual invoice edits can change
+the amount due. Reconcile those cases rather than marking a mismatched invoice paid. Stripe
+[retains idempotency keys for at least 24 hours](https://docs.stripe.com/api/idempotent_requests).
+After a lost create response, reconcile the invoice by customer and `phala_pay_deposit` metadata
+before retrying beyond that window; never blindly create another. For an uncertain invoice-item
+response, retrieve the stored invoice's lines as above before retrying.
+
+When `amount_refunded` or `amount_reversed` grows (§2.3), first finish paying the original receipt,
+then issue a [credit note](https://docs.stripe.com/api/credit_notes/create) with `amount` and
+`out_of_band_amount` equal to only the new growth. These record a credit outside Stripe; they
+neither refund a card nor add customer balance credit. Pass the cumulative amounts **already
+successfully recorded in Stripe**, initially zero. Stripe emails the customer by default:
+[`CreditNote.create` defaults `email_type` to `credit_note`](https://docs.stripe.com/api/credit_notes/create).
+The helpers preserve that default. To opt out, pass `email_type="none"` in Python or
+`email_type: "none"` in Node as shown below:
+
+```python
+from topup_sdk import stripe_receipt_credit_note
+
+params = stripe_receipt_credit_note(
+    deposit, invoice=receipt.invoice_id,
+    previous_refunded=receipt.amount_refunded, previous_reversed=receipt.amount_reversed,
+)
+if params is not None:
+    stripe.CreditNote.create(
+        **params, email_type="none", idempotency_key=receipt.adjustment_key
+    )
+    # Commit the new componentwise maximum totals and the credit note id together.
+```
+
+```ts
+import { stripeReceiptCreditNote } from "@phala/pay-server/helpers";
+
+const params = stripeReceiptCreditNote(deposit, {
+  invoice: receipt.invoiceId, previousRefunded: receipt.amountRefunded,
+  previousReversed: receipt.amountReversed,
+});
+if (params) {
+  await stripe.creditNotes.create({ ...params, email_type: "none" },
+    { idempotencyKey: receipt.adjustmentKey });
+  // Commit the new componentwise maximum totals and the credit note id together.
+}
+```
+
+Persist an adjustment key and freeze its target totals before the request; reuse that key and
+payload on retry, even if newer deposit snapshots arrive. Never lower stored totals on stale
+events. If a credit-note response is lost, reconcile the invoice's credit notes and their
+`amount_refunded` / `amount_reversed` metadata before retrying beyond Stripe's retention window.
+Keep Stripe errors in the queue's retry/reconciliation path; they must not delay the customer's
+credit. The helpers only build parameters: durable storage, job locking, tax configuration and
+Stripe calls belong to your application.
 
 ## 3. Refunds
 

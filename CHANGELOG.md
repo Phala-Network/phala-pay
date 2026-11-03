@@ -14,6 +14,22 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### JS SDK (`@phala/pay-server`)
+
+- Add pure typed `stripeReceiptInvoice`, `stripeReceiptInvoiceItem` and
+  `stripeReceiptCreditNote` parameter builders under `/helpers` for out-of-band paid receipts,
+  visible transaction references and refund/reversal growth. No Stripe dependency.
+- Export `transactionUrl` and `addressUrl` from the server package and `/helpers`, matching
+  the browser SDK's explorers, and reject malformed hashes/addresses. Document queue processing
+  and resumable Stripe receipt flows.
+
+### Python SDK (`phala-pay`)
+
+- Add `topup_sdk.transaction_url` and `address_url` (unknown chains or malformed inputs return
+  `None`), and typed `stripe_receipt_invoice`, `stripe_receipt_invoice_item` and
+  `stripe_receipt_credit_note`
+  parameter builders for Stripe receipts and cumulative adjustments, without a Stripe dependency.
+
 ## [0.13.5] - 2026-11-01
 
 ### Breaking (operators)

@@ -1,0 +1,6 @@
+[
+  {"chain_id": 1, "name": "Ethereum", "explorer": "https://etherscan.io"},
+  {"chain_id": 11155111, "name": "Sepolia", "explorer": "https://sepolia.etherscan.io"},
+  {"chain_id": 8453, "name": "Base", "explorer": "https://basescan.org"},
+  {"chain_id": 84532, "name": "Base Sepolia", "explorer": "https://sepolia.basescan.org"}
+]

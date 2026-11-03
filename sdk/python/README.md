@@ -13,6 +13,17 @@ uv add phala-pay        # or: pip install phala-pay
 `phala-pay` shares the service's version: pin the one equal to your operator's service version
 ([compatibility](../../docs/integration.md#compatibility)). `phala-pay[eoa]` adds the signer an EOA treasury's proof needs (`pay.treasuries.set_eoa`).
 
+## Receipt helpers
+
+`topup_sdk` exports `transaction_url(chain_id, tx_hash)` and `address_url(chain_id, address)`
+(`None` for unknown chains or malformed hashes/addresses), plus `stripe_receipt_invoice`,
+`stripe_receipt_invoice_item`, and
+`stripe_receipt_credit_note`. These typed pure functions build Stripe parameters for a credited
+`Deposit`, including the transaction hash, explorer link and live/test metadata, without a
+Stripe dependency. Amounts always use the deposit currency. Credit notes cover refund/reversal
+growth only. See [the receipt flow and examples](../../docs/integration.md#27-receipts) for
+queue processing, durable resume, tax policy and official `stripe` library calls.
+
 ## Quickstart
 
 The operator creates your account and hands your contact its first secret key, `ppay_sk_test_…`;
