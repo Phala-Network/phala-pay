@@ -31,13 +31,45 @@ def deposit(**changes: Any) -> Deposit:
 def test_explorer_parity() -> None:
     # The JS-server test also checks this fixture against the browser's viem registry.
     networks = json.loads((ROOT / "sdk/fixtures/explorers.json").read_text())
+    tx_hash = "0x" + "aB" * 32
+    address = "0x" + "aB" * 20
     for network in networks:
         chain_id = network["chain_id"]
-        assert transaction_url(chain_id, "0xabc") == f"{network['explorer']}/tx/0xabc"
-        assert address_url(chain_id, "0x123") == f"{network['explorer']}/address/0x123"
+        assert transaction_url(chain_id, tx_hash) == f"{network['explorer']}/tx/{tx_hash}"
+        assert address_url(chain_id, address) == f"{network['explorer']}/address/{address}"
         assert network_name(chain_id) == network["name"]
-    assert transaction_url(999, "0xabc") is None
-    assert address_url(999, "0x123") is None
+    assert transaction_url(999, tx_hash) is None
+    assert address_url(999, address) is None
+
+
+def test_explorer_rejects_malformed_transaction_hash() -> None:
+    valid = "0x" + "aB" * 32
+    for value in (
+        "",
+        "0xabc",
+        valid[:-1],
+        valid + "a",
+        valid + "\n",
+        "0x" + "g" * 64,
+        valid + "/../other",
+        "0X" + "a" * 64,
+    ):
+        assert transaction_url(8453, value) is None
+
+
+def test_explorer_rejects_malformed_address() -> None:
+    valid = "0x" + "aB" * 20
+    for value in (
+        "",
+        "0x123",
+        valid[:-1],
+        valid + "a",
+        valid + "\n",
+        "0x" + "g" * 40,
+        valid + "?url=https://example.com",
+        "0X" + "a" * 40,
+    ):
+        assert address_url(8453, value) is None
 
 
 @pytest.mark.parametrize("livemode", [True, False])
@@ -92,7 +124,8 @@ def test_spot_unknown_chain_and_expanded_quote() -> None:
 def test_stripe_custom_field_limits_keep_full_reference() -> None:
     dep = deposit(asset="a" * 200, tx_hash="0x" + "b" * 200)
     invoice = stripe_receipt_invoice(dep, customer="cus_123")
-    assert len(invoice["custom_fields"]) == 3  # Explorer URL cannot fit; footer retains it.
+    # Malformed hash has no explorer URL; footer retains the hash.
+    assert len(invoice["custom_fields"]) == 3
     for field in invoice["custom_fields"]:
         assert len(field["name"]) <= 40
         assert len(field["value"]) <= 140

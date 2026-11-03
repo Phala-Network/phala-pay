@@ -1348,7 +1348,9 @@ The invoice helper sets `collection_method="send_invoice"`, `days_until_due=0`, 
 without charging a card. With automatic advancement off, Stripe disables automatic invoice
 emails and payment attempts; receipt email availability depends on your
 [Stripe settings](https://docs.stripe.com/invoicing/integration/automatic-advancement-collection).
-Show the resulting `invoice_pdf` or `hosted_invoice_url` in your billing history after payment.
+Before enabling receipts, confirm `days_until_due=0` with one Stripe test-mode
+create → finalize → pay run in your integration. Show the resulting `invoice_pdf` or
+`hosted_invoice_url` in your billing history after payment.
 A Phala Pay deposit does not itself have a hosted receipt URL.
 
 The line helper uses the documented
@@ -1365,8 +1367,9 @@ Stripe's [four-field, 40-character name, 140-character value limits](https://doc
 The footer keeps the full explorer link even if it cannot fit in a field; an unknown chain shows
 the hash without inventing a URL. `transaction_url` / `address_url` (`topup_sdk`) and
 `transactionUrl` / `addressUrl` (`@phala/pay-server`, also `/helpers`) expose the same explorers as
-`@phala/pay`; unknown chains return `None` / `undefined`. The builders reject uncredited/unvalued
-deposits and metadata exceeding [Stripe's limits](https://docs.stripe.com/api/metadata).
+`@phala/pay`; unknown chains or malformed hashes/addresses return `None` / `undefined`.
+Transaction hashes must be `0x` plus 64 hexadecimal characters, addresses `0x` plus 40.
+The builders reject uncredited/unvalued deposits and metadata exceeding [Stripe's limits](https://docs.stripe.com/api/metadata).
 
 Run this from a queue **after the credit commits**, never in the webhook's `2xx` path. Serialize
 jobs per `dep_` id under your database's lock, and persist one invoice id per deposit immediately
@@ -1478,7 +1481,10 @@ When `amount_refunded` or `amount_reversed` grows (§2.3), first finish paying t
 then issue a [credit note](https://docs.stripe.com/api/credit_notes/create) with `amount` and
 `out_of_band_amount` equal to only the new growth. These record a credit outside Stripe; they
 neither refund a card nor add customer balance credit. Pass the cumulative amounts **already
-successfully recorded in Stripe**, initially zero:
+successfully recorded in Stripe**, initially zero. Stripe emails the customer by default:
+[`CreditNote.create` defaults `email_type` to `credit_note`](https://docs.stripe.com/api/credit_notes/create).
+The helpers preserve that default. To opt out, pass `email_type="none"` in Python or
+`email_type: "none"` in Node as shown below:
 
 ```python
 from topup_sdk import stripe_receipt_credit_note
@@ -1488,7 +1494,9 @@ params = stripe_receipt_credit_note(
     previous_refunded=receipt.amount_refunded, previous_reversed=receipt.amount_reversed,
 )
 if params is not None:
-    stripe.CreditNote.create(**params, idempotency_key=receipt.adjustment_key)
+    stripe.CreditNote.create(
+        **params, email_type="none", idempotency_key=receipt.adjustment_key
+    )
     # Commit the new componentwise maximum totals and the credit note id together.
 ```
 
@@ -1500,7 +1508,8 @@ const params = stripeReceiptCreditNote(deposit, {
   previousReversed: receipt.amountReversed,
 });
 if (params) {
-  await stripe.creditNotes.create(params, { idempotencyKey: receipt.adjustmentKey });
+  await stripe.creditNotes.create({ ...params, email_type: "none" },
+    { idempotencyKey: receipt.adjustmentKey });
   // Commit the new componentwise maximum totals and the credit note id together.
 }
 ```

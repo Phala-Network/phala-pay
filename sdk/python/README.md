@@ -16,7 +16,8 @@ uv add phala-pay        # or: pip install phala-pay
 ## Receipt helpers
 
 `topup_sdk` exports `transaction_url(chain_id, tx_hash)` and `address_url(chain_id, address)`
-(`None` for unknown chains), plus `stripe_receipt_invoice`, `stripe_receipt_invoice_item`, and
+(`None` for unknown chains or malformed hashes/addresses), plus `stripe_receipt_invoice`,
+`stripe_receipt_invoice_item`, and
 `stripe_receipt_credit_note`. These typed pure functions build Stripe parameters for a credited
 `Deposit`, including the transaction hash, explorer link and live/test metadata, without a
 Stripe dependency. Amounts always use the deposit currency. Credit notes cover refund/reversal

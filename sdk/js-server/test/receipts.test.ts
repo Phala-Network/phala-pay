@@ -23,15 +23,31 @@ const creditOptions = { invoice: "in_123", previousRefunded: 0, previousReversed
 describe("Stripe receipts", () => {
   it("matches the browser viem explorer registry and the Python shared fixture", () => {
     const networks = fixture<{ chain_id: number; name: string; explorer: string }[]>("explorers.json");
+    const txHash = `0x${"aB".repeat(32)}`;
+    const address = `0x${"aB".repeat(20)}`;
     for (const { chain_id: id, name, explorer } of networks) {
       expect(browserNetworkName(id)).toBe(name);
-      expect(transactionUrl(id, "0xabc")).toBe(`${explorer}/tx/0xabc`);
-      expect(addressUrl(id, "0x123")).toBe(`${explorer}/address/0x123`);
-      expect(transactionUrl(id, "0xabc")).toBe(browserTransactionUrl(id, "0xabc"));
-      expect(addressUrl(id, "0x123")).toBe(browserAddressUrl(id, "0x123"));
+      expect(transactionUrl(id, txHash)).toBe(`${explorer}/tx/${txHash}`);
+      expect(addressUrl(id, address)).toBe(`${explorer}/address/${address}`);
+      expect(transactionUrl(id, txHash)).toBe(browserTransactionUrl(id, txHash));
+      expect(addressUrl(id, address)).toBe(browserAddressUrl(id, address));
     }
-    expect(transactionUrl(999, "0xabc")).toBeUndefined();
-    expect(addressUrl(999, "0x123")).toBeUndefined();
+    expect(transactionUrl(999, txHash)).toBeUndefined();
+    expect(addressUrl(999, address)).toBeUndefined();
+  });
+  it("rejects malformed transaction hashes", () => {
+    const valid = `0x${"aB".repeat(32)}`;
+    for (const value of ["", "0xabc", valid.slice(0, -1), `${valid}a`, `${valid}\n`,
+      `0x${"g".repeat(64)}`, `${valid}/../other`, `0X${"a".repeat(64)}`]) {
+      expect(transactionUrl(8453, value)).toBeUndefined();
+    }
+  });
+  it("rejects malformed addresses", () => {
+    const valid = `0x${"aB".repeat(20)}`;
+    for (const value of ["", "0x123", valid.slice(0, -1), `${valid}a`, `${valid}\n`,
+      `0x${"g".repeat(40)}`, `${valid}?url=https://example.com`, `0X${"a".repeat(40)}`]) {
+      expect(addressUrl(8453, value)).toBeUndefined();
+    }
   });
   it.each([true, false])("preserves the amount, transaction and mode (%s) without charging", (livemode) => {
     const dep = deposit({ livemode });

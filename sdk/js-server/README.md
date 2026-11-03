@@ -237,4 +237,4 @@ invoice per deposit; see [the receipt flow and examples](../../docs/integration.
 
 `transactionUrl(chainId, txHash)` and `addressUrl(chainId, address)` are available from both
 `@phala/pay-server` and `/helpers`, with the same explorers as `@phala/pay`; they return
-`undefined` for an unknown chain.
+`undefined` for an unknown chain or malformed hash/address.
