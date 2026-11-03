@@ -106,7 +106,6 @@ export type QuoteListParams = NonNullable<operations["list_quotes"]["parameters"
 export type QuoteCreateParams = operations["create_quote"]["requestBody"]["content"]["application/json"];
 export type QuoteRetrieveParams = NonNullable<operations["get_quote"]["parameters"]["query"]>;
 export type QuoteUpdateParams = operations["update_quote"]["requestBody"]["content"]["application/json"];
-export type QuoteCheckParams = NonNullable<operations["check_quote"]["parameters"]["query"]>;
 export type QuoteSubmitTransactionParams = operations["submit_quote_transaction"]["requestBody"]["content"]["application/json"];
 export type RefundListParams = NonNullable<operations["list_refunds"]["parameters"]["query"]>;
 export type RefundCreateParams = operations["create_refund"]["requestBody"]["content"]["application/json"];

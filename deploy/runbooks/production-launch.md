@@ -387,8 +387,8 @@ Never register extra free accounts to stack quotas. The two BlockPI chain keys s
    Store these values in the owner's secret store. §4 seals them with the complete production
    secret set. Production-attested comments are updated before first provisioning; later
    configuration changes require a reviewed upgrade.
-3. Accept the [provider-account budget](../RPC.md#worst-case-pilot-budget): 22,410 shared Ankr
-   calls/day, 425,857 staging-only Infura credits/day and 599,949 production-only BlockPI RU/day.
+3. Accept the [provider-account budget](../RPC.md#worst-case-pilot-budget): 22,498 shared Ankr
+   calls/day, 425,857 staging-only Infura credits/day and 506,317 production-only BlockPI RU/day.
    Compare both environments' counters with the dashboards. Coordinate any Ankr key rotation
    across both environments. No staging re-seal or upgrade is required by this allocation.
 

@@ -223,7 +223,7 @@ tests, factory/Safe proofs or recovery load until the remaining allocation is un
 the stop line, pause new quotes on affected chains using the existing route-pause procedure;
 continue handling received funds. Do not reset tallies, add accounts, or speed up polling.
 Ankr's production/staging allocations are 20,266/4,734 calls; the combined account has 25,000.
-The local warning boundaries are 16,354/3,647. The dashboard remains authoritative for combined
+The local warning boundaries are 16,213/3,788. The dashboard remains authoritative for combined
 monthly billing and surcharges. See the [budget model](../RPC.md#worst-case-pilot-budget).
 
 `TopupDepositDailyLimit` warns at D (production 152, staging 10). Count newly observed deposit
