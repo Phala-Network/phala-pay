@@ -121,6 +121,15 @@ a.pp-tx__hash { color: inherit; text-decoration: underline; text-underline-offse
    narrow phone), the name goes under the label (the button wraps) rather than either breaking. */
 .pp-button > span { white-space: nowrap; }
 
+/* A quiet button, in a field's edge, for an action beside the primary one. */
+.pp-button--secondary { border-color: var(--pp-color-input); background: none; color: var(--pp-color-text); }
+.pp-button--secondary:hover:not(:disabled) { border-color: var(--pp-color-text-muted); background: var(--pp-color-surface); }
+
+/* While waiting: not to pay again, and a way to have a payment sent elsewhere looked for now. */
+.pp-check { margin-top: 1em; }
+.pp-check__notice { margin: 0 0 0.75em; color: var(--pp-color-text-muted); }
+.pp-check__notice:last-child { margin-bottom: 0; }
+
 .pp-message { margin: 0.5em 0 0; color: var(--pp-color-text-muted); }
 /* An empty live region stays in place, without space, so that what fills it is announced. */
 .pp-message:empty { margin: 0; }

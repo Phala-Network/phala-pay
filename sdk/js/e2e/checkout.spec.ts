@@ -2,10 +2,12 @@ import { expect, test, type Page } from "@playwright/test";
 import jsqr from "jsqr";
 import {
   createPublicClient,
+  createTestClient,
   erc20Abi,
   getAddress,
   http,
   parseEther,
+  walletActions,
   type Address,
 } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
@@ -76,9 +78,10 @@ function newQuote(overrides: Partial<ClientQuote> = {}): { quote: ClientQuote; s
  * Serves the quote's public view the way the service does: 404 without the client secret, and the
  * payment status read from the chain (`seen` on the first read after the transfer, then `credited`).
  */
-async function serveQuote(page: Page, quote: ClientQuote, secret: string) {
+async function serveQuote(page: Page, quote: ClientQuote, secret: string, { foundOnCheck = false } = {}) {
   const requests: { method: string; headers: string[]; path: string; body: string | null }[] = [];
   let reads = 0;
+  let checked = false;
   await page.route(`${API_BASE}/v1/quotes/**`, async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -99,6 +102,11 @@ async function serveQuote(page: Page, quote: ClientQuote, secret: string) {
       await route.fulfill({ status: 202, headers: cors, json: { object: "transaction_submission", transaction_hash: hash, status: "received" } });
       return;
     }
+    if (url.pathname === `/v1/quotes/${quote.id}/check` && request.method() === "POST") {
+      checked = url.searchParams.get("client_secret") === secret;
+      await route.fulfill({ status: 202, headers: cors, json: { object: "quote_check", status: "received" } });
+      return;
+    }
     if (url.pathname !== `/v1/quotes/${quote.id}` || url.searchParams.get("client_secret") !== secret) {
       await route.fulfill({ status: 404, headers: cors, json: { error: { type: "invalid_request_error", code: "resource_missing" } } });
       return;
@@ -109,7 +117,7 @@ async function serveQuote(page: Page, quote: ClientQuote, secret: string) {
       functionName: "balanceOf",
       args: [quote.address as Address],
     });
-    const paid = balance === BigInt(quote.amount_atomic);
+    const paid = balance === BigInt(quote.amount_atomic) && (checked || !foundOnCheck);
     const body: ClientQuote = !paid
       ? quote
       : reads++ === 0
@@ -275,6 +283,42 @@ test("pays with the page's own viem wallet client instead of discovered wallets"
   const calls = await page.evaluate(() => window.walletCalls);
   expect(calls).not.toContain("eth_requestAccounts");
   expect(calls).toContain("wallet_switchEthereumChain");
+});
+
+test("checks for a payment sent from another wallet when the payer asks, then follows it", async ({ page }) => {
+  const { quote, secret } = newQuote();
+  // As the service's scanner: the transfer is found only once the payer asks for a check.
+  const requests = await serveQuote(page, quote, secret, { foundOnCheck: true });
+  const anvil = createTestClient({ mode: "anvil", chain: sepolia, transport: http(env("ANVIL_URL")) }).extend(walletActions);
+
+  await page.goto(`/?client_secret=${secret}&expected_address=${quote.address}&api_base=${API_BASE}`);
+  await expect(page.getByRole("status")).toHaveText("Waiting for your payment");
+  await expect(page.getByText("A sent payment usually shows here within a minute. Do not pay again.")).toBeVisible();
+
+  // Paid outside the checkout, as from an exchange to the address the manual tab shows.
+  const hash = await anvil.writeContract({
+    account: getAddress(env("PAYER_ADDRESS")),
+    chain: sepolia,
+    address: getAddress(env("TOKEN_ADDRESS")),
+    abi: erc20Abi,
+    functionName: "transfer",
+    args: [quote.address as Address, BigInt(quote.amount_atomic)],
+  });
+  await chain().waitForTransactionReceipt({ hash });
+  // Read after the transfer is in a block, and still not found.
+  const reads = () => requests.filter((r) => r.path === `/v1/quotes/${quote.id}`).length;
+  const before = reads();
+  await expect.poll(reads).toBeGreaterThan(before + 1);
+  await expect(page.getByRole("status")).toHaveText("Waiting for your payment");
+
+  // The next read finds it, and the checkout follows it in place of the button (appearance.spec.ts
+  // shows the "Checking for your payment…" state, which lasts until then).
+  await page.getByRole("button", { name: "I've paid — check now" }).click();
+  await expect(page.getByRole("status")).toHaveText("Payment credited");
+  await expect(page.getByTestId("events")).toHaveText("success");
+  const checks = requests.filter((r) => r.path === `/v1/quotes/${quote.id}/check`);
+  // A simple request (no preflight), authenticated by the client secret alone.
+  expect(checks.map((r) => [r.method, r.body])).toEqual([["POST", null]]);
 });
 
 test("shows the payment request as a scannable EIP-681 QR code", async ({ page }) => {

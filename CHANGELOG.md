@@ -43,6 +43,17 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   the browser SDK's explorers, and reject malformed hashes/addresses. Document queue processing
   and resumable Stripe receipt flows.
 
+### JS SDK (`@phala/pay-react`)
+
+- `<Checkout>` (and `<PaymentElement>`'s checkout) offers, while a quote is waiting for payment
+  and no wallet-tab payment was sent, an "I've paid — check now" button for a payment sent by
+  address or QR code from another wallet or an exchange. It requests a quote check
+  (`checkQuote`, `POST /v1/quotes/{id}/check`), says only "Checking for your payment…", and
+  waits 15 seconds between checks and stops after three per quote, as the service does; a
+  request that was not received does not count. The status line still follows the quote. The
+  waiting checkout also says that a sent payment usually shows within a minute and not to pay
+  again. No new props.
+
 ### Python SDK (`phala-pay`)
 
 - Add `topup_sdk.transaction_url` and `address_url` (unknown chains or malformed inputs return

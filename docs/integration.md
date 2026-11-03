@@ -456,7 +456,10 @@ and does not pay twice.
 the wallet tab sent, `null` before then. Hide your own "new payment" or amount controls while a
 payment is sent (`txHash` set) and the status is not final, or the status is `seen` or
 `confirming`, so that a waiting payer does not start a second payment. The checkout and
-`<PaymentElement>` do the same for their own controls. While waiting, tell the payer that the payment is credited in about the
+`<PaymentElement>` do the same for their own controls. While waiting, the checkout also says
+that a sent payment usually shows within a minute and not to pay again and, until its wallet tab
+sends a payment, offers "I've paid — check now" for a payment sent by address or QR code (an
+[on-demand quote check](#on-demand-quote-checks)). While waiting, tell the payer that the payment is credited in about the
 quote's `typical_credit_seconds` (30 seconds on Ethereum, about 7 seconds on Base, about 5 minutes
 under a `safe` policy, 15 minutes at `finalized`), that they can close the page, and that the credit arrives
 automatically. `onSuccess(quote)` is called once credited; `quote.amount_credited` is what was
@@ -991,7 +994,8 @@ settings = pay.payment_settings.update(chains=[
 
 `@phala/pay` submits a hint automatically when `payWithWallet` returns the broadcast hash for
 a quote retrieved by its client. `<Checkout>` needs no integration change. The hint starts
-receipt polling immediately; manual transfers still use the normal scanner.
+receipt polling immediately; manual transfers still use the normal scanner, or an
+[on-demand quote check](#on-demand-quote-checks) that `<Checkout>` requests when the payer asks.
 
 For a custom wallet flow, submit the returned hash yourself:
 
@@ -2122,3 +2126,9 @@ Use `pay.checkQuote(clientSecret)` (or exported `checkQuote` with API origin and
 browser, `pay.quotes.check(quoteId)` in Node, or `pay.quotes.check(quote_id)` in Python. The lower
 level Python `TopupClient.check_quote(quote_id)` is also available. Treat acknowledgement as a
 request receipt and keep the existing status polling/webhook path.
+
+`<Checkout>` (and `<PaymentElement>`'s checkout) needs no integration change: while the quote is
+waiting and its wallet tab has sent nothing, its "I've paid — check now" button requests a check,
+says only "Checking for your payment…", and stays disabled for 15 seconds after each click and
+after three received checks per quote, as the service admits them. A request that was not
+received does not count. The status line still follows the quote.

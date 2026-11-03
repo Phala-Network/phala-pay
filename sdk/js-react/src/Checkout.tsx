@@ -14,7 +14,7 @@ import {
 } from "@phala/pay";
 import { quoteTransfer } from "@phala/pay";
 import type { ClientQuote } from "@phala/pay";
-import { WalletError, payWithWallet, type EthereumProvider } from "@phala/pay";
+import { WalletError, checkQuote, payWithWallet, type EthereumProvider } from "@phala/pay";
 import { rootProps, type Appearance } from "./appearance.js";
 import { AssetIcon, NetworkIcon } from "./Icons.js";
 import { CopyButton, Field } from "./Field.js";
@@ -199,7 +199,71 @@ export function CheckoutContent({
           onWalletError={onWalletError}
         />
       )}
+      {status === "waiting" && quote !== null && (
+        // Per quote: a new quote starts with no checks.
+        <PaymentCheck key={clientSecret} clientSecret={clientSecret} apiBase={apiBase} sent={txHash !== null} />
+      )}
     </>
+  );
+}
+
+/** The service takes at most three checks per quote in 24 hours, 15 seconds apart, and ignores more. */
+const MAX_CHECKS = 3;
+const CHECK_SPACING_MS = 15_000;
+
+/**
+ * While waiting: that a payment sent by address or QR code, which gives the page no transaction,
+ * shows on its own, and, until the wallet tab sent one, a way to ask the service to look for it
+ * now. A check only speeds up finding the payment; the status line alone says whether it was found.
+ */
+function PaymentCheck({ clientSecret, apiBase, sent }: { clientSecret: string; apiBase: string; sent: boolean }) {
+  const [checks, setChecks] = useState(0);
+  const [step, setStep] = useState<"idle" | "sending" | "checking" | "failed">("idle");
+  const [spacing, setSpacing] = useState(false);
+  useEffect(() => {
+    if (!spacing) {
+      return;
+    }
+    const timer = setTimeout(() => setSpacing(false), CHECK_SPACING_MS);
+    return () => clearTimeout(timer);
+  }, [spacing]);
+
+  const check = async () => {
+    setStep("sending");
+    setSpacing(true);
+    try {
+      await checkQuote({ apiBase, clientSecret });
+      setChecks((each) => each + 1);
+      setStep("checking");
+    } catch {
+      // Not received: it does not count against the quote's checks.
+      setStep("failed");
+    }
+  };
+
+  return (
+    <div className="pp-check">
+      <p className="pp-check__notice">A sent payment usually shows here within a minute. Do not pay again.</p>
+      {!sent && (
+        <>
+          <button
+            type="button"
+            className="pp-button pp-button--secondary"
+            disabled={spacing || checks >= MAX_CHECKS}
+            onClick={() => void check()}
+          >
+            <span>I&apos;ve paid — check now</span>
+          </button>
+          <p className="pp-message" data-tone={step === "failed" ? "danger" : undefined} aria-live="polite">
+            {step === "sending" || step === "checking"
+              ? "Checking for your payment…"
+              : step === "failed"
+                ? "Could not check for your payment. Try again in a moment."
+                : ""}
+          </p>
+        </>
+      )}
+    </div>
   );
 }
 

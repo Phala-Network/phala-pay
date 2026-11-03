@@ -4,7 +4,7 @@ import { createWalletClient, custom } from "viem";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Checkout, type CheckoutChange } from "../src/index.js";
 import type { ClientQuote, WalletError } from "../../js/src/index.js";
-import { ADDRESS, API_BASE, CLIENT_SECRET, TOKEN, browserWallet, quote, shownValue } from "./fixtures.js";
+import { ADDRESS, API_BASE, CLIENT_SECRET, QUOTE_ID, TOKEN, browserWallet, quote, shownValue } from "./fixtures.js";
 
 const NOW = (quote().expires_at - 14 * 60 - 32) * 1000;
 let served: ClientQuote;
@@ -304,5 +304,92 @@ describe("Checkout", () => {
     // With the wallet that tried, so the page funds that one.
     expect(errors.map(([error, wallet]) => [error.code, wallet])).toEqual([["insufficient_balance", provider]]);
     expect(methods).not.toContain("eth_sendTransaction");
+  });
+});
+
+describe("Checkout payment check", () => {
+  const CHECK_URL = `${API_BASE}/v1/quotes/${QUOTE_ID}/check?client_secret=${CLIENT_SECRET}`;
+  const NOTICE = "A sent payment usually shows here within a minute. Do not pay again.";
+  let checks: string[];
+  let checkStatus: number;
+
+  beforeEach(() => {
+    checks = [];
+    checkStatus = 202;
+    vi.stubGlobal("fetch", (input: URL | string, init?: { method?: string }) => {
+      if (init?.method !== "POST") {
+        return Promise.resolve(Response.json(served));
+      }
+      checks.push(input.toString());
+      return Promise.resolve(Response.json({ object: "quote_check", status: "received" }, { status: checkStatus }));
+    });
+  });
+
+  function checkButton() {
+    return screen.getByRole<HTMLButtonElement>("button", { name: "I've paid — check now" });
+  }
+
+  it("warns not to pay again and asks the service to check the quote, claiming nothing", async () => {
+    const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
+    await renderCheckout();
+    expect(screen.getByText(NOTICE)).toBeDefined();
+    await user.click(checkButton());
+    await screen.findByText("Checking for your payment…");
+    expect(checks).toEqual([CHECK_URL]);
+    // Only the quote's status says whether the payment was found.
+    expect(screen.getByRole("status").textContent).toBe("Waiting for your payment");
+    expect(screen.getByRole("tablist")).toBeDefined();
+
+    served = quote({ payment_status: "seen", confirmations: 1 });
+    await poll();
+    expect(screen.queryByRole("button", { name: "I've paid — check now" })).toBeNull();
+    expect(screen.queryByText(NOTICE)).toBeNull();
+  });
+
+  it("waits 15 seconds between checks and stops after three, as the service does", async () => {
+    const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
+    await renderCheckout();
+    for (let count = 1; count <= 3; count += 1) {
+      await user.click(checkButton());
+      await screen.findByText("Checking for your payment…");
+      expect(checkButton().disabled).toBe(true);
+      await act(() => vi.advanceTimersByTimeAsync(14_000));
+      expect(checkButton().disabled).toBe(true);
+      await act(() => vi.advanceTimersByTimeAsync(1_000));
+      expect(checkButton().disabled, `after check ${count}`).toBe(count === 3);
+    }
+    expect(checks).toHaveLength(3);
+  });
+
+  it("does not count a check the service did not receive", async () => {
+    const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
+    await renderCheckout();
+    checkStatus = 503;
+    await user.click(checkButton());
+    await screen.findByText("Could not check for your payment. Try again in a moment.");
+    checkStatus = 202;
+    for (let count = 1; count <= 3; count += 1) {
+      await act(() => vi.advanceTimersByTimeAsync(15_000));
+      await user.click(checkButton());
+      await screen.findByText("Checking for your payment…");
+    }
+    await act(() => vi.advanceTimersByTimeAsync(15_000));
+    expect(checks).toHaveLength(4);
+    expect(checkButton().disabled).toBe(true);
+  });
+
+  it("keeps the notice but offers no check once the wallet tab sent the payment", async () => {
+    const hash = `0x${"ab".repeat(32)}`;
+    render(<Checkout clientSecret={CLIENT_SECRET} expectedAddress={ADDRESS} apiBase={API_BASE} txHash={hash} />);
+    expect(await screen.findByText(NOTICE)).toBeDefined();
+    expect(screen.queryByRole("button", { name: "I've paid — check now" })).toBeNull();
+  });
+
+  it("offers no check once the quote expired", async () => {
+    served = quote({ status: "expired" });
+    render(<Checkout clientSecret={CLIENT_SECRET} expectedAddress={ADDRESS} apiBase={API_BASE} />);
+    await screen.findByText(/expired/);
+    expect(screen.queryByRole("button", { name: "I've paid — check now" })).toBeNull();
+    expect(screen.queryByText(NOTICE)).toBeNull();
   });
 });
