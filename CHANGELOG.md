@@ -14,6 +14,26 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Added
+
+- Extra read-only discovery every minute for addresses with an open, unexpired quote throughout
+  its validity, skipping the regular five-minute tick. Empty sets make zero RPC calls;
+  restart-safe UTC-day caps allow 240 extra rounds/payment chain in production and 30 in staging,
+  then silently fall back to normal discovery. Candidates still require the existing dual-provider
+  confirmation. Metrics label actual fresh calls and expose round outcomes/usage/exhaustion;
+  existing 80% provider quota warnings include these calls.
+- Production's operational daily deposit allowance/alert threshold is 152 (previously 280) to fund
+  fresh discovery on the same free RPC accounts while retaining 10.01% modeled Ankr headroom.
+  Hint, quote and refund limits are unchanged. Configure `discovery.fresh_quote_rounds_per_day`
+  (default 0 disables it). An additive admission-history migration keeps the compatibility floor unchanged; for rollback to v0.13.5,
+  use its retained configuration without the new discovery keys. Persisted budget claims survive rollback.
+- `POST /v1/quotes/{id}/check` requests a coalesced read-only pass for the quote's address,
+  authenticated by its client secret or merchant key. Quiet 202 acknowledges receipt only.
+  Checks allow three/quote/rolling day, 15-second address spacing, and 100/production chain/day
+  (10/staging) via restart-safe admission; exhaustion leaves normal scanning running. Browser
+  `checkQuote`, Node `quotes.check`, and Python `quotes.check`/`check_quote` expose the endpoint.
+  Rollback uses the target config without both new discovery keys; admission history is retained.
+
 ### JS SDK (`@phala/pay-server`)
 
 - Add pure typed `stripeReceiptInvoice`, `stripeReceiptInvoiceItem` and

@@ -515,7 +515,7 @@ pub(crate) async fn lift_reconciliation_block(
     responses((
         status = 200,
         description = "OK: the process's counters in the Prometheus text format, such as \
-                       `topup_rpc_calls_total{provider, chain_id, method}`; they restart at zero \
+                       `topup_rpc_calls_total{provider, chain_id, method, workload}`; they restart at zero \
                        with the process",
         body = String,
         content_type = "text/plain"

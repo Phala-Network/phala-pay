@@ -775,6 +775,7 @@ const DOCUMENTED_GRANTS: &[(&str, &[&str])] = &[
     ("ignored_transfer_daily", OPERATIONAL),
     ("custody_opening_jobs", &["SELECT", "INSERT"]),
     ("daily_budgets", &["SELECT", "INSERT", "UPDATE"]),
+    ("quote_checks", &["SELECT", "INSERT"]),
     ("rpc_daily_usage", &["SELECT", "INSERT", "UPDATE"]),
     ("accounts", OPERATIONAL),
     ("payment_settings_revisions", &["SELECT", "INSERT"]),

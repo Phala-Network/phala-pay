@@ -2183,6 +2183,24 @@ export const schemas: Record<string, Schema> = {
     ],
     "type": "object"
   },
+  "QuoteCheck": {
+    "properties": {
+      "object": {
+        "$ref": "#/components/schemas/QuoteCheckObject"
+      },
+      "status": {
+        "$ref": "#/components/schemas/TransactionSubmissionStatus"
+      }
+    },
+    "required": [
+      "object",
+      "status"
+    ],
+    "type": "object"
+  },
+  "QuoteCheckObject": {
+    "type": "string"
+  },
   "QuoteList": {
     "properties": {
       "data": {
@@ -3115,6 +3133,11 @@ export const contracts: Record<string, Contract> = {
   "cancel_quote": {
     "response": {
       "$ref": "#/components/schemas/Quote"
+    }
+  },
+  "check_quote": {
+    "response": {
+      "$ref": "#/components/schemas/QuoteCheck"
     }
   },
   "submit_quote_transaction": {

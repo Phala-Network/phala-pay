@@ -57,4 +57,4 @@ export {
 export { networkIcon, assetIcon } from "./icons.js";
 export type { CheckoutParams } from "./shared/checkout-params.js";
 
-export { submitTransaction, type SubmitTransactionOptions } from "./transactions.js";
+export { checkQuote, type CheckQuoteOptions, submitTransaction, type SubmitTransactionOptions } from "./transactions.js";

@@ -40,6 +40,8 @@ pub mod outbox;
 mod pause;
 pub mod payment_config;
 pub mod pump;
+/// Bounded on-demand quote discovery and durable admission limits.
+pub mod quote_checks;
 pub mod reconciler;
 pub mod refunds;
 pub mod restore;

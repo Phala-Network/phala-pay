@@ -142,6 +142,9 @@ export class QuotesResource {
   cancel(id: string, options?: RequestOptions): Promise<Types.Quote> {
     return this.execute<Types.Quote>("cancel_quote", "POST", `/v1/quotes/${encodeId(id)}/cancel`, undefined, options);
   }
+  check(id: string, params?: Types.QuoteCheckParams, options?: RequestOptions): Promise<Types.QuoteCheck> {
+    return this.execute<Types.QuoteCheck>("check_quote", "POST", `/v1/quotes/${encodeId(id)}/check`, params, options);
+  }
   submitTransaction(id: string, params: Types.QuoteSubmitTransactionParams, options?: RequestOptions): Promise<Types.TransactionSubmission> {
     return this.execute<Types.TransactionSubmission>("submit_quote_transaction", "POST", `/v1/quotes/${encodeId(id)}/transactions`, params, options);
   }

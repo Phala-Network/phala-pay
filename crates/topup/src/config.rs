@@ -554,6 +554,42 @@ mod tests {
     }
 
     #[test]
+    fn fresh_quote_budget_is_explicit_bounded_and_rollback_config_omits_disabled_key() {
+        let base = config(PROVIDERS, "https://pay.example");
+        let defaults = Config::parse(&base).unwrap();
+        assert_eq!(defaults.discovery.fresh_quote_rounds_per_day, 0);
+        assert!(
+            !defaults
+                .resolved_json()
+                .unwrap()
+                .contains("fresh_quote_rounds_per_day")
+        );
+        assert_eq!(defaults.discovery.quote_checks_per_day, 0);
+        for cap in [0, 30, 240, 1440] {
+            let parsed = Config::parse(&format!(
+                "{base}discovery:\n  fresh_quote_rounds_per_day: {cap}\n  quote_checks_per_day: {cap}\n"
+            ))
+            .unwrap();
+            assert_eq!(parsed.discovery.quote_checks_per_day, cap);
+            assert_eq!(
+                Config::parse(&parsed.resolved_json().unwrap())
+                    .unwrap()
+                    .discovery
+                    .fresh_quote_rounds_per_day,
+                cap
+            );
+        }
+        for invalid in ["-1", "1441", "1.5", "null"] {
+            assert!(
+                Config::parse(&format!(
+                    "{base}discovery:\n  fresh_quote_rounds_per_day: {invalid}\n"
+                ))
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn discovery_quote_window_covers_every_routes_maximum_ttl() {
         let base = config(PROVIDERS, "https://pay.example");
         let mut value: serde_json::Value =

@@ -24,6 +24,7 @@ type Case = {
   body?: unknown;
 };
 const cases: Case[] = [
+  { name: "quotes.check", operation: "check_quote", call: (pay) => pay.quotes.check(id) },
   {
     name: "quotes.create",
     operation: "create_quote",

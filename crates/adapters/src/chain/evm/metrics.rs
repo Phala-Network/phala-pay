@@ -48,6 +48,17 @@ pub fn rpc_accounting_failed() {
 tokio::task_local! {
     static HTTP_STATUS: std::cell::Cell<Option<u16>>;
     static TASK_CALLS: TaskCalls;
+    static WORKLOAD: &'static str;
+}
+
+/// Label actual fresh-quote transport attempts, including retries, without altering accounting.
+pub async fn fresh_quote_workload<T>(work: impl Future<Output = T>) -> T {
+    WORKLOAD.scope("fresh_quote", work).await
+}
+
+/// Label on-demand quote discovery attempts without altering provider accounting.
+pub async fn quote_check_workload<T>(work: impl Future<Output = T>) -> T {
+    WORKLOAD.scope("quote_check", work).await
 }
 
 /// A task-local refusal, distinct from endpoint transport or quota failures.
@@ -135,7 +146,7 @@ pub const METHODS: [&str; 16] = [
 pub const UNLABELED_PROVIDER: &str = "unlabeled";
 
 /// Counter key: provider label, chain id (`None` before a client is bound to a chain), method.
-type CallKey = (String, Option<u64>, &'static str);
+type CallKey = (String, Option<u64>, &'static str, &'static str);
 
 static CALLS: Mutex<BTreeMap<CallKey, u64>> = Mutex::new(BTreeMap::new());
 type ErrorKey = (String, Option<u64>, &'static str, &'static str);
@@ -206,6 +217,8 @@ pub struct RpcCallCount {
     pub chain_id: Option<u64>,
     /// JSON-RPC method, or `other`.
     pub method: &'static str,
+    /// Bounded workload: `fresh_quote`, `quote_check` or `default`.
+    pub workload: &'static str,
     /// Calls sent.
     pub calls: u64,
 }
@@ -217,12 +230,15 @@ pub fn rpc_call_counts() -> Vec<RpcCallCount> {
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .iter()
-        .map(|((provider, chain_id, method), calls)| RpcCallCount {
-            provider: provider.clone(),
-            chain_id: *chain_id,
-            method,
-            calls: *calls,
-        })
+        .map(
+            |((provider, chain_id, method, workload), calls)| RpcCallCount {
+                provider: provider.clone(),
+                chain_id: *chain_id,
+                method,
+                workload,
+                calls: *calls,
+            },
+        )
         .collect()
 }
 
@@ -253,6 +269,7 @@ pub(super) fn record(labels: &CallLabels, method: &str) {
         labels.provider.clone(),
         labels.chain_id,
         bounded_method(method),
+        WORKLOAD.try_with(|workload| *workload).unwrap_or("default"),
     );
     let mut calls = CALLS.lock().unwrap_or_else(PoisonError::into_inner);
     let count = calls.entry(key).or_default();
@@ -447,6 +464,31 @@ mod tests {
         );
         server.abort();
         let _ = server.await;
+    }
+
+    #[tokio::test]
+    async fn fresh_workload_labels_attempts_without_removing_provider_totals() {
+        let labels = CallLabels {
+            provider: "fresh-workload-test".into(),
+            chain_id: Some(1),
+        };
+        record(&labels, "eth_getLogs");
+        fresh_quote_workload(async {
+            record(&labels, "eth_getLogs");
+            record(&labels, "eth_getLogs"); // Retry is still billed.
+        })
+        .await;
+        let calls: Vec<_> = rpc_call_counts()
+            .into_iter()
+            .filter(|c| c.provider == labels.provider)
+            .collect();
+        assert_eq!(calls.len(), 2);
+        assert!(
+            calls
+                .iter()
+                .any(|c| c.workload == "fresh_quote" && c.calls == 2)
+        );
+        assert_eq!(provider_call_counts(&labels.provider)["eth_getLogs"], 3);
     }
 
     #[test]

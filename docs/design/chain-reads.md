@@ -40,7 +40,11 @@ Assumption: at least one endpoint is correct and synced.
 The **hot set** is addresses with any quote created in the last 24 hours (all states), or any
 deposit whose chain `block_time` is within the last seven days (all states). The optional attested
 `discovery.quote_window_hours` and `discovery.deposit_window_days` configure those windows.
-Activity is queried afresh each round, so creating a quote makes its address eligible immediately.
+Activity is queried afresh each round, so creating a quote makes its address eligible immediately. An extra
+60-second pass covers only open, unexpired quotes during their validity, subject to a
+persisted per-chain UTC-day round budget (F). Regular ticks replace coincident extra ticks;
+empty sets cost zero RPC and no claim. The extra pass never advances the global fast cursor,
+so other hot recipients retain full discovery. See the [fresh-quote allocation](#53-latency-and-recovery-targets).
 The SQL unions recent activity through time-leading indexes and reads keyset pages of at most
 1,000 addresses; it does not load the full historical address set.
 
@@ -517,8 +521,8 @@ L retains 86 head methods/environment/day and its independent stock/entry limits
 Hints are charged separately in full despite their confirmation-only handoff savings; hint
 proof never establishes final_at and Finalized policy keeps the normal full path.
 
-Production D280/H300/Q600/refunds10/10 and staging D10/H20/Q30/refunds1/1 leave modeled
-headroom of 10.36% Ankr, 71.61% Infura and 52.00% BlockPI, including monthly recovery.
+Production D152/H300/Q600/F240/refunds10/10 and staging D10/H20/Q30/F30/refunds1/1 leave modeled
+headroom of 10.01% Ankr, 71.61% Infura and 59.49% BlockPI, including monthly recovery.
 D, issuance, factory and Safe limits remain operational; H/Q and historical address/refund caps
 are atomic admission limits. Non-refund work uses ×1.1, refunds reserve all three transport
 attempts; this is not headroom when every non-refund method exhausts retries. Keep provider
@@ -532,7 +536,7 @@ healthy-operation SLOs and backlog exceptions:
 
 | Path | Scheduling target |
 |---|---|
-| Manual transfer | Discovery in 0–5 min, then confirmation and processing |
+| Manual transfer | Discovery in 0–60 s for a fresh open quote while F remains; otherwise 0–5 min, then confirmation and processing |
 | Admitted checkout hint | Instant processing path; seconds at route confirmation |
 | Depth confirmation | About 4 s after expected depth when healthy; lag waits up to the current normal probe interval, at most 64 s, then L |
 | Safe / Finalized confirmation | One 384 s epoch interval after the corresponding head meets the requirement, within the normal window |
@@ -542,6 +546,27 @@ healthy-operation SLOs and backlog exceptions:
 | Custody discrepancy | ≤ about 430 min (7 h 10 min) after finality, plus sweep runtime at the default six-hour cadence; settled, caught-up forwarders |
 | Recovery from ≤24 h equivalent backlog | ≤12 h continuous healthy operation, within work allowances |
 
+Fresh open quotes get an extra read-only discovery tick every 60 s while still before expiry. The regular five-minute tick replaces the coincident fresh tick. An empty per-chain
+set makes no RPC calls or budget claim. Persisted `daily_budgets` claims (`fresh_quote:<chain>`)
+limit extra rounds to F=240/production chain/UTC day and 30/staging chain; failure consumes a
+claim, restart does not reset it, and exhaustion silently falls back to normal discovery. F240
+covers about five hours of active quotes after coincident ticks are skipped. Fresh rounds use
+the same token/topic filtering, provisional insert and pending-view path. They re-read from the
+normal fast cursor and never advance it, preserving five-minute discovery of all other hot
+recipients. Only the existing dual-confirmation/coverage pipeline can publish dual evidence.
+Actual fresh attempts have `workload="fresh_quote"` in `topup_rpc_calls_total` and still count
+in existing persisted quota usage and the 80% business warning. Round outcomes and durable F
+usage/limits expose empty/exhausted ticks; the business detector reports F exhaustion too.
+
+`POST /v1/quotes/{id}/check` accepts an object client secret or merchant write key and quietly
+acknowledges with 202. Only an open, unexpired quote qualifies. A bounded queue coalesces checks
+by address, admits three/quote/rolling day with 15-second address spacing, and atomically claims
+its own persisted UTC-day budget (production 100/chain, staging 10) before RPC. Failure consumes
+admission; restart/restore retain it. The one-address read pass reuses the same filtering and
+provisional pipeline, never advances the normal cursor, and adds no verify calls. Exhaustion
+silently leaves normal discovery running. Actual `workload="quote_check"` calls remain in the
+provider quota tallies. See [the merchant endpoint](../integration.md#on-demand-quote-checks).
+
 Hint readiness, task budgets and confirmations still apply. Already unresolved deposits follow
 the age-dependent recheck cadence; later-day evidence can wait up to an hour for the next check.
 The ten-minute reversal target concerns newly due deposits. Conflicts visible only in full logs
@@ -550,6 +575,12 @@ in-window qualifying payments retain quote terms; late, partial and other unmatc
 use fresh processing-time prices and screening uses the verified local lists at decision time.
 
 ## 6. DB changes and N-1
+
+Fresh rounds use the existing daily budget table; on-demand check admission adds the expand-only
+`quote_checks` history table, with SELECT/INSERT application grants and retained rollback history. The compatibility
+floor remains `20261112000000` (production v0.13.5). For binary rollback use v0.13.5's retained
+configuration without `discovery.fresh_quote_rounds_per_day` or `discovery.quote_checks_per_day`; rollback/restore does not erase F
+usage, and re-upgrade continues from persisted claims.
 
 Schema additions are expand-only with safe defaults/nullable confirmation fields and preserve
 N-1 reads and writes; compatibility floor = N-1's maximum migration. The chain-read schema is:

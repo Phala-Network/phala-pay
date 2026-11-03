@@ -86,7 +86,9 @@ pub(super) fn is_submission(request: &Request) -> bool {
             .is_some_and(|path| {
                 matches!(
                     path.as_str(),
-                    "/v1/quotes/{id}/transactions" | "/v1/deposit_addresses/{id}/transactions"
+                    "/v1/quotes/{id}/transactions"
+                        | "/v1/deposit_addresses/{id}/transactions"
+                        | "/v1/quotes/{id}/check"
                 )
             })
 }
@@ -148,6 +150,10 @@ pub(super) async fn received(request: Request, next: Next) -> Response {
         );
         return response;
     }
+    let checking = request
+        .extensions()
+        .get::<MatchedPath>()
+        .is_some_and(|path| path.as_str() == "/v1/quotes/{id}/check");
     let hash = request
         .extensions()
         .get::<SubmissionHash>()
@@ -158,7 +164,20 @@ pub(super) async fn received(request: Request, next: Next) -> Response {
     {
         let _ = next.run(request).await;
     }
-    acknowledgement(hash)
+    if checking {
+        let mut response = (
+            StatusCode::ACCEPTED,
+            Json(QuoteCheck {
+                object: QuoteCheckObject::QuoteCheck,
+                status: TransactionSubmissionStatus::Received,
+            }),
+        )
+            .into_response();
+        super::allow_cross_origin(&mut response);
+        response
+    } else {
+        acknowledgement(hash)
+    }
 }
 
 #[utoipa::path(post, path = "/v1/quotes/{id}/transactions", tag = "quotes", operation_id = "submit_quote_transaction",
@@ -239,34 +258,10 @@ async fn submit(
         return Ok(());
     };
     // Hold browser admission through all object and address queries, as client GETs do.
-    let (scope, _client_slot) = if let Some(merchant) = merchant {
-        (merchant.scope, None)
-    } else {
-        let pairs = query_pairs(query);
-        let Some((_, secret)) = pairs.iter().find(|(name, _)| name == "client_secret") else {
-            return Ok(());
-        };
-        let slot = state.client_reads.admit(id, object, secret).await?;
-        if crate::restore_mode::is_frozen(&state.pool).await? {
-            return Ok(());
-        }
-        let digest = Sha256::digest(secret.as_bytes());
-        let owner: Option<(Uuid, bool)> = if quote {
-            sqlx::query_as(
-                "SELECT account_id,livemode FROM quotes WHERE client_secret_hash=$1 AND id=$2",
-            )
-            .bind(digest.as_slice())
-            .bind(object)
-            .fetch_optional(&state.pool)
-            .await?
-        } else {
-            sqlx::query_as("SELECT d.account_id,d.livemode FROM deposit_address_client_secrets s JOIN deposit_addresses d ON d.id=s.deposit_address_id WHERE s.secret_hash=$1 AND d.id=$2")
-                .bind(digest.as_slice()).bind(object).fetch_optional(&state.pool).await?
-        };
-        let Some((account, livemode)) = owner else {
-            return Ok(());
-        };
-        (Scope::new(account, livemode), Some(slot))
+    let Some((scope, _client_slot)) =
+        object_scope(state, merchant, id, query, object, quote).await?
+    else {
+        return Ok(());
     };
     // Quotes keep their issued network through rotation; address hints use the current network.
     let address: Option<(Uuid, i64, String, i64)> = sqlx::query_as(
@@ -299,4 +294,103 @@ async fn submit(
         },
     });
     Ok(())
+}
+
+async fn object_scope<'a>(
+    state: &'a AppState,
+    merchant: Option<Merchant>,
+    id: &str,
+    query: Option<&str>,
+    object: Uuid,
+    quote: bool,
+) -> Result<Option<(Scope, Option<tokio::sync::SemaphorePermit<'a>>)>, ApiError> {
+    let admitted = if let Some(merchant) = merchant {
+        (merchant.scope, None)
+    } else {
+        let pairs = query_pairs(query);
+        let Some((_, secret)) = pairs.iter().find(|(name, _)| name == "client_secret") else {
+            return Ok(None);
+        };
+        let slot = state.client_reads.admit(id, object, secret).await?;
+        if crate::restore_mode::is_frozen(&state.pool).await? {
+            return Ok(None);
+        }
+        let digest = Sha256::digest(secret.as_bytes());
+        let owner: Option<(Uuid, bool)> = if quote {
+            sqlx::query_as(
+                "SELECT account_id,livemode FROM quotes WHERE client_secret_hash=$1 AND id=$2",
+            )
+            .bind(digest.as_slice())
+            .bind(object)
+            .fetch_optional(&state.pool)
+            .await?
+        } else {
+            sqlx::query_as("SELECT d.account_id,d.livemode FROM deposit_address_client_secrets s JOIN deposit_addresses d ON d.id=s.deposit_address_id WHERE s.secret_hash=$1 AND d.id=$2")
+                .bind(digest.as_slice()).bind(object).fetch_optional(&state.pool).await?
+        };
+        let Some((account, livemode)) = owner else {
+            return Ok(None);
+        };
+        (Scope::new(account, livemode), Some(slot))
+    };
+    Ok(Some(admitted))
+}
+
+/// Constant quote-check acknowledgement discriminator.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum QuoteCheckObject {
+    /// Quote-check request acknowledgement.
+    QuoteCheck,
+}
+/// Quiet receipt of a check request; poll the quote for actual payment status.
+#[derive(Serialize, ToSchema)]
+pub struct QuoteCheck {
+    /// Object discriminator.
+    pub object: QuoteCheckObject,
+    /// Receipt only; limits and processing outcomes are deliberately not disclosed.
+    pub status: TransactionSubmissionStatus,
+}
+
+#[utoipa::path(post, path = "/v1/quotes/{id}/check", tag = "quotes", operation_id = "check_quote",
+    params(("id" = String, Path, description = "Quote identifier"), ("client_secret" = Option<String>, Query, description = "Object's browser client secret; omit with a merchant key")),
+    responses((status = 202, description = "Received, including ignored checks. Poll the quote for payment status.", body = QuoteCheck)),
+    security(("api_key" = []), ()))]
+/// Request immediate read-only discovery for an open, unexpired quote's issued address.
+pub(crate) async fn check_quote(
+    State(state): State<AppState>,
+    merchant: Option<Extension<Merchant>>,
+    ApiPath(id): ApiPath<String>,
+    RawQuery(query): RawQuery,
+) -> Result<StatusCode, ApiError> {
+    let Some(quote) = ids::parse(ids::QUOTE, &id) else {
+        return Ok(StatusCode::ACCEPTED);
+    };
+    let Some((scope, _slot)) = object_scope(
+        &state,
+        merchant.map(|m| m.0),
+        &id,
+        query.as_deref(),
+        quote,
+        true,
+    )
+    .await?
+    else {
+        return Ok(StatusCode::ACCEPTED);
+    };
+    let address: Option<(Uuid,i64)> = sqlx::query_as(
+        "SELECT a.id,a.chain_id FROM quotes q JOIN addresses a ON a.id=q.address_id          WHERE q.id=$1 AND q.account_id=$2 AND q.livemode=$3 AND q.status='open' AND q.expires_at > now()")
+        .bind(quote).bind(scope.account_id()).bind(scope.livemode()).fetch_optional(&state.pool).await?;
+    if let Some((address, chain)) = address {
+        let chain = u64::try_from(chain).map_err(|_| ApiError::internal())?;
+        state
+            .transaction_hints
+            .checks
+            .enqueue(crate::quote_checks::Check {
+                quote,
+                address,
+                chain,
+            });
+    }
+    Ok(StatusCode::ACCEPTED)
 }

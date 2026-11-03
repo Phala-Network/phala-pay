@@ -90,6 +90,7 @@ from topup_client.api.forwarders import list_forwarders
 from topup_client.api.payment_settings import get_payment_settings, update_payment_settings
 from topup_client.api.quotes import (
     cancel_quote,
+    check_quote,
     create_quote,
     get_quote,
     list_quotes,
@@ -152,6 +153,7 @@ from topup_client.models import (
     PaymentSettingsChain,
     PaymentSettingsObject,
     Quote,
+    QuoteCheck,
     QuoteList,
     Refund,
     RefundList,
@@ -501,6 +503,22 @@ class TopupClient:
             upgrade_tolerance=upgrade_tolerance,
         )
         return self._checked(quote)
+
+    def check_quote(
+        self,
+        quote_id: str,
+        *,
+        request_deadline: float | None = None,
+        upgrade_tolerance: bool | None = None,
+    ) -> QuoteCheck:
+        """Requests immediate discovery; receipt is not a payment result."""
+        return self._call(
+            lambda: check_quote.sync_detailed(quote_id, client=self._client),
+            QuoteCheck,
+            expected_status=202,
+            request_deadline=request_deadline,
+            upgrade_tolerance=upgrade_tolerance,
+        )
 
     def submit_quote_transaction(
         self,

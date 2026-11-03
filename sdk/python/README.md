@@ -240,3 +240,11 @@ Pins require a canonical origin and valid API key checksum. A normalized overrid
 HTTP is limited to test loopback. `PhalaPay` requires pins and never discovers trust from the
 service. Use `PhalaPay(api_key, pins=pins)` or `PhalaPay.from_env()` with `PHALA_PAY_API_KEY` and
 `PHALA_PAY_PINS`.
+
+### Requesting a quote check
+
+`pay.quotes.check(quote_id)` (or lower-level `TopupClient.check_quote(quote_id)`) requests an
+immediate read-only address discovery pass. Its `received` acknowledgement is not a payment
+result; keep polling the quote or using normal credit webhooks. Only open, unexpired quotes
+qualify, with three checks/quote/rolling day, 15-second address spacing and a separate per-chain
+daily budget. Coalescing or exhaustion silently leaves normal discovery running.

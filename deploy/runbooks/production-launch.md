@@ -13,7 +13,7 @@ sequencer uptime grace period. Both chains use the same deterministic factory, d
 separately. Production reads with Ankr and verifies with BlockPI on both mainnets. Before §2,
 the reviewed production RPC allocation and complete sealed mappings must be merged and pass
 preflight (§1.8). Staging uses Ankr + Infura. Production uses
-D=280, H=300, Q=600, factory=150 and Safe=10; staging retains D=10, H=20, Q=30, factory=20
+D=152, H=300, Q=600, factory=150 and Safe=10; staging retains D=10, H=20, Q=30, factory=20
 and Safe=2
 ([RPC operations](../RPC.md#worst-case-pilot-budget)).
 
@@ -33,7 +33,7 @@ means stop, fix the cause, and repeat the step. Never work around it.
 
 | Limit | Value | Enforcement |
 |---|---:|---|
-| Deposits handled per UTC day, D | 280 (10) | Operational: tally and stop |
+| Deposits handled per UTC day, D | 152 (10) | Operational: tally and stop |
 | Concurrent attached pending refunds, R (`max_attached_pending_refunds`) | 10 (1) | Service: `422 refund_attachment_limit_exceeded` |
 | Attached pending refunds per account across modes | 3 (1), configurable | Service: same error |
 | New refund attachments per rolling 24 h, N | 10 (1) | Service: same error |
@@ -392,7 +392,7 @@ Never register extra free accounts to stack quotas. The two BlockPI chain keys s
    Compare both environments' counters with the dashboards. Coordinate any Ankr key rotation
    across both environments. No staging re-seal or upgrade is required by this allocation.
 
-Accept production D=280/H=300/Q=600/factory=150/Safe=10 and the configured
+Accept production D=152/H=300/Q=600/factory=150/Safe=10 and the configured
 `hints_per_day: 300`/`quote_snapshots_per_day: 600`. Staging stays
 D=10/H=20/Q=30/factory=20/Safe=2. Any later cap change requires a separately reviewed and
 approved budget.
@@ -1343,7 +1343,7 @@ seven-day RU run rate. BlockPI payload surcharges are visible in its dashboard. 
 | Signal | Stop action | Runbook |
 |---|---|---|
 | S or L stock above 1, or S or L entries in rolling 24 h above 1 | Pause `quotes` on every route of the affected chain (below) and escalate. Keep verifying funded work and keep its reservations. Resume only when stock, entries and the day's work all fit | [Deposit reversed](deposit-reversed.md), [RPC health](rpc-health.md) |
-| D reaches 280 in a UTC day, factory 150/day, or Safe 10/day | Pause `quotes` on all three routes until 00:00 UTC (5:00 PM PDT) and coordinate merchant intake. Start no proof batch | [RPC operations](../RPC.md#monitoring-and-stop-actions) |
+| D reaches 152 in a UTC day, factory 150/day, or Safe 10/day | Pause `quotes` on all three routes until 00:00 UTC (5:00 PM PDT) and coordinate merchant intake. Start no proof batch | [RPC operations](../RPC.md#monitoring-and-stop-actions) |
 | Shared Ankr seven-day run rate ≥ 25,000 calls/day, staging Infura ≥ 1,500,000 credits/day, or production BlockPI seven-day run rate ≥ 1,250,000 RU/day | Add no merchant, route or test load. Investigate retry or range growth. Never add a second free account | [RPC health](rpc-health.md) |
 | Staging Infura `402`, or production BlockPI quota/throughput exhaustion | Infura verify halts until UTC midnight; BlockPI verify waits for provider recovery. Preserve pending work and do not switch endpoints | [RPC health](rpc-health.md) |
 | `TopupAddressCapacity` or 70% of a chain's configured address cap; 90% is critical | Plan the capacity upgrade and stop growth before the configured cap | [Address capacity](address-capacity.md) |
@@ -1436,7 +1436,7 @@ recovery store, with non-secret run links in the deployment record.
 - [ ] §1.8 Production Ankr read/BlockPI verify allocation PR merged; configuration, complete
       sealed mappings and preflight passed before §2. PR `<link>` and Operations owner `<name>`
       recorded; staging stays Ankr + Infura; resulting budget and production
-      D=280/H=300/Q=600/factory=150/Safe=10 caps accepted;
+      D=152/H=300/Q=600/factory=150/Safe=10 caps accepted;
       production-attested comments updated before provisioning; both BlockPI chain keys ready.
 - [ ] §1.9 Sentry scrubbing and alert rule set; synthetic alert received; owner accepts the
       pilot's external-monitoring risk and no Sentry Uptime monitor.

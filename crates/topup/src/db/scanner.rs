@@ -331,6 +331,48 @@ pub async fn hot_address_page(
     Ok((addresses, more))
 }
 
+/// Keyset page of addresses with an unexpired open quote.
+/// Uses the existing open-expiry index; consumed/cancelled/expired quotes do not qualify.
+pub async fn fresh_quote_address_page(
+    pool: &PgPool,
+    chain_id: u64,
+    after: Option<Uuid>,
+    now: DateTime<Utc>,
+) -> Result<(Vec<ScanAddress>, bool), sqlx::Error> {
+    let records = sqlx::query_as::<_, ScanAddressRecord>(
+        "SELECT a.id,a.address,a.created_block,a.backfilled,a.backfilled_through FROM addresses a \
+         JOIN (SELECT DISTINCT address_id FROM quotes WHERE status='open' \
+               AND expires_at > $4) fresh ON fresh.address_id=a.id \
+         WHERE a.chain_id=$1 AND a.id >= $2 AND ($3::uuid IS NULL OR a.id <> $3) \
+         ORDER BY a.id LIMIT 1001",
+    )
+    .bind(to_i64(chain_id, "fresh quote chain")?)
+    .bind(after.unwrap_or(Uuid::nil()))
+    .bind(after)
+    .bind(now)
+    .fetch_all(pool)
+    .await?;
+    let more = records.len() > ADDRESS_PAGE_SIZE;
+    let addresses = records
+        .into_iter()
+        .take(ADDRESS_PAGE_SIZE)
+        .map(TryInto::try_into)
+        .collect::<Result<_, _>>()?;
+    Ok((addresses, more))
+}
+
+/// Address snapshot for an on-demand discovery pass; chain and recipient are server-derived.
+pub(crate) async fn scan_single_address(
+    pool: &PgPool,
+    chain: u64,
+    id: Uuid,
+) -> Result<Option<ScanAddress>, sqlx::Error> {
+    sqlx::query_as::<_, ScanAddressRecord>(
+        "SELECT id,address,created_block,backfilled,backfilled_through FROM addresses WHERE chain_id=$1 AND id=$2")
+        .bind(to_i64(chain,"chain id")?).bind(id).fetch_optional(pool).await?
+        .map(TryInto::try_into).transpose()
+}
+
 /// Reads a keyset page of all issued addresses, including retired and superseded addresses.
 /// The lookahead row is removed; `more` means the durable sweep must continue next round.
 pub async fn scan_address_page(

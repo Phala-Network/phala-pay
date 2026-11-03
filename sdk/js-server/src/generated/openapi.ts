@@ -532,6 +532,23 @@ export interface paths {
         readonly patch?: never;
         readonly trace?: never;
     };
+    readonly "/v1/quotes/{id}/check": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        /** Request immediate read-only discovery for an open, unexpired quote's issued address. */
+        readonly post: operations["check_quote"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
     readonly "/v1/quotes/{id}/transactions": {
         readonly parameters: {
             readonly query?: never;
@@ -3206,6 +3223,24 @@ export interface components {
              */
             readonly window_start: number;
         };
+        /**
+         * @description Quiet receipt of a check request; poll the quote for actual payment status.
+         * @example {
+         *       "object": "quote_check",
+         *       "status": "received"
+         *     }
+         */
+        readonly QuoteCheck: {
+            /** @description Object discriminator. */
+            readonly object: components["schemas"]["QuoteCheckObject"];
+            /** @description Receipt only; limits and processing outcomes are deliberately not disclosed. */
+            readonly status: components["schemas"]["TransactionSubmissionStatus"];
+        };
+        /**
+         * @description Constant quote-check acknowledgement discriminator.
+         * @enum {string}
+         */
+        readonly QuoteCheckObject: "quote_check";
         /**
          * @description A page of quotes, newest first (<https://docs.stripe.com/api/pagination>).
          * @example {
@@ -7513,6 +7548,36 @@ export interface operations {
                 };
                 content: {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    readonly check_quote: {
+        readonly parameters: {
+            readonly query?: {
+                /** @description Object's browser client secret; omit with a merchant key */
+                readonly client_secret?: string;
+            };
+            readonly header?: never;
+            readonly path: {
+                /** @description Quote identifier */
+                readonly id: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Received, including ignored checks. Poll the quote for payment status. */
+            readonly 202: {
+                headers: {
+                    /** @description Tenant data and credentials must never be stored, including errors */
+                    readonly "Cache-Control": "no-store";
+                    /** @description The request's id, `req_…` (https://docs.stripe.com/api/request_ids) */
+                    readonly "Request-Id"?: string;
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["QuoteCheck"];
                 };
             };
         };

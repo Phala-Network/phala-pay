@@ -1,5 +1,5 @@
 import type { Hash } from "viem";
-import { submitTransaction, type SubmitTransactionOptions } from "./transactions.js";
+import { checkQuote, type CheckQuoteOptions, submitTransaction, type SubmitTransactionOptions } from "./transactions.js";
 import {
   createCheckout,
   retrieveQuote,
@@ -69,6 +69,11 @@ export class PhalaPay {
     options: Pick<SubmitTransactionOptions, "chainId" | "signal" | "requestTimeout"> = {},
   ): Promise<void> {
     return submitTransaction({ ...options, clientSecret, transactionHash, apiBase: this.apiBase, ...this.#fetchOption() });
+  }
+
+  /** Requests immediate discovery; continue polling for the payment result. */
+  checkQuote(clientSecret: string, options: Pick<CheckQuoteOptions, "signal" | "requestTimeout"> = {}): Promise<void> {
+    return checkQuote({ ...options, clientSecret, apiBase: this.apiBase, ...this.#fetchOption() });
   }
 
   #fetchOption(): { fetch?: typeof globalThis.fetch } {

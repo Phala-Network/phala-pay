@@ -9,6 +9,8 @@ quote_snapshots_per_day: 30
 discovery:
   quote_window_hours: 24
   deposit_window_days: 7
+  fresh_quote_rounds_per_day: 30
+  quote_checks_per_day: 10
 public_origin: https://pay-api-staging.phala.com
 admin_key:
   id: admin/staging-v1
@@ -28,7 +30,7 @@ quota_alerts:
     - name: ankr
       providers: [ankr-sepolia, ankr-base-sepolia, ankr-mainnet, ankr-base-mainnet]
       unit: calls
-      stop_line: 4558
+      stop_line: 4734
     - name: infura
       providers: [infura-sepolia, infura-base-sepolia, infura-mainnet, infura-base-mainnet]
       unit: infura_credits

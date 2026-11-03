@@ -17,6 +17,8 @@ use topup_core::route::{ChainConfig, Confirmations};
 
 /// Read discovery cadence; coverage is independent of fast cursor advances.
 pub const FAST_INTERVAL: Duration = Duration::from_secs(300);
+/// Additional read-only rounds for fresh open quotes, sharing every fifth tick with fast discovery.
+pub const FRESH_QUOTE_INTERVAL: Duration = Duration::from_secs(60);
 /// Validate and publish finalized checkpoints independently of log coverage.
 pub const CHECKPOINT_INTERVAL: Duration = Duration::from_secs(600);
 /// Complete negative evidence cadence, staggered across configured chains.
@@ -35,14 +37,25 @@ pub struct ScanConfig {
     pub quote_window_hours: u32,
     /// A deposit's chain block time keeps its address hot for this many days.
     pub deposit_window_days: u32,
+    /// Extra fresh-quote rounds per payment chain and UTC day; zero disables them.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub fresh_quote_rounds_per_day: u32,
+    /// On-demand quote checks per payment chain and UTC day; zero disables them.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub quote_checks_per_day: u32,
 }
 impl Default for ScanConfig {
     fn default() -> Self {
         Self {
             quote_window_hours: 24,
             deposit_window_days: 7,
+            fresh_quote_rounds_per_day: 0,
+            quote_checks_per_day: 0,
         }
     }
+}
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 impl ScanConfig {
     pub(crate) fn validate(self) -> Result<(), String> {
@@ -52,8 +65,30 @@ impl ScanConfig {
         if !(1..=365).contains(&self.deposit_window_days) {
             return Err("discovery.deposit_window_days must be an integer from 1 to 365".into());
         }
+        if self.fresh_quote_rounds_per_day > 1_440 {
+            return Err(
+                "discovery.fresh_quote_rounds_per_day must be an integer from 0 to 1440".into(),
+            );
+        }
+        if self.quote_checks_per_day > 1_440 {
+            return Err("discovery.quote_checks_per_day must be an integer from 0 to 1440".into());
+        }
         Ok(())
     }
+}
+// Preserve the five-minute deadline even if a minute tick was skipped during a slow RPC round.
+fn regular_round_due(next: &mut tokio::time::Instant, now: tokio::time::Instant) -> bool {
+    if now < *next {
+        return false;
+    }
+    let periods = now
+        .duration_since(*next)
+        .as_secs()
+        .checked_div(FAST_INTERVAL.as_secs())
+        .unwrap_or(0)
+        .saturating_add(1);
+    *next += FAST_INTERVAL.saturating_mul(u32::try_from(periods).unwrap_or(u32::MAX));
+    true
 }
 /// Per-chain checkpoint announcements used by finality and reconciliation.
 #[derive(Clone, Debug)]
@@ -301,9 +336,175 @@ pub async fn fast_once<R: ChainReader>(
     config: ScanConfig,
 ) -> Result<db::ScanCommit, ScannerError> {
     config.validate().map_err(ScannerError::Configuration)?;
-    let now = Utc::now();
-    let quoted_since = now - chrono::Duration::hours(i64::from(config.quote_window_hours));
-    let deposited_since = now - chrono::Duration::days(i64::from(config.deposit_window_days));
+    discover_once(pool, read, routes, Discovery::Hot(config), Utc::now()).await
+}
+
+/// Result of an optional fresh-quote discovery tick; exhaustion leaves normal discovery running.
+#[derive(Debug)]
+pub enum FreshQuoteRound {
+    /// No eligible quotes, so no budget claim or RPC call was made.
+    Empty,
+    /// Disabled or today's persisted budget is exhausted; no RPC call was made.
+    BudgetExhausted,
+    /// Candidates went through the same provisional ingestion as normal fast discovery.
+    Scanned(db::ScanCommit),
+}
+
+/// Read-only fresh-quote discovery with an explicit clock for deterministic admission and selection.
+/// It re-reads from the normal fast cursor without advancing it: other hot recipients must still
+/// be scanned by the five-minute round. Duplicate candidates retain the existing insert semantics.
+pub async fn fresh_quote_once_at<R: ChainReader>(
+    pool: &PgPool,
+    read: &R,
+    routes: &ChainRoutes,
+    config: ScanConfig,
+    now: DateTime<Utc>,
+) -> Result<FreshQuoteRound, ScannerError> {
+    config.validate().map_err(ScannerError::Configuration)?;
+    let chain = routes.chain.chain_id;
+    let outcome = async {
+        let first = Discovery::Fresh.page(pool, chain, None, now).await?;
+        if first.0.is_empty() {
+            return Ok(FreshQuoteRound::Empty);
+        }
+        if config.fresh_quote_rounds_per_day == 0
+            || !db::daily_budgets::claim_on(
+                pool,
+                now.date_naive(),
+                &format!("fresh_quote:{chain}"),
+                i32::try_from(config.fresh_quote_rounds_per_day)
+                    .map_err(|_| ScannerError::SnapshotChanged)?,
+            )
+            .await?
+        {
+            return Ok(FreshQuoteRound::BudgetExhausted);
+        }
+        // Claim before the first network call; failures/cancellation also spend this round.
+        topup_adapters::chain::evm::metrics::fresh_quote_workload(discover_pages(
+            pool,
+            read,
+            routes,
+            Discovery::Fresh,
+            now,
+            first,
+        ))
+        .await
+        .map(FreshQuoteRound::Scanned)
+    }
+    .await;
+    crate::observability::metrics::fresh_quote_round(
+        chain,
+        match &outcome {
+            Ok(FreshQuoteRound::Empty) => "empty",
+            Ok(FreshQuoteRound::BudgetExhausted) => "budget_exhausted",
+            Ok(FreshQuoteRound::Scanned(_)) => "scanned",
+            Err(_) => "failed",
+        },
+    );
+    outcome
+}
+
+/// Discover one admitted quote address without advancing the normal fast cursor.
+/// Admission and its rolling/day limits are durable; non-open and expired quotes cost no RPC.
+pub async fn check_quote_once_at<R: ChainReader>(
+    pool: &PgPool,
+    read: &R,
+    routes: &ChainRoutes,
+    config: ScanConfig,
+    quote: uuid::Uuid,
+    now: DateTime<Utc>,
+) -> Result<Option<db::ScanCommit>, ScannerError> {
+    config.validate().map_err(ScannerError::Configuration)?;
+    let Some(address) = crate::quote_checks::claim_at(
+        pool,
+        quote,
+        routes.chain.chain_id,
+        config.quote_checks_per_day,
+        now,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    let first = Discovery::Address(address)
+        .page(pool, routes.chain.chain_id, None, now)
+        .await?;
+    if first.0.is_empty() {
+        return Ok(None);
+    }
+    topup_adapters::chain::evm::metrics::quote_check_workload(discover_pages(
+        pool,
+        read,
+        routes,
+        Discovery::Address(address),
+        now,
+        first,
+    ))
+    .await
+    .map(Some)
+}
+
+#[derive(Clone, Copy)]
+enum Discovery {
+    Hot(ScanConfig),
+    Fresh,
+    Address(uuid::Uuid),
+}
+impl Discovery {
+    async fn page(
+        self,
+        pool: &PgPool,
+        chain: u64,
+        after: Option<uuid::Uuid>,
+        now: DateTime<Utc>,
+    ) -> Result<(Vec<db::ScanAddress>, bool), sqlx::Error> {
+        match self {
+            Self::Fresh => db::scanner::fresh_quote_address_page(pool, chain, after, now).await,
+            Self::Address(id) => {
+                if after.is_some() {
+                    return Ok((Vec::new(), false));
+                }
+                Ok((
+                    db::scanner::scan_single_address(pool, chain, id)
+                        .await?
+                        .into_iter()
+                        .collect(),
+                    false,
+                ))
+            }
+            Self::Hot(config) => {
+                db::scanner::hot_address_page(
+                    pool,
+                    chain,
+                    after,
+                    now - chrono::Duration::hours(i64::from(config.quote_window_hours)),
+                    now - chrono::Duration::days(i64::from(config.deposit_window_days)),
+                )
+                .await
+            }
+        }
+    }
+}
+async fn discover_once<R: ChainReader>(
+    pool: &PgPool,
+    read: &R,
+    routes: &ChainRoutes,
+    selection: Discovery,
+    now: DateTime<Utc>,
+) -> Result<db::ScanCommit, ScannerError> {
+    let first = selection
+        .page(pool, routes.chain.chain_id, None, now)
+        .await?;
+    discover_pages(pool, read, routes, selection, now, first).await
+}
+async fn discover_pages<R: ChainReader>(
+    pool: &PgPool,
+    read: &R,
+    routes: &ChainRoutes,
+    selection: Discovery,
+    now: DateTime<Utc>,
+    first: (Vec<db::ScanAddress>, bool),
+) -> Result<db::ScanCommit, ScannerError> {
     let chain = routes.chain.chain_id;
     let coverage = chain_reads::coverage(pool, chain)
         .await?
@@ -332,15 +533,13 @@ pub async fn fast_once<R: ChainReader>(
         inserted_positions: Vec::new(),
     };
     if from <= latest {
-        let mut after = None;
+        let mut page = first;
         loop {
-            let (addresses, more) =
-                db::scanner::hot_address_page(pool, chain, after, quoted_since, deposited_since)
-                    .await?;
+            let (addresses, more) = page;
             if addresses.is_empty() {
                 break;
             }
-            after = addresses.last().map(|address| address.id);
+            let after = addresses.last().map(|address| address.id);
             let ids: Vec<_> = addresses.iter().map(|address| address.id).collect();
             let index: BTreeMap<_, _> = addresses.into_iter().map(|a| (a.address, a)).collect();
             tracing::debug!(
@@ -390,21 +589,28 @@ pub async fn fast_once<R: ChainReader>(
             }
             let mut tx = pool.begin().await?;
             db::rpc::guard_in(&mut tx, chain).await?;
-            let page = db::scanner::insert_deposits_in(&mut tx, &deposits, db::Evidence::Confirmed)
-                .await?;
+            let committed =
+                db::scanner::insert_deposits_in(&mut tx, &deposits, db::Evidence::Confirmed)
+                    .await?;
             db::pending::commit_head_page_in(&mut tx, chain, from, latest, &pending, Some(&ids))
                 .await?;
             tx.commit().await?;
-            commit.inserted += page.inserted;
-            commit.unsupported_inserted += page.unsupported_inserted;
-            commit.inserted_positions.extend(page.inserted_positions);
+            commit.inserted += committed.inserted;
+            commit.unsupported_inserted += committed.unsupported_inserted;
+            commit
+                .inserted_positions
+                .extend(committed.inserted_positions);
             if !more {
                 break;
             }
+            page = selection.page(pool, chain, after, now).await?;
         }
     }
     // A failed page leaves the cursor unchanged, so retrying also revisits committed pages.
-    db::commit_confirmed_scan(pool, chain, &[], routes.chain.confirmations.horizon(heads)).await?;
+    if matches!(selection, Discovery::Hot(_)) {
+        db::commit_confirmed_scan(pool, chain, &[], routes.chain.confirmations.horizon(heads))
+            .await?;
+    }
     Ok(commit)
 }
 struct Range {
@@ -1217,10 +1423,26 @@ pub async fn run(
         let fast_token = cancellation.clone();
         tasks.spawn(async move {
             let monitor = crate::observability::CronMonitor::fast_scanner(fast_chain.chain.chain_id);
-            let mut interval = tokio::time::interval(FAST_INTERVAL);
+            let start = tokio::time::Instant::now();
+            let mut next_regular = start;
+            let mut interval = tokio::time::interval_at(start, FRESH_QUOTE_INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tokio::select! { _ = fast_token.cancelled() => break, _ = interval.tick() => {} }
+                let regular = regular_round_due(&mut next_regular, tokio::time::Instant::now());
+                if !regular {
+                    if config.fresh_quote_rounds_per_day == 0
+                        || !contract_read.contract_ready() || !contract_verify.contract_ready()
+                        || crate::reconciler::chain_is_blocked(&fast_pool,fast_chain.chain.chain_id).await.unwrap_or(true) {
+                        continue;
+                    }
+                    let result = tokio::select! {
+                        _ = fast_token.cancelled() => break,
+                        result = fresh_quote_once_at(&fast_pool,&fast_read,&fast_chain,config,Utc::now()) => result,
+                    };
+                    if let Err(error) = result { tracing::warn!(chain_id=fast_chain.chain.chain_id,%error,"fresh quote discovery waits"); }
+                    continue;
+                }
                 if crate::reconciler::chain_is_blocked(&fast_pool,fast_chain.chain.chain_id).await.unwrap_or(true) {monitor.check_in(false); continue;}
                 if !contract_read.contract_ready() || !contract_verify.contract_ready() {
                     let checked=tokio::select! {
@@ -1355,6 +1577,36 @@ mod tests {
         route::PricingMode,
         valuation::{LockTerms, RouteValuation, lock_applies},
     };
+
+    #[tokio::test(start_paused = true)]
+    async fn fresh_ticks_share_regular_deadlines_and_slow_rounds_do_not_skip_regular_work() {
+        let start = tokio::time::Instant::now();
+        let mut next = start;
+        assert!(regular_round_due(&mut next, start));
+        for minute in 1..5 {
+            assert!(!regular_round_due(
+                &mut next,
+                start + Duration::from_secs(minute * 60)
+            ));
+        }
+        assert!(regular_round_due(&mut next, start + FAST_INTERVAL));
+        assert!(!regular_round_due(&mut next, start + FAST_INTERVAL));
+        // Simulate a slow round crossing more than one normal deadline. It runs normal work
+        // once on return and retains the original phase; no catch-up fresh burst is required.
+        assert!(regular_round_due(
+            &mut next,
+            start + Duration::from_secs(950)
+        ));
+        assert_eq!(next, start + Duration::from_secs(1200));
+        assert!(!regular_round_due(
+            &mut next,
+            start + Duration::from_secs(960)
+        ));
+        assert!(regular_round_due(
+            &mut next,
+            start + Duration::from_secs(1200)
+        ));
+    }
 
     #[test]
     fn stablecoin_floor_preserves_spot_and_tolerated_quote_payments() {

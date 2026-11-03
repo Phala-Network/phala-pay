@@ -91,6 +91,8 @@ struct Entry {
 #[derive(Default)]
 pub struct HintQueue {
     entries: Mutex<VecDeque<Entry>>,
+    /// Separate bounded discovery queue; it never consumes transaction-hint admission.
+    pub checks: Arc<crate::quote_checks::CheckQueue>,
 }
 impl HintQueue {
     pub(crate) fn enqueue(&self, hint: Hint) {

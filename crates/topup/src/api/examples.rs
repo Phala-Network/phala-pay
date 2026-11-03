@@ -57,6 +57,7 @@ pub(super) fn schema(name: &str) -> Option<Value> {
         "SubmitDepositAddressTransactionRequest" => {
             json!({"transaction_hash": TX, "chain_id":84532})
         }
+        "QuoteCheck" => json!({"object":"quote_check", "status":"received"}),
         "TransactionSubmission" => {
             json!({"object":"transaction_submission", "transaction_hash": TX, "status":"received"})
         }

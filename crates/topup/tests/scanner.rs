@@ -418,6 +418,225 @@ async fn custody_new_token_route_includes_transfers_recorded_before_route_activa
 }
 
 #[tokio::test]
+async fn fresh_quotes_use_the_entire_validity_window_and_skip_empty_rpc() -> Result<()> {
+    with_database(|d| Box::pin(async move {
+        let now = time(2_000_000_000);
+        let fresh = address(d, 100).await?;
+        let expired = address(d, 100).await?;
+        let complete = address(d, 100).await?;
+        let old = address(d, 100).await?;
+        let future = address(d, 100).await?;
+        let metadata = db::list_scan_addresses(&d.app_pool,1).await?.into_iter()
+            .find(|a| a.id == complete.id).context("completed address")?;
+        db::insert_deposit(&d.app_pool,&provisional(transfer(&complete,150),&metadata)).await?;
+        let consumed_by: Uuid = sqlx::query_scalar("SELECT id FROM deposits WHERE address_id=$1")
+            .bind(complete.id).fetch_one(&d.app_pool).await?;
+        // All unexpired open quotes qualify, irrespective of their creation time.
+        sqlx::query("UPDATE quotes SET created_at=$1").bind(now).execute(&d.app_pool).await?;
+        for (a, created, expires, status) in [
+            (&fresh, now - chrono::Duration::minutes(15), now + chrono::Duration::minutes(1), "open"),
+            (&expired, now, now, "open"),
+            (&complete, now, now + chrono::Duration::minutes(1), "consumed"),
+            (&old, now - chrono::Duration::minutes(15) - chrono::Duration::microseconds(1), now + chrono::Duration::minutes(1), "open"),
+            (&future, now + chrono::Duration::microseconds(1), now + chrono::Duration::minutes(1), "open"),
+        ] {
+            sqlx::query("UPDATE quotes SET created_at=$1,expires_at=$2,status=$3,consumed_by=CASE WHEN $3='consumed' THEN $5::uuid ELSE NULL END,closed_at=CASE WHEN $3='open' THEN NULL ELSE $1 END WHERE address_id=$4")
+                .bind(created).bind(expires).bind(status).bind(a.id).bind(consumed_by).execute(&d.app_pool).await?;
+        }
+        let (page, more) = db::fresh_quote_address_page(&d.app_pool, 1, None, now).await?;
+        ensure!(!more && page.iter().map(|a|a.id).collect::<BTreeSet<_>>() == BTreeSet::from([fresh.id,old.id,future.id]));
+        ensure!(db::fresh_quote_address_page(&d.app_pool, 8453, None, now).await?.0.is_empty());
+        sqlx::query("UPDATE quotes SET status='cancelled',closed_at=$1,consumed_by=NULL").bind(now).execute(&d.app_pool).await?;
+        let read = Reader::new(200);
+        let config = scanner::ScanConfig { fresh_quote_rounds_per_day: 1, ..Default::default() };
+        ensure!(matches!(scanner::fresh_quote_once_at(&d.app_pool,&read,&chain(),config,now).await?, scanner::FreshQuoteRound::Empty));
+        ensure!(*read.finalized_reads.lock().unwrap() == 0 && read.requests.lock().unwrap().is_empty());
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM daily_budgets").fetch_one(&d.app_pool).await? == 0);
+        Ok(())
+    })).await
+}
+
+#[tokio::test]
+async fn fresh_budget_survives_restart_falls_back_and_keeps_dual_evidence_required() -> Result<()> {
+    with_database(|d| Box::pin(async move {
+        // Use a current but fixed logical clock: normal discovery uses Utc::now, while all
+        // fresh admission/rollover timestamps below are explicitly anchored to this instant.
+        let now = Utc::now();
+        let fresh = address(d, 100).await?;
+        let other_hot = address(d, 100).await?;
+        sqlx::query("UPDATE quotes SET created_at=$1,expires_at=$2,status='open',closed_at=NULL WHERE address_id=$3")
+            .bind(now).bind(now + chrono::Duration::minutes(15)).bind(fresh.id).execute(&d.app_pool).await?;
+        let mut read = Reader::new(200);
+        let mut verify = Reader::new(200);
+        scanner::initialize_chain(&d.app_pool,1,&read,&verify).await?;
+        let mut chain = chain();
+        chain.chain.confirmations = Confirmations::Depth(2);
+        read.logs.push(transfer(&fresh,150));
+        let mut other = transfer(&other_hot,160);
+        other.tx_hash = B256::repeat_byte(0xcc);
+        read.logs.push(other);
+        let before = db::get_confirmed_cursor(&d.app_pool,1).await?;
+        let config = scanner::ScanConfig { fresh_quote_rounds_per_day: 1, ..Default::default() };
+        let scanner::FreshQuoteRound::Scanned(commit) = scanner::fresh_quote_once_at(&d.app_pool,&read,&chain,config,now).await? else { anyhow::bail!("missing fresh scan") };
+        ensure!(commit.inserted == 1);
+        ensure!(db::get_confirmed_cursor(&d.app_pool,1).await? == before, "fresh subset skipped normal recipients");
+        let provisional: (String,bool) = sqlx::query_as("SELECT state,dual_verified_at IS NOT NULL FROM deposits").fetch_one(&d.app_pool).await?;
+        ensure!(provisional == ("detected".into(),false), "single-source discovery bypassed dual confirmation");
+        ensure!(marker(d,fresh.id).await?.is_none());
+        let requests = read.requests.lock().unwrap().len();
+        let heads = *read.finalized_reads.lock().unwrap();
+        // A fresh pool has no process-local scanner state and must still see the spent claim.
+        let restarted = topup::db::connect(&d.app_url,"run",2).await?;
+        ensure!(matches!(scanner::fresh_quote_once_at(&restarted,&read,&chain,config,now).await?, scanner::FreshQuoteRound::BudgetExhausted));
+        restarted.close().await;
+        ensure!(read.requests.lock().unwrap().len() == requests && *read.finalized_reads.lock().unwrap() == heads);
+        ensure!(scanner::fast_once(&d.app_pool,&read,&chain,config).await?.inserted == 1, "exhaustion blocked normal hot discovery");
+        // Existing coverage proof code must reject disagreement before publishing dual evidence.
+        read.receipt = Some(transfer(&fresh,150));
+        verify.receipt = read.receipt.clone();
+        verify.receipt.as_mut().unwrap().amount = AtomicAmount::new(U256::from(999));
+        ensure!(scanner::coverage_once(&d.app_pool,&read,&verify,&chain).await.is_err());
+        ensure!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM deposits WHERE dual_verified_at IS NOT NULL").fetch_one(&d.app_pool).await? == 0);
+        verify.receipt = read.receipt.clone();
+        // The other provisional transfer is outside this proof round; avoid asking the fixture
+        // for two different receipts, while retaining the assertion that normal discovery saw it.
+        sqlx::query("UPDATE deposits SET state='reversed' WHERE address_id=$1").bind(other_hot.id).execute(&d.app_pool).await?;
+        scanner::coverage_once(&d.app_pool,&read,&verify,&chain).await?;
+        ensure!(sqlx::query_scalar::<_,bool>("SELECT dual_verified_at IS NOT NULL FROM deposits WHERE address_id=$1").bind(fresh.id).fetch_one(&d.app_pool).await?);
+        // A failed round also spends admission, with a distinct persisted UTC-day claim.
+        sqlx::query("UPDATE quotes SET created_at=$1,expires_at=$2 WHERE address_id=$3")
+            .bind(now + chrono::Duration::days(1)).bind(now + chrono::Duration::days(1) + chrono::Duration::minutes(15)).bind(fresh.id).execute(&d.app_pool).await?;
+        let tomorrow = now + chrono::Duration::days(1);
+        read.head = 300;
+        read.error = true;
+        ensure!(scanner::fresh_quote_once_at(&d.app_pool,&read,&chain,config,tomorrow).await.is_err());
+        ensure!(matches!(scanner::fresh_quote_once_at(&d.app_pool,&read,&chain,config,tomorrow).await?, scanner::FreshQuoteRound::BudgetExhausted));
+        Ok(())
+    })).await
+}
+
+#[tokio::test]
+async fn quote_checks_enforce_rolling_limits_spacing_daily_cap_and_restart_without_rpc()
+-> Result<()> {
+    with_database(|d| {
+        Box::pin(async move {
+            let now = time(2_000_000_000);
+            let address = address(d, 100).await?;
+            let quote = address.quote_id.context("quote")?;
+            sqlx::query("UPDATE quotes SET status='open',closed_at=NULL,expires_at=$1 WHERE id=$2")
+                .bind(now + chrono::Duration::days(2))
+                .bind(quote)
+                .execute(&d.app_pool)
+                .await?;
+            let mut read = Reader::new(200);
+            let verify = Reader::new(200);
+            scanner::initialize_chain(&d.app_pool, 1, &read, &verify).await?;
+            let mut chain = chain();
+            chain.chain.confirmations = Confirmations::Depth(2);
+            let config = scanner::ScanConfig {
+                quote_checks_per_day: 100,
+                ..Default::default()
+            };
+            let cursor = db::get_confirmed_cursor(&d.app_pool, 1).await?;
+            read.logs.push(transfer(&address, 150));
+            ensure!(
+                scanner::check_quote_once_at(&d.app_pool, &read, &chain, config, quote, now)
+                    .await?
+                    .context("check")?
+                    .inserted
+                    == 1
+            );
+            let row: (String, bool) =
+                sqlx::query_as("SELECT state,dual_verified_at IS NOT NULL FROM deposits")
+                    .fetch_one(&d.app_pool)
+                    .await?;
+            ensure!(
+                row == ("detected".into(), false),
+                "check bypassed dual confirmation"
+            );
+            ensure!(db::get_confirmed_cursor(&d.app_pool, 1).await? == cursor);
+            for offset in [14, 15, 29, 30, 45] {
+                let heads = *read.finalized_reads.lock().unwrap();
+                let admitted = scanner::check_quote_once_at(
+                    &d.app_pool,
+                    &read,
+                    &chain,
+                    config,
+                    quote,
+                    now + chrono::Duration::seconds(offset),
+                )
+                .await?
+                .is_some();
+                ensure!(admitted == matches!(offset, 15 | 30));
+                if !admitted {
+                    ensure!(*read.finalized_reads.lock().unwrap() == heads);
+                }
+            }
+            let restarted = topup::db::connect(&d.app_url, "run", 2).await?;
+            ensure!(
+                scanner::check_quote_once_at(
+                    &restarted,
+                    &read,
+                    &chain,
+                    config,
+                    quote,
+                    now + chrono::Duration::seconds(60)
+                )
+                .await?
+                .is_none()
+            );
+            restarted.close().await;
+            // At exactly 24 hours the oldest claim leaves the rolling window, and UTC-day usage is new.
+            let tomorrow = now + chrono::Duration::days(1);
+            let one = scanner::ScanConfig {
+                quote_checks_per_day: 1,
+                ..config
+            };
+            ensure!(
+                scanner::check_quote_once_at(&d.app_pool, &read, &chain, one, quote, tomorrow)
+                    .await?
+                    .is_some()
+            );
+            let heads = *read.finalized_reads.lock().unwrap();
+            // Rolling slots are available 15 seconds later, but the durable daily cap blocks RPC.
+            ensure!(
+                scanner::check_quote_once_at(
+                    &d.app_pool,
+                    &read,
+                    &chain,
+                    one,
+                    quote,
+                    tomorrow + chrono::Duration::seconds(15)
+                )
+                .await?
+                .is_none()
+            );
+            ensure!(*read.finalized_reads.lock().unwrap() == heads);
+            sqlx::query("UPDATE quotes SET status='cancelled',closed_at=$1 WHERE id=$2")
+                .bind(now)
+                .bind(quote)
+                .execute(&d.app_pool)
+                .await?;
+            ensure!(
+                scanner::check_quote_once_at(
+                    &d.app_pool,
+                    &read,
+                    &chain,
+                    config,
+                    quote,
+                    tomorrow + chrono::Duration::days(1)
+                )
+                .await?
+                .is_none()
+            );
+            ensure!(*read.finalized_reads.lock().unwrap() == heads);
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
 async fn hot_discovery_uses_any_recent_quote_and_seven_days_of_chain_deposit_activity() -> Result<()>
 {
     with_database(|d| {

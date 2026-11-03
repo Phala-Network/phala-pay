@@ -64,17 +64,18 @@ See the [RPC budget](RPC.md#worst-case-pilot-budget) for reserve and stop lines.
 
 | Pilot limit | Production value | Enforcement |
 |---|---:|---|
-| D: deposits per UTC day | 280 | Operator tally and stop |
+| D: deposits per UTC day | 152 | Operator tally and stop |
+| F: extra fresh-quote rounds per payment chain per UTC day | 240 | Service; exhaustion falls back to five-minute scanning |
 | H: hint tasks per UTC day | 300 | Service; excess hints fall back to scanning |
 | Q: fresh quote snapshots per price chain per UTC day | 600 | Service; `503 price_unavailable`, with 12-second snapshot reuse |
 | Issued addresses per chain, all accounts and modes | 12,000 historical | Service; `422 address_capacity_reached` for a missing network or rotation |
 | N: new refund attachments per rolling 24 hours | 10 per environment | Service |
 | R: pending refund attachments | 10 per environment, 3 per account across modes | Service |
 
-Staging retains D10/H20/Q30 and 1,000 historical addresses per chain. The `quota_alerts`
+Staging retains D10/H20/Q30/F30 and 1,000 historical addresses per chain. The `quota_alerts`
 configuration on `main` adds service-generated daily RPC/D monitoring for the next upgrade;
-it is not part of deployed v0.13.4. Ankr's monitoring allocations are 20,442 calls/day for
-production and 4,558 for staging, including staging's recovery reserve, totaling the shared
+it is not part of deployed v0.13.4. Ankr's monitoring allocations are 20,266 calls/day for
+production and 4,734 for staging, including staging's recovery reserve, totaling the shared
 25,000 stop line. Each environment warns at 80% of its allocation. D remains an operational
 stop without a deposit admission gate; before upgrading, keep the manual RPC/D checks.
 See [service quota monitoring](RPC.md#monitoring-and-stop-actions) for persistence and accounting gaps.
@@ -142,7 +143,7 @@ Base Sepolia, Ethereum and Base. The mainnets are used for prices only. Sealed c
 `TOPUP_RPC_ANKR_KEY` and `TOPUP_RPC_INFURA_KEY`. Production keeps shared Ankr read and uses
 BlockPI verify on Ethereum and Base, with `TOPUP_RPC_BLOCKPI_ETHEREUM_KEY` and
 `TOPUP_RPC_BLOCKPI_BASE_KEY` from one free account. Production uses
-D=280/H=300/Q=600/factory=150/Safe=10; staging retains D=10/H=20/Q=30/factory=20/Safe=2.
+D=152/H=300/Q=600/factory=150/Safe=10; staging retains D=10/H=20/Q=30/factory=20/Safe=2.
 The [configuration](environments/phala-network/staging/topup/topup.yaml) uses strict HTTPS
 key templates. Run compose-path preflight with the complete sealed env before an authorized
 upgrade, including restore-check. The typed self-test checks actual receipt, transaction,

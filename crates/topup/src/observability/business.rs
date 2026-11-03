@@ -303,6 +303,32 @@ fn report_pilot(state: &mut AlertState, now: DateTime<Utc>, routes: &RouteSet, h
             .find(|(budget, _)| budget == name)
             .map_or(0, |(_, used)| i64::from(*used))
     };
+    for chain in routes.chain_ids() {
+        let limit = i64::from(routes.discovery().fresh_quote_rounds_per_day);
+        let component = format!("fresh_quote:{chain}");
+        let count = used(&component);
+        state.observe(
+            now.timestamp(),
+            "TopupRpcFreshQuoteBudgetExhausted",
+            &component,
+            (limit > 0 && count >= limit).then_some("warning"),
+            count,
+            limit,
+        );
+    }
+    for chain in routes.chain_ids() {
+        let limit = i64::from(routes.discovery().quote_checks_per_day);
+        let component = format!("quote_check:{chain}");
+        let count = used(&component);
+        state.observe(
+            now.timestamp(),
+            "TopupRpcQuoteCheckBudgetExhausted",
+            &component,
+            (limit > 0 && count >= limit).then_some("warning"),
+            count,
+            limit,
+        );
+    }
     let hints = used("hints");
     let hint_limit = i64::from(routes.hints_per_day());
     state.observe(
@@ -785,6 +811,42 @@ mod tests {
             report_pilot(&mut state, now, &routes, &health);
             assert!(state.active.is_empty());
         }
+    }
+
+    #[test]
+    fn fresh_quote_exhaustion_uses_durable_per_chain_tallies_and_resolves_on_rollover() {
+        let mut routes = pilot_routes(80, 60).with_discovery(crate::scanner::ScanConfig {
+            fresh_quote_rounds_per_day: 240,
+            ..Default::default()
+        });
+        let route: topup_core::route::RouteFile =
+            serde_saphyr::from_str(include_str!("../../tests/fixtures/phala-cloud-pha.yaml"))
+                .unwrap();
+        let rpc = routes.rpc().clone();
+        routes = RouteSet::with_rpc(vec![route], rpc)
+            .unwrap()
+            .with_discovery(routes.discovery());
+        let mut state = AlertState::default();
+        let mut health = healthy_pilot();
+        let now = DateTime::from_timestamp(1_000_000, 0).unwrap();
+        health.budgets = vec![("fresh_quote:1".into(), 239)];
+        report_pilot(&mut state, now, &routes, &health);
+        assert!(state.active.is_empty());
+        health.budgets[0].1 = 240;
+        report_pilot(&mut state, now, &routes, &health);
+        assert!(
+            state
+                .active
+                .contains_key(&("TopupRpcFreshQuoteBudgetExhausted", "fresh_quote:1".into()))
+        );
+        health.budgets.clear();
+        report_pilot(
+            &mut state,
+            now + chrono::Duration::days(1),
+            &routes,
+            &health,
+        );
+        assert!(state.active.is_empty());
     }
 
     #[test]
