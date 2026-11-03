@@ -13,7 +13,7 @@ volumes. Use it to choose a `read` and `verify` pair for each environment.
 
 | Volume | Deposits/day | Recommended pair (read + verify) | Monthly cost |
 |---|---:|---|---:|
-| Pilot (allocation B) | 280 production + 10 staging | Production Ankr + BlockPI; staging Ankr + Infura | **$0** |
+| Pilot (allocation B) | 152 production + 10 staging | Production Ankr + BlockPI; staging Ankr + Infura | **$0** |
 | Growth | 2,800 | BlockPI + Chainstack Growth | **about $52** |
 | Scale | 15,000 | BlockPI + Chainstack Growth | **about $75–101** |
 
@@ -21,8 +21,8 @@ volumes. Use it to choose a `read` and `verify` pair for each environment.
   and Base. Staging keeps Ankr + Infura on its two payment chains and two mainnet price chains.
   One account per company: Ankr is shared, Infura is staging-only, and the two BlockPI keys share
   one account quota. Under the [total budget](RPC.md#worst-case-pilot-budget), shared Ankr
-  uses 89.64% of its stop line at D280/H300/Q600/refunds10/10, with 12,000 historical addresses
-  and at most 2,000 hot recipients per production chain. Staging uses D10/H20/Q30/refunds1/1
+  uses 89.99% of its stop line at D152/H300/Q600/F240/checks100/refunds10/10, with 12,000 historical addresses
+  and at most 2,000 hot recipients per production chain. Staging uses D10/H20/Q30/F30/checks10/refunds1/1
   at 1,000 addresses/chain. The budget includes unbatched openings and monthly recovery; see
   the authoritative formulas before changing load.
 - **Allocation C (next candidate, untested):** replace staging read with Chainstack free on

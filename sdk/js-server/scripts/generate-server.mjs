@@ -52,7 +52,8 @@ for (const [path, methods] of Object.entries(api.paths))
     const query = (op.parameters ?? []).filter((p) => p.in === "query");
     const paramAlias = `${pascal({ deposit_addresses: "deposit_address", treasuries: "treasury" }[resource] ?? resource.replace(/s$/, ""))}${pascal(method === "listPage" ? "list" : method)}Params`;
     let paramType;
-    if (body || query.length) {
+    // Server POST actions use merchant-key auth; query-only credentials are not a body.
+    if (body || (httpMethod !== "post" && query.length)) {
       paramType = paramAlias;
       if (!aliases.has(paramAlias)) {
         aliases.add(paramAlias);

@@ -297,6 +297,7 @@ const ROUTE_PERMISSIONS: &[(&str, &str, Permission)] = &[
     ("GET", "/v1/quotes/{id}", Permission::QuotesRead),
     ("POST", "/v1/quotes/{id}", Permission::QuotesWrite),
     ("POST", "/v1/quotes/{id}/cancel", Permission::QuotesWrite),
+    ("POST", "/v1/quotes/{id}/check", Permission::QuotesWrite),
     (
         "POST",
         "/v1/quotes/{id}/transactions",
@@ -439,7 +440,12 @@ fn client_secret_routes() -> OpenApiRouter<AppState> {
 fn hint_routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(transactions::submit_quote_transaction))
+        .routes(routes!(transactions::check_quote))
         .routes(routes!(transactions::submit_deposit_address_transaction))
+        .route(
+            "/v1/quotes/{id}/check",
+            axum::routing::options(|| async { StatusCode::NO_CONTENT }),
+        )
         // Mount preflight routes inside the same global admission and acknowledgement layers.
         .route(
             "/v1/quotes/{id}/transactions",
@@ -1057,6 +1063,7 @@ mod tests {
             for path in [
                 "/v1/quotes/qt_test/transactions",
                 "/v1/deposit_addresses/da_test/transactions",
+                "/v1/quotes/qt_test/check",
             ] {
                 let state = offline_state();
                 let pool = state.pool.clone();
@@ -1109,7 +1116,14 @@ mod tests {
                 assert_eq!(response.status(), StatusCode::ACCEPTED);
                 let body = to_bytes(response.into_body(), 4096).await.unwrap();
                 let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
-                assert_eq!(body["transaction_hash"], "after-release");
+                if path.ends_with("/check") {
+                    assert_eq!(
+                        body,
+                        serde_json::json!({"object":"quote_check","status":"received"})
+                    );
+                } else {
+                    assert_eq!(body["transaction_hash"], "after-release");
+                }
                 pool.close().await;
             }
         }

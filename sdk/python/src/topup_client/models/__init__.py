@@ -76,6 +76,8 @@ from .payment_settings_chain import PaymentSettingsChain
 from .payment_settings_object import PaymentSettingsObject
 from .payment_settings_object_object import PaymentSettingsObjectObject
 from .quote import Quote
+from .quote_check import QuoteCheck
+from .quote_check_object import QuoteCheckObject
 from .quote_list import QuoteList
 from .quote_list_object import QuoteListObject
 from .quote_metadata import QuoteMetadata
@@ -192,6 +194,8 @@ __all__ = (
     "PaymentSettingsObject",
     "PaymentSettingsObjectObject",
     "Quote",
+    "QuoteCheck",
+    "QuoteCheckObject",
     "QuoteList",
     "QuoteListObject",
     "QuoteMetadata",

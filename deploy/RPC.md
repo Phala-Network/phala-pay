@@ -76,6 +76,38 @@ halts that endpoint until UTC midnight (5:00 PM PDT, 4:00 PM PST).
 
 Read-only discovery runs every five minutes over each payment chain's hot addresses: any quote
 created in the last 24 hours, or any deposit with chain block time in the last seven days.
+For open quotes still before `expires_at`, an extra
+read-only pass runs every 60 seconds, skipping ticks shared with the five-minute round.
+Empty chain sets cost zero RPC and claim no budget. Each nonempty round atomically claims
+`fresh_quote:<chain>` in `daily_budgets` before RPC, including failed rounds; restarts never reset
+usage. Production allows 240 extra rounds/chain/UTC day, staging 30. Overlapping quotes share
+rounds. With four extra ticks per five minutes, this buys about five hours of continuously active
+quote time in production (four hours of one-minute tick count), not all-day one-minute coverage.
+Exhaustion silently leaves five-minute discovery in force until UTC rollover. Closed and expired quotes retain the normal discovery path. No additional verify
+traffic is introduced by these rounds: candidates remain provisional until the existing dual
+confirmation pipeline verifies them. Fresh scans re-read from the normal cursor without advancing
+it, so they cannot skip other hot recipients; exact dual proofs avoid repeated receipt completion.
+The F bound covers up to the same hot-set budget (`h_fresh≤2` production, `≤1` staging). Safe head
+reads, unexpectedly wide backlog ranges and extra completion use the existing variable/recovery
+allowances. Do not run repeated failed regular rounds on an unlimited stale range.
+`topup_rpc_calls_total{workload="fresh_quote"}` labels actual attempts (including retries), and
+`topup_fresh_quote_rounds_total{chain_id,result}` counts `scanned`, `empty`, `failed` and
+`budget_exhausted` ticks. Durable daily usage/limit gauges use `name="fresh_quote:<chain>"`;
+`TopupRpcFreshQuoteBudgetExhausted` reports exhaustion through the business detector. All actual
+RPC attempts also feed existing persisted provider tallies and the 80% quota warning.
+
+Authenticated `POST /v1/quotes/{id}/check` requests a one-address discovery pass through a bounded,
+coalescing queue (up to four workers, 256 entries, 30-second task deadline). Only open, unexpired
+quotes qualify; later payers retain normal scanning and transaction hints. Checks share no hint
+budget: at most three per quote/rolling 24 hours, at least 15 seconds apart per physical address,
+and at most 100/production chain/UTC day or 10/staging chain. Admission history and the daily
+`quote_check:<chain>` claim commit atomically before network I/O, survive restarts and restore,
+and failures consume claims. Pending work is process-local, as with hints. Concurrent requests
+for an address coalesce; overload/exhaustion returns the same quiet acknowledgement and leaves
+normal scanning in force. The pass never advances the normal cursor. Actual attempts use
+`workload="quote_check"` and the existing provider tally/80% warning path. Daily gauges and
+`TopupRpcQuoteCheckBudgetExhausted` expose exhaustion.
+
 Configure those defaults through `discovery.quote_window_hours` and
 `discovery.deposit_window_days`. The quote window must cover every route's maximum permitted
 quote TTL; validation rejects a shorter window. All quote/deposit states qualify; no activity cache is used.
@@ -106,13 +138,15 @@ Both environments use Ankr read; production uses BlockPI verify, staging uses In
 
 | Limit | Production | Staging | Enforcement |
 |---|---:|---:|---|
-| Deposits handled/day, D | 280 | 10 | Operational |
+| Deposits handled/day, D | 152 | 10 | Operational |
 | Concurrent attached pending refunds, R | 10 | 1 | Atomic attachment admission |
 | New refund attachments/rolling 24 h, N | 10 | 1 | Atomic admission (`max_refund_attachments_per_day`) |
 | Unresolved finality stock/environment, S | 1 | 1 | Operational; pause affected-chain quotes and escalate above S |
 | New unresolved entries/environment/rolling 24 h | 1 | 1 | Operational; same stock stop rule |
 | Current slow-confirmation stock, L/environment | 1 | 1 | Operational; pause affected-chain quotes above the limit |
 | New slow-confirmation entries/environment/rolling 24 h | 1 | 1 | Operational; same L capacity stop rule |
+| Extra fresh-quote rounds/payment chain/UTC day, F | 240 | 30 | Atomic persisted budget (`discovery.fresh_quote_rounds_per_day`) |
+| On-demand checks/payment chain/UTC day | 100 | 10 | Atomic daily + rolling per-quote admission (`discovery.quote_checks_per_day`) |
 | Hint tasks/environment/UTC day, H | 300 | 20 | Atomic daily budget (`hints_per_day`) |
 | Fresh quote snapshots/price chain/environment/UTC day, Q | 600 | 30 | Atomic daily budget (`quote_snapshots_per_day`) |
 | Factory receipt-fallback instances/day | 150 | 20 | Operational |
@@ -189,6 +223,7 @@ The fixed daily formulas per payment chain and endpoint are:
 
 ```text
 Fast read only:     288 × (1 head + h recipient-log queries)
+Fresh quotes only:  F × (1 head + h_fresh recipient-log queries), h_fresh ≤ h
 Checkpoint:        144 × (2 headers + up to 1 ahead-provider pin) ≤ 432
 Coverage:          24 × (k recipient-log queries + 1 factory query) on Ankr/Infura
 BlockPI coverage:  24 × (k+1) on Ethereum; 48 × (k+1) on Base
@@ -450,11 +485,13 @@ attempts; non-refund work uses ×1.1. The exact daily equations are:
 
 ```text
 Shared Ankr non-refund:
-5,488 fixed + 1,548 prices + 15×(280+10) D + 12×(300+20) H
+5,488 fixed + 1,548 prices + 15×(152+10) D + 12×(300+20) H
 + 3×(150+20) factory + 3×12 Safe + 300 extra + 380 openings
-+ 688 S + 172 L + 300 monthly-recovery average = 17,612
++ 688 S + 172 L + 300 monthly-recovery average
++ 2×240×3 production fresh + 2×30×2 staging fresh
++ 2×100×2 production checks + 2×10×2 staging checks = 17,692
 Refunds: 3×(80×11 + 12×11) = 3,036
-Total: ceil(17,612×1.1 + 3,036) = 22,410 calls/day
+Total: ceil(17,692×1.1 + 3,036) = 22,498 calls/day
 
 Staging-only Infura non-refund:
 94,880 fixed + 240×348 prices + 1,520×10 D + 640×20 H
@@ -464,29 +501,37 @@ Refunds: 3×(6,400×1 + 960×1) = 22,080
 Total: 367,070×1.1 + 22,080 = 425,857 credits/day
 
 Production-only BlockPI non-refund:
-66,960 fixed + 60×1,200 prices + 665×280 D + 280×300 H
+66,960 fixed + 60×1,200 prices + 665×152 D + 280×300 H
 + 70×150 factory + 40×10 Safe + 50×150 extra + 20×300 openings
-+ 85×86 S + 20×86 L + 50×300 recovery = 457,590
++ 85×86 S + 20×86 L + 50×300 recovery = 372,470
 Refunds: 3×(2,800×10 + 420×10) = 96,600
-Total: 457,590×1.1 + 96,600 = 599,949 RU/day
+Total: ceil(372,470×1.1 + 96,600) = 506,317 RU/day
 ```
 
-Staging's share of shared Ankr is `ceil(3,592×1.1+276)=4,228` calls/day before the shared
+Staging's share of shared Ankr is `ceil(3,752×1.1+276)=4,404` calls/day before the shared
 monthly reserve: fixed 2,128; prices 348; D 150; H 240; factory 60; Safe 6; extra 150; openings
-80; S 344; L 86. The shared recovery allowance adds 330 after ×1.1. Production and staging do
+80; S 344; L 86; fresh 120; on-demand checks 40. The shared recovery allowance adds 330 after ×1.1. Production and staging do
 not receive separate Ankr quotas; BlockPI's two chain keys also share one account.
 
 | Provider account | Modeled daily usage | Stop line/day | Usage of stop line | Headroom |
 |---|---:|---:|---:|---:|
-| Ankr (production + staging read) | 22,410 calls | 25,000 calls | **89.64%** | **10.36%** |
+| Ankr (production + staging read) | 22,498 calls | 25,000 calls | **89.99%** | **10.01%** |
 | Infura (staging verify) | 425,857 credits | 1,500,000 credits | **28.39%** | **71.61%** |
-| BlockPI (production verify) | 599,949 RU | 1,250,000 RU | **48.00%** | **52.00%** |
+| BlockPI (production verify) | 506,317 RU | 1,250,000 RU | **40.51%** | **59.49%** |
 
-At all other stated allowances, shared Ankr is `17,789.2 + 16.5·D_production`:
-D=300 would cost 22,740/day (90.96%), missing ten-percent headroom. The mathematical ceiling
-is D=285 (22,492, 89.97%); the operational cap rounds down to **D=280**.
-**Production: D280/H300/Q600, refunds N10/R10, per-account R3, 12,000 addresses/chain.**
-**Staging: D10/H20/Q30, refunds N1/R1, 1,000 addresses/chain.** Factory remains 150/20 and Safe
+At all other stated allowances, including automatic F240/F30 and on-demand checks100/10 per
+chain/day, shared Ankr is `ceil(19,989.2 + 16.5·D_production)`. The highest D retaining at least
+ten-percent headroom is **D=152** (22,498/day, 10.008% headroom); D153 would use 22,514/day.
+The previous D280 budget was 22,410/day. Automatic rounds add
+`(2×240×3 + 2×30×2)×1.1 = 1,716` calls/day; one-address on-demand checks add
+`(2×100×2 + 2×10×2)×1.1 = 484` calls/day. Each on-demand check is one latest header plus one
+recipient-topic log query (not the hot set's two-page bound). Cold completion remains in D's
+three discovery methods, with shared immutable endpoint caches eliminating repeated completion;
+cache churn, reorgs and unusually wide ranges use recovery. Reducing D by 128 saves
+`128×15×1.1 = 2,112` calls/day. H, Q, refunds and dual confirmation remain unchanged.
+D is an operational allowance and early-warning threshold, not a new payment admission gate.
+**Production: D152/H300/Q600/F240 per chain, refunds N10/R10, per-account R3, 12,000 addresses/chain.**
+**Staging: D10/H20/Q30/F30 per chain, refunds N1/R1, 1,000 addresses/chain.** Factory remains 150/20 and Safe
 10/2. These are modeled allowances, not measured seven-day run rates. Watch the hot set,
 issuance, monthly recovery ledger and provider dashboards; stop lines bind even within the
 workload caps. See the [dated capacity check](RPC-PROVIDERS.md#capacity-check-2026-10-30).
@@ -594,9 +639,9 @@ configured `quota_alerts.rpc[].stop_line`), critical at the stop line, and
 `TopupDepositDailyLimit` at `quota_alerts.deposits_per_day`. These are managed through the
 existing admin alerts API; no collector or new delivery setup is required.
 
-Ankr's local allocations are **20,442 production + 4,558 staging = 25,000 calls/day**. Staging
-gets its modeled 4,228 plus 330 for shared monthly recovery; production gets the remainder.
-The 80% warning boundaries are 16,354 and 3,647 calls respectively. These allocations do not
+Ankr's local allocations are **20,266 production + 4,734 staging = 25,000 calls/day**. Staging
+gets its modeled 4,404 plus 330 for shared monthly recovery; production gets the remainder.
+The 80% warning boundaries are 16,213 and 3,788 calls respectively. These allocations do not
 create separate provider quotas. BlockPI is 1,250,000 RU/day and Infura 1,500,000 credits/day,
 warning at 1,000,000 RU and 1,200,000 credits. Configure exact endpoint ids, including staging's
 mainnet price endpoints; a provider label is never inferred from a URL.
@@ -614,8 +659,11 @@ authoritative for combined monthly usage. Counters start at upgrade; reconcile t
 pre-upgrade calls manually. Restarts preserve committed daily tallies and UTC rollover starts a
 new day. A read-only restore process does not write these monitoring tables.
 
-Older binaries reject `quota_alerts`; use the target release's retained configuration and kit
-for rollback. The drill strips this key when the target configuration lacks it. Disabled quota
+Older binaries reject `quota_alerts` and `discovery.fresh_quote_rounds_per_day`/`quote_checks_per_day`; use the target release's retained configuration and kit
+for rollback. The drill strips this key when the target configuration lacks it. The fresh-quote key is omitted from resolved output when zero (disabled). The expand-only `quote_checks` table retains rolling check history; the compatibility floor
+remains `20261112000000`. The existing daily budget table retains F/check counts across rollback
+and restore. Roll back to v0.13.5 with its retained config and D280/F0 allocation; do not reuse
+the new config with that binary. Disabled quota
 configuration is omitted from resolved/attested output for compatibility.
 
 Maintain manual daily tallies of factory verification instances and Safe attempts, including

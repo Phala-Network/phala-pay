@@ -3499,6 +3499,35 @@
         ],
         "type": "object"
       },
+      "QuoteCheck": {
+        "description": "Quiet receipt of a check request; poll the quote for actual payment status.",
+        "example": {
+          "object": "quote_check",
+          "status": "received"
+        },
+        "properties": {
+          "object": {
+            "$ref": "#/components/schemas/QuoteCheckObject",
+            "description": "Object discriminator."
+          },
+          "status": {
+            "$ref": "#/components/schemas/TransactionSubmissionStatus",
+            "description": "Receipt only; limits and processing outcomes are deliberately not disclosed."
+          }
+        },
+        "required": [
+          "object",
+          "status"
+        ],
+        "type": "object"
+      },
+      "QuoteCheckObject": {
+        "description": "Constant quote-check acknowledgement discriminator.",
+        "enum": [
+          "quote_check"
+        ],
+        "type": "string"
+      },
       "QuoteList": {
         "description": "A page of quotes, newest first (<https://docs.stripe.com/api/pagination>).",
         "example": {
@@ -12525,6 +12554,71 @@
           }
         ],
         "summary": "Cancels an open, unpaid quote; a canceled quote is returned unchanged. Later payments to its\naddress are credited at spot.",
+        "tags": [
+          "quotes"
+        ]
+      }
+    },
+    "/v1/quotes/{id}/check": {
+      "post": {
+        "operationId": "check_quote",
+        "parameters": [
+          {
+            "description": "Quote identifier",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Object's browser client secret; omit with a merchant key",
+            "in": "query",
+            "name": "client_secret",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteCheck"
+                }
+              }
+            },
+            "description": "Received, including ignored checks. Poll the quote for payment status.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Tenant data and credentials must never be stored, including errors",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Request-Id": {
+                "description": "The request's id, `req_…` (https://docs.stripe.com/api/request_ids)",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {}
+        ],
+        "summary": "Request immediate read-only discovery for an open, unexpired quote's issued address.",
         "tags": [
           "quotes"
         ]

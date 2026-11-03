@@ -329,10 +329,18 @@ impl Harness {
         ensure!(response.status() == StatusCode::ACCEPTED);
         ensure!(response.headers()["access-control-allow-origin"] == "*");
         let value: Value = serde_json::from_slice(&to_bytes(response.into_body(), 4096).await?)?;
-        ensure!(
-            value
-                == json!({"object":"transaction_submission","transaction_hash":body["transaction_hash"],"status":"received"})
-        );
+        if path
+            .split('?')
+            .next()
+            .is_some_and(|path| path.ends_with("/check"))
+        {
+            ensure!(value == json!({"object":"quote_check","status":"received"}));
+        } else {
+            ensure!(
+                value
+                    == json!({"object":"transaction_submission","transaction_hash":body["transaction_hash"],"status":"received"})
+            );
+        }
         Ok(value)
     }
     fn worker(&self, pool: &sqlx::PgPool) -> (CancellationToken, Task) {
@@ -362,6 +370,78 @@ async fn deposits(pool: &sqlx::PgPool) -> Result<i64> {
     Ok(sqlx::query_scalar("SELECT count(*) FROM deposits")
         .fetch_one(pool)
         .await?)
+}
+
+#[tokio::test]
+async fn quote_check_is_object_authenticated_quiet_cors_bounded_and_read_only_safe() -> Result<()> {
+    support::with_database(|db| {
+        Box::pin(async move {
+            let h = harness(&db.app_pool, Rpc::new(), Rpc::new()).await?;
+            let path = format!("/v1/quotes/{}/check", h.quote_id);
+            h.submit(&format!("{path}?client_secret=wrong"), None, json!({}))
+                .await?;
+            ensure!(h.queue.checks.pending() == 0);
+            // Cancelled (fixture) quotes must be ignored even with valid object authentication.
+            h.submit(
+                &format!("{path}?client_secret={}", h.secret),
+                None,
+                json!({}),
+            )
+            .await?;
+            ensure!(h.queue.checks.pending() == 0);
+            sqlx::query(
+                "UPDATE quotes SET status='open',closed_at=NULL,expires_at=now()+interval '1 hour'",
+            )
+            .execute(&db.app_pool)
+            .await?;
+            let response = h
+                .app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("OPTIONS")
+                        .uri(&path)
+                        .body(Body::empty())?,
+                )
+                .await?;
+            ensure!(
+                response.status() == StatusCode::NO_CONTENT
+                    && response.headers()["access-control-allow-origin"] == "*"
+            );
+            h.submit(
+                &format!("{path}?client_secret={}", h.secret),
+                None,
+                json!({}),
+            )
+            .await?;
+            ensure!(h.queue.checks.pending() == 1);
+            h.submit(&path, Some(&h.key), json!({})).await?;
+            ensure!(
+                h.queue.checks.pending() == 1,
+                "concurrent same-address checks were not coalesced"
+            );
+            ensure!(
+                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM quote_checks")
+                    .fetch_one(&db.app_pool)
+                    .await?
+                    == 0,
+                "admission queue performed RPC work inline"
+            );
+            let response = h
+                .read_only_app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("{path}?client_secret={}", h.secret))
+                        .body(Body::empty())?,
+                )
+                .await?;
+            ensure!(response.status() == StatusCode::ACCEPTED);
+            Ok(())
+        })
+    })
+    .await
 }
 
 #[tokio::test]

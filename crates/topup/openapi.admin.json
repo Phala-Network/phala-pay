@@ -8353,7 +8353,7 @@
                 }
               }
             },
-            "description": "OK: the process's counters in the Prometheus text format, such as `topup_rpc_calls_total{provider, chain_id, method}`; they restart at zero with the process",
+            "description": "OK: the process's counters in the Prometheus text format, such as `topup_rpc_calls_total{provider, chain_id, method, workload}`; they restart at zero with the process",
             "headers": {
               "Cache-Control": {
                 "description": "Tenant data and credentials must never be stored, including errors",

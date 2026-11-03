@@ -24,6 +24,7 @@ type Case = {
   body?: unknown;
 };
 const cases: Case[] = [
+  { name: "quotes.check", operation: "check_quote", call: (pay) => pay.quotes.check(id) },
   {
     name: "quotes.create",
     operation: "create_quote",
@@ -304,6 +305,26 @@ describe("normative resource wire contract", () => {
       await pay.close();
     },
   );
+  it("quotes.check forwards second-argument controls without sending a body", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>()
+      .mockResolvedValue(errorResponse(400, "contract_probe"));
+    const pay = new PhalaPay({ apiKey, pins, fetch });
+    await expect(pay.quotes.check(id, {
+      idempotencyKey: "quote-check-contract",
+      requestDeadlineMs: 1000,
+    })).rejects.toBeInstanceOf(ApiError);
+    const [input, init] = fetch.mock.calls[0] ?? [];
+    expect(new URL(requestUrl(input)).pathname).toBe(`/v1/quotes/${encodeURIComponent(id)}/check`);
+    expect(init?.body).toBeUndefined();
+    expect(new Headers(init?.headers).get("idempotency-key")).toBe("quote-check-contract");
+    fetch.mockClear();
+    const controller = new AbortController();
+    controller.abort();
+    await expect(pay.quotes.check(id, { signal: controller.signal }))
+      .rejects.toMatchObject({ code: "cancelled" });
+    expect(fetch).not.toHaveBeenCalled();
+    await pay.close();
+  });
   it("covers every merchant OpenAPI operation without including attestation/setup", () => {
     const expected = Object.values(api.paths)
       .flatMap((methods) => Object.values(methods).map((operation) => operation.operationId))

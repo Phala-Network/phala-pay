@@ -161,6 +161,27 @@ pub(crate) fn replacement_ambiguous(chain_id: u64) {
         .capture();
 }
 
+static FRESH_ROUNDS: OnceLock<Result<IntCounterVec, prometheus::Error>> = OnceLock::new();
+fn fresh_rounds() -> &'static Result<IntCounterVec, prometheus::Error> {
+    FRESH_ROUNDS.get_or_init(|| {
+        IntCounterVec::new(
+            Opts::new(
+                "topup_fresh_quote_rounds_total",
+                "Fresh quote discovery tick outcomes.",
+            ),
+            &["chain_id", "result"],
+        )
+    })
+}
+/// Count skipped and attempted fresh-quote ticks with bounded outcome labels.
+pub(crate) fn fresh_quote_round(chain: u64, result: &'static str) {
+    if let Ok(counter) = fresh_rounds() {
+        counter
+            .with_label_values(&[&chain.to_string(), result])
+            .inc();
+    }
+}
+
 /// Renders counters, histograms and current pool gauges without database or network I/O.
 pub fn render(pool: &PgPool) -> Result<String, prometheus::Error> {
     let http = http().map_err(|_| prometheus::Error::Msg("HTTP metrics unavailable".into()))?;
@@ -169,14 +190,14 @@ pub fn render(pool: &PgPool) -> Result<String, prometheus::Error> {
             "topup_rpc_calls_total",
             "JSON-RPC calls sent since process start.",
         ),
-        &["provider", "chain_id", "method"],
+        &["provider", "chain_id", "method", "workload"],
     )?;
     for count in rpc_call_counts() {
         let chain = count
             .chain_id
             .map_or_else(|| "unknown".to_owned(), |id| id.to_string());
         calls
-            .with_label_values(&[&count.provider, &chain, count.method])
+            .with_label_values(&[&count.provider, &chain, count.method, count.workload])
             .inc_by(count.calls);
     }
     let connections = IntGaugeVec::new(
@@ -252,6 +273,9 @@ pub fn render(pool: &PgPool) -> Result<String, prometheus::Error> {
     families.extend(super::capacity::collect()?);
     families.extend(super::price_metrics::collect()?);
     families.extend(super::sanctions_metrics::collect()?);
+    if let Ok(counter) = fresh_rounds() {
+        families.extend(counter.collect());
+    }
     families.extend(replacement_ambiguities()?.collect());
     families.extend(http.requests.collect());
     families.extend(http.latency.collect());
@@ -276,6 +300,14 @@ pub fn render_daily_budget_limits(
     limits
         .with_label_values(&["hints"])
         .set(i64::from(routes.hints_per_day()));
+    for chain in routes.chain_ids() {
+        limits
+            .with_label_values(&[&format!("fresh_quote:{chain}")])
+            .set(i64::from(routes.discovery().fresh_quote_rounds_per_day));
+        limits
+            .with_label_values(&[&format!("quote_check:{chain}")])
+            .set(i64::from(routes.discovery().quote_checks_per_day));
+    }
     for chain in routes.rpc().keys() {
         limits
             .with_label_values(&[&format!("price:{chain}")])
@@ -479,8 +511,16 @@ mod tests {
             let routes = crate::routes::RouteSet::with_rpc(config.routes, clients)
                 .expect("valid routes")
                 .with_daily_budgets(config.hints_per_day, config.quote_snapshots_per_day)
-                .expect("validated limits");
+                .expect("validated limits")
+                .with_discovery(config.discovery);
             let metrics = render_daily_budget_limits(&routes).expect("metrics");
+            for chain in routes.chain_ids() {
+                assert!(metrics.lines().any(|line| line
+                    == format!(
+                        "topup_daily_budget_limit{{name=\"fresh_quote:{chain}\"}} {}",
+                        config.discovery.fresh_quote_rounds_per_day
+                    )));
+            }
             assert!(metrics.lines().any(|line| line
                 == format!(
                     "topup_daily_budget_limit{{name=\"hints\"}} {}",

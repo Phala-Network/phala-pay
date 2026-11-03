@@ -29,3 +29,20 @@ describe("transaction hints", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("quote checks", () => {
+  it("uses the quote secret and configured origin without claiming a payment result", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response("{}", { status: 202 }));
+    await new PhalaPay({ apiBase: API_BASE, fetch }).checkQuote(CLIENT_SECRET);
+    const [input, init] = fetch.mock.calls[0] ?? [];
+    if (!(input instanceof URL)) throw new TypeError("Expected URL");
+    expect(input.origin).toBe(API_BASE);
+    expect(input.pathname).toMatch(/^\/v1\/quotes\/qt_.+\/check$/);
+    expect(input.searchParams.get("client_secret")).toBe(CLIENT_SECRET);
+    expect(init?.method).toBe("POST");
+    expect(init?.credentials).toBe("omit");
+    expect(init?.redirect).toBe("error");
+    fetch.mockResolvedValueOnce(new Response("{}", { status: 503 }));
+    await expect(new PhalaPay({ apiBase: API_BASE, fetch }).checkQuote(CLIENT_SECRET)).rejects.toThrow("not received");
+  });
+});

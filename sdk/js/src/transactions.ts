@@ -37,6 +37,22 @@ export async function submitTransaction(options: SubmitTransactionOptions): Prom
   if (response.status !== 202) throw new Error("Transaction hint was not received");
 }
 
+export type CheckQuoteOptions = Omit<SubmitTransactionOptions, "transactionHash" | "chainId">;
+
+/** Requests address discovery; receipt acknowledges only the request. Continue polling the quote. */
+export async function checkQuote(options: CheckQuoteOptions): Promise<void> {
+  const id = quoteIdFromClientSecret(options.clientSecret);
+  const url = new URL(`${trimTrailingSlashes(options.apiBase)}/v1/quotes/${encodeURIComponent(id)}/check`);
+  url.searchParams.set("client_secret", options.clientSecret);
+  const response = await (options.fetch ?? globalThis.fetch)(url, {
+    method: "POST",
+    signal: requestSignal(options),
+    credentials: "omit",
+    redirect: "error",
+  });
+  if (response.status !== 202) throw new Error("Quote check was not received");
+}
+
 type QuoteSubmission = Omit<SubmitTransactionOptions, "transactionHash" | "chainId">;
 const submissions = new WeakMap<ClientQuote, QuoteSubmission>();
 

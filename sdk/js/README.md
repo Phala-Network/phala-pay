@@ -463,3 +463,13 @@ The checkout session retains its last known status and quote during temporary ne
 and exposes `reconnecting: true` with no permanent error. Polling resumes with bounded backoff and
 Retry-After; a successful refresh clears the reconnecting state. Invalid-secret and address-mismatch
 handling remains unchanged. See [planned upgrades](../../docs/integration.md#planned-upgrades-and-reconnecting).
+
+### Requesting a quote check
+
+`await pay.checkQuote(clientSecret)` requests an immediate read-only discovery pass for the
+quote's issued address. The server acknowledges with 202 even when it coalesces or limits a
+request. Continue polling the quote for payment status; receipt never establishes payment.
+Only open, unexpired quotes qualify. The service permits three checks/quote/rolling 24 hours,
+15-second address spacing, and a separate per-chain daily budget; otherwise normal scanning
+continues. The exported `checkQuote({ apiBase, clientSecret })` supports the same request controls
+as transaction hints.

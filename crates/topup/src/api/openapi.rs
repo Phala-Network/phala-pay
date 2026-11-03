@@ -147,7 +147,7 @@ pub(super) fn admin(openapi: &OpenApi) -> Value {
 fn is_transaction_submission(operation: &Value) -> bool {
     matches!(
         operation["operationId"].as_str(),
-        Some("submit_quote_transaction" | "submit_deposit_address_transaction")
+        Some("submit_quote_transaction" | "submit_deposit_address_transaction" | "check_quote")
     )
 }
 

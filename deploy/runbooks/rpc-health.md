@@ -69,7 +69,7 @@ Pause new issuance before that allowance is spent. An alert above it requires re
 opening jobs and RPC counters, debiting the excess/retries to the 150-call extra or monthly
 recovery reserve, and waiting for rolling usage to fit before resuming. Continue opening proof
 capture and all funded verification. These are operational allowances with alerts, not atomic
-admission limits. D is separately capped at 280 production/10 staging per UTC day, including
+admission limits. D is separately capped at 152 production/10 staging per UTC day, including
 recovery work. Check the [shared-account budget](../RPC.md#worst-case-pilot-budget).
 
 ## Confirmation provider lag
@@ -149,7 +149,7 @@ allocation. Continue verifying received funds, keep reservations, and retain eve
 Do not reset history/counters or speed polling up. Resolved entries stay in the rolling window
 until 24 hours after first entry. Resume new load only after stock and rolling entries both
 return to at most one, both endpoints recover, and existing payments resume confirmation.
-Production deposits/day is 280 and staging 10; include both in shared quota checks.
+Production deposits/day is 152 and staging 10; include both in shared quota checks.
 
 Receipt absence, disagreement, evidence changes and RPC failures instead enter S, which has
 its own stock/entry alerts and one-hour age alert. Follow the existing
@@ -222,11 +222,11 @@ At warning, reconcile both environments with the provider dashboard and stop add
 tests, factory/Safe proofs or recovery load until the remaining allocation is understood. At
 the stop line, pause new quotes on affected chains using the existing route-pause procedure;
 continue handling received funds. Do not reset tallies, add accounts, or speed up polling.
-Ankr's production/staging allocations are 20,442/4,558 calls; the combined account has 25,000.
-The local warning boundaries are 16,354/3,647. The dashboard remains authoritative for combined
+Ankr's production/staging allocations are 20,266/4,734 calls; the combined account has 25,000.
+The local warning boundaries are 16,213/3,788. The dashboard remains authoritative for combined
 monthly billing and surcharges. See the [budget model](../RPC.md#worst-case-pilot-budget).
 
-`TopupDepositDailyLimit` warns at D (production 280, staging 10). Count newly observed deposit
+`TopupDepositDailyLimit` warns at D (production 152, staging 10). Count newly observed deposit
 rows across all chains and modes, including rejected rows; worker retries do not increase D.
 Pause intake and reconcile the remaining RPC budget before resuming. Factory/Safe attempts and
 recovery still require manual tallies; D is an alert, not an automatic rejection gate.
@@ -243,3 +243,25 @@ be read as zero usage or recovery. Committed tallies survive restarts; a crash c
 flush interval with a healthy database, and outages extend that window. A bounded final flush
 runs on graceful shutdown. The UTC day resets quota conditions. The upgrade day's earlier
 calls, read-only restore processes and standalone CLI calls are outside the tally.
+
+## Fresh quote discovery budget
+
+`discovery.fresh_quote_rounds_per_day` adds 60-second read-only passes for open quotes
+throughout their validity, before expiry. Production F=240 and staging F=30 per payment chain
+and UTC day. Regular five-minute ticks replace coincident extra ticks. Empty chains make no
+RPC calls or claim; failed nonempty rounds spend one claim. Overlapping quotes share rounds.
+`TopupRpcFreshQuoteBudgetExhausted` and `topup_fresh_quote_rounds_total{result="budget_exhausted"}`
+mean normal five-minute discovery is still running. Customers may paste a transaction hash for
+the existing hint path. Do not raise F or reset/delete its `daily_budgets` rows to force speed:
+review [the shared budget](../RPC.md#worst-case-pilot-budget) first. Claims survive restarts and
+restore, and reset naturally on UTC rollover. Actual fresh attempts carry
+`workload="fresh_quote"` and still enter existing provider tallies/80% warnings. Funded production
+D=152 is the operational stop/alert threshold; H300/Q600/refunds10/10 are unchanged.
+
+`discovery.quote_checks_per_day` funds the independent on-demand `/check` endpoint: production
+100/chain/day, staging 10, with three/quote/rolling day and 15-second address spacing. Its bounded
+queue coalesces concurrent address checks and retains normal scanning on overload/exhaustion.
+`TopupRpcQuoteCheckBudgetExhausted` uses `quote_check:<chain>` daily usage/limits. Do not clear
+`quote_checks` or daily budgets to bypass admission. History survives restart, restore and binary
+rollback; the down migration preserves it. These calls use `workload="quote_check"` and remain
+in the provider early-warning totals.

@@ -12,8 +12,8 @@ pub async fn claim(pool: &PgPool, name: &str, limit: i32) -> Result<bool, sqlx::
 }
 
 /// Claims at an explicit UTC day, for deterministic rollover and concurrency tests.
-pub async fn claim_on(
-    pool: &PgPool,
+pub async fn claim_on<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
     day: NaiveDate,
     name: &str,
     limit: i32,
@@ -29,7 +29,7 @@ pub async fn claim_on(
     .bind(day)
     .bind(name)
     .bind(limit)
-    .execute(pool)
+    .execute(executor)
     .await?
     .rows_affected()
         == 1)

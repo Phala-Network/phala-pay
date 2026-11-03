@@ -224,6 +224,14 @@ npm (environment `npm`) with trusted publishing and provenance
 [its releases before v0.5.0](https://github.com/Phala-Network/phala-pay/blob/main/sdk/js/CHANGELOG.md),
 versioned on their own, stay in `sdk/js`.
 
+## Requesting a quote check
+
+`await pay.quotes.check(quoteId)` requests an immediate read-only discovery pass for an open,
+unexpired quote's issued address. Quiet 202 receipt acknowledges the request only; keep normal
+polling/webhook crediting. Checks permit three/quote/rolling day, 15-second address spacing and
+a separate per-chain daily budget. Concurrent requests coalesce; exhaustion leaves normal scanning
+running.
+
 ## Receipt helpers
 
 `@phala/pay-server/helpers` exports `stripeReceiptInvoice(deposit, { customer, description? })`,

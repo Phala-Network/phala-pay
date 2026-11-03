@@ -113,9 +113,9 @@ mod tests {
         );
         let config = crate::config::Config::parse(configured).unwrap();
         let again = crate::config::Config::parse(&config.resolved_json().unwrap()).unwrap();
-        assert_eq!(again.quota_alerts.rpc[0].stop_line.get(), 20_442);
+        assert_eq!(again.quota_alerts.rpc[0].stop_line.get(), 20_266);
         assert!(
-            crate::config::Config::parse(&configured.replace("stop_line: 20442", "stop_line: 0"))
+            crate::config::Config::parse(&configured.replace("stop_line: 20266", "stop_line: 0"))
                 .is_err()
         );
         assert!(

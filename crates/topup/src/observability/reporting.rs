@@ -197,6 +197,8 @@ fn runbook(alert: &str, tags: &BTreeMap<String, String>) -> &'static str {
         | "TopupRpcConfirmationProviderLag"
         | "TopupRpcConfirmationSlowStock"
         | "TopupRpcConfirmationSlowEntries"
+        | "TopupRpcFreshQuoteBudgetExhausted"
+        | "TopupRpcQuoteCheckBudgetExhausted"
         | "TopupRpcHintBudgetExhausted"
         | "TopupRpcPriceSnapshotBudgetExhausted"
         | "TopupRpcHotAddressBudget"
@@ -533,6 +535,8 @@ mod tests {
             "TopupRpcConfirmationSlowStock",
             "TopupRpcConfirmationSlowEntries",
             "TopupRpcConfirmationProviderLag",
+            "TopupRpcFreshQuoteBudgetExhausted",
+            "TopupRpcQuoteCheckBudgetExhausted",
             "TopupRpcHintBudgetExhausted",
             "TopupRpcPriceSnapshotBudgetExhausted",
             "TopupRpcHotAddressBudget",

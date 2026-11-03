@@ -69,6 +69,7 @@
   "Quotes": {
     "__init__": "(self, client, issued_quotes)",
     "cancel": "(self, quote_id, *, idempotency_key=None, **options)",
+    "check": "(self, quote_id, **options)",
     "create": "(self, *, client_reference_id, amount, chain_id, asset, currency='usd', idempotency_key=None, metadata=None, **options)",
     "list": "(self, *, client_reference_id=None, status=None, limit=100, starting_after=None, **options)",
     "list_page": "(self, *, client_reference_id=None, status=None, limit=100, starting_after=None, **options)",
@@ -100,6 +101,7 @@
     "cancel_quote": "(self, quote_id, *, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
     "cancel_refund": "(self, refund_id, *, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
     "cancel_treasury": "(self, treasury_id, *, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
+    "check_quote": "(self, quote_id, *, request_deadline=None, upgrade_tolerance=None)",
     "close": "(self)",
     "create_api_key": "(self, *, name='', permissions=None, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",
     "create_deposit_address": "(self, client_reference_id, *, metadata=None, request_deadline=None, upgrade_tolerance=None, idempotency_key=None)",

@@ -2097,3 +2097,28 @@ takes its default: nothing of the restored settings is carried over.
 Sanctions checks use the latest verified list at decision time, across all EVM chains. A positive
 hit rejects even when stale; a missing snapshot, verification older than 24h by default, or failed
 list read holds and retries. See the [sanctions runbook](../deploy/runbooks/sanctions-list.md).
+
+## On-demand quote checks
+
+`POST /v1/quotes/{id}/check?client_secret=...` requests immediate discovery for that quote's
+issued address on its payment chain. A merchant key with `quotes:write` may omit the query secret.
+No request body is needed. Browser CORS matches transaction hints. The quiet `202` body is
+`{"object":"quote_check","status":"received"}` for admitted requests, including ignored,
+unauthorized, closed/expired, limited or coalesced requests. Global overload may return retryable
+503 before reading a body. Receipt is not a detection or payment result: continue polling the
+quote and use normal webhook crediting. Never credit a customer based on this acknowledgement.
+
+Only open quotes before `expires_at` qualify; there is no additional grace window. Expired or
+closed quotes retain normal scanning and transaction hints. Admission allows three checks per
+quote in a rolling 24 hours, with at least 15 seconds between checks for an address. Concurrent
+checks for the same address coalesce; production permits 100 checks/chain/UTC day and staging 10.
+Counters survive restart/restore and failure consumes admission. Exhaustion silently falls back
+to normal five-minute discovery. The pass reads from the normal fast cursor without advancing
+it, uses existing token/topic filtering, and records only provisional candidates; dual-provider
+confirmation remains required for crediting. Automatic one-minute discovery also watches open,
+unexpired quotes while its independent daily budget remains available.
+
+Use `pay.checkQuote(clientSecret)` (or exported `checkQuote` with API origin and secret) in the
+browser, `pay.quotes.check(quoteId)` in Node, or `pay.quotes.check(quote_id)` in Python. The lower
+level Python `TopupClient.check_quote(quote_id)` is also available. Treat acknowledgement as a
+request receipt and keep the existing status polling/webhook path.

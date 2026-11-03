@@ -23,6 +23,7 @@ from topup_client.models import (
     Forwarder,
     PaymentSettingsObject,
     Quote,
+    QuoteCheck,
     Refund,
     Sweep,
     TransactionSubmission,
@@ -436,6 +437,10 @@ class Quotes:
             **_request_options(options),
             idempotency_key=idempotency_key,
         )
+
+    def check(self, quote_id: str, **options: Unpack[RequestOptions]) -> QuoteCheck:
+        """Requests immediate address discovery; continue polling the quote."""
+        return self._client.check_quote(quote_id, **_request_options(options))
 
     def submit_transaction(
         self,

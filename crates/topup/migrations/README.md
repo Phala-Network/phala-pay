@@ -97,7 +97,7 @@ the owner creates; no application table grants `TRUNCATE`. The migration narrows
 | `sanctions_list_addresses` | `SELECT`, `INSERT` (immutable publication identifiers) |
 | `price_twap_observations` | `SELECT`, `INSERT` (immutable samples, isolated by safety policy) |
 | `topup_migration_compatibility` (owner-written rollback ledger) | None |
-| `transitions`, `audit`, `reconciliation_findings`, `heartbeat`, `events` | `SELECT`, `INSERT` (append-only) |
+| `transitions`, `audit`, `reconciliation_findings`, `heartbeat`, `events`, `quote_checks` | `SELECT`, `INSERT` (append-only) |
 | `custody_opening_balances` | `SELECT`, `INSERT` (immutable dual-verified state before discovery) |
 | `ignored_transfer_totals` | `SELECT`, `INSERT` (immutable finalized custody amounts) |
 | `ignored_transfer_samples` | `SELECT`, `INSERT`, `DELETE` (bounded operational samples) |
@@ -449,3 +449,13 @@ or the row leaves `detected`. The pump validates current policy and fresh dual c
 headers before reuse and falls back to full dual reads on invalid proof. The down migration
 preserves this additive column and trigger for binary rollback; N-1 ignores the evidence
 and retains its previous confirmation RPC cost.
+
+## On-demand quote check admission
+
+`20261113000000_quote_checks` adds append-only `(quote_id,address_id,checked_at)` history with
+SELECT/INSERT application grants. Address locks serialize admission across quotes; history
+bounds checks to three per quote/rolling 24 h and 15-second address spacing. The existing daily
+budget table holds separate per-chain caps, committed in the same transaction before RPC.
+The expand-only table is included in restore counts; the down migration deliberately preserves
+history. Compatibility floor stays `20261112000000` (v0.13.5); N-1 ignores the table. Binary
+rollback uses its retained config without the new discovery keys and re-upgrade resumes counts.

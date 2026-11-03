@@ -79,6 +79,21 @@ def test_quotes_create_returns_the_client_secret_to_a_request_with_the_key() -> 
     assert json.loads(seen[0].content)["client_reference_id"] == "team-42"
 
 
+def test_quote_check_acknowledges_request_without_disclosing_payment_result() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(202, json={"object": "quote_check", "status": "received"})
+
+    with _client(httpx.MockTransport(handler)) as client:
+        result = client.quotes.check(QUOTE_ID, request_deadline=2)
+    assert result.status == "received"
+    assert requests[0].method == "POST"
+    assert requests[0].url.path == f"/v1/quotes/{QUOTE_ID}/check"
+    assert requests[0].headers["authorization"] == f"Bearer {KEY}"
+
+
 def test_metadata_is_sent_on_create_and_merged_by_update() -> None:
     seen: list[httpx.Request] = []
     refund: dict[str, object] = {

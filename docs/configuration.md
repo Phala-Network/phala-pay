@@ -177,6 +177,27 @@ release's budget; a rollback never clears rolling attachment history.
   on every enabled route/version; a shorter window fails config validation even if its default
   TTL fits, because an account may choose the maximum. Every quote state qualifies by creation time; every deposit state qualifies
   by chain `block_time`, including the exact cutoff. No activity cache needs refreshing.
+  `fresh_quote_rounds_per_day` accepts integers 0–1,440 (default 0, disabled; omitted from resolved
+  output when zero). Production sets 240 and staging 30, independently per payment chain and UTC
+  day. Every 60 s, excluding regular five-minute ticks, a nonempty set of open quotes created
+  and still before expiry gets the same read-only discovery pass. It claims
+  one durable `fresh_quote:<chain>` unit before RPC; failed rounds count, empty sets cost zero,
+  and restart does not reset claims. Exhaustion silently falls back to five-minute discovery.
+  Overlapping quotes share rounds; F240 buys about five active hours/day, not an all-day guarantee.
+  Candidates still require dual-provider confirmation. Actual calls retain provider quota
+  accounting and add `workload="fresh_quote"`; daily usage/limits and the business exhaustion
+  alert expose the cap. The funded allocation lowers production D to 152 while preserving H/Q
+  and refunds; see the [budget arithmetic](../deploy/RPC.md#worst-case-pilot-budget).
+  **Rollback to v0.13.5:** use its retained verified configuration without the new discovery key;
+  the floor is unchanged and F/check claims survive rollback and restore. The additive
+  `quote_checks` table retains rolling admission history.
+  `quote_checks_per_day` has the same 0–1,440 bounds/default/rollback omission and limits
+  on-demand `POST /v1/quotes/{id}/check` passes independently: production 100, staging 10 per
+  payment chain/UTC day. Each check also requires an open, unexpired quote, at most three
+  admitted checks per quote/rolling 24 h, and 15 seconds between checks for the same address.
+  Concurrent address checks coalesce in a bounded queue. History and daily admission commit
+  atomically before RPC; failures consume claims. No hint budget is used. Exhaustion returns
+  quiet 202 and leaves normal scanning running. Actual calls carry `workload="quote_check"`.
   The five-minute read path covers that hot set; hourly dual coverage still covers every
   historical address, and transaction hints work for cold addresses too. Without a hint, a cold
   payment can take about 70 minutes with healthy endpoints and caught-up coverage. Increasing

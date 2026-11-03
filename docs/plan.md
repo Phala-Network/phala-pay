@@ -27,7 +27,7 @@ drill on the current release or the owner's real-money acceptance.
   snapshots per price chain per UTC day, shared by all customers; exhausted snapshots return
   `503 price_unavailable`. Confirm the account's open-quote and amount caps with `GET /v1/config`.
 - Agree the [pilot monitoring cadence and stop actions](../deploy/runbooks/production-launch.md#11-pilot-caps-monitoring-and-stop-actions).
-  Production has no metrics collector; D=280 deposits/day is operational, and pausing quotes
+  Production has no metrics collector; D=152 deposits/day is operational, and pausing quotes
   does not stop transfers to existing addresses. The next upgrade adds persisted daily RPC/D
   alerts; v0.13.4 still needs manual quota checks. Verify generated alerts through the
   [admin alerts API](../deploy/runbooks/README.md#manage-alerts) and retain backup/restore evidence.

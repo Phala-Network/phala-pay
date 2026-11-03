@@ -135,6 +135,10 @@ enum SyntheticAlert {
     RpcConfirmationSlowEntries,
     #[value(name = "TopupRpcConfirmationProviderLag")]
     RpcConfirmationProviderLag,
+    #[value(name = "TopupRpcFreshQuoteBudgetExhausted")]
+    RpcFreshQuoteBudgetExhausted,
+    #[value(name = "TopupRpcQuoteCheckBudgetExhausted")]
+    RpcQuoteCheckBudgetExhausted,
     #[value(name = "TopupRpcHintBudgetExhausted")]
     RpcHintBudgetExhausted,
     #[value(name = "TopupRpcPriceSnapshotBudgetExhausted")]
@@ -911,6 +915,12 @@ async fn run(args: &RunArgs) -> anyhow::Result<ExitCode> {
                 .context("failed to configure treasury proof checks")?,
         ),
     };
+    let checks = state.transaction_hints.checks.clone();
+    let check_pool = pool.clone();
+    let check_routes = routes.clone();
+    tasks.spawn("quote checks", |cancellation| {
+        checks.run(check_pool, check_routes, cancellation)
+    });
     let hint_queue = state.transaction_hints.clone();
     let hint_pool = pool.clone();
     let hint_routes = routes.clone();
