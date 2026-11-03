@@ -7,3 +7,4 @@ export * from "./errors.js";
 export type { Pins } from "./pins.js";
 export type { RequestOptions } from "./transport.js";
 export type { CheckoutParams } from "./checkout-params.js";
+export { addressUrl, transactionUrl } from "./chains.js";

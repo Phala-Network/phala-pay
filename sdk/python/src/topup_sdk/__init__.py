@@ -13,6 +13,7 @@ from .addresses import (
     forwarder_address,
 )
 from .attestation import attestation_report_data, verify_attestation_binding
+from .chains import address_url, transaction_url
 from .client import TopupClient
 from .errors import (
     AddressMismatchError,
@@ -29,6 +30,14 @@ from .fulfillment import (
     CreditedDeposit,
     FulfillmentError,
     credited_event_id,
+)
+from .receipts import (
+    StripeReceiptCreditNoteParams,
+    StripeReceiptInvoiceItemParams,
+    StripeReceiptInvoiceParams,
+    stripe_receipt_credit_note,
+    stripe_receipt_invoice,
+    stripe_receipt_invoice_item,
 )
 from .signing import RequestSigner, SigningAuth, VerifiedRequest, load_public_key, verify_request
 from .sweeps import (
@@ -60,11 +69,15 @@ __all__ = [
     "RequestSigner",
     "SignatureError",
     "SigningAuth",
+    "StripeReceiptCreditNoteParams",
+    "StripeReceiptInvoiceItemParams",
+    "StripeReceiptInvoiceParams",
     "TopupClient",
     "TopupError",
     "UnpinnedTreasuryWarning",
     "VerifiedRequest",
     "WebhookEvent",
+    "address_url",
     "attestation_report_data",
     "batch_checksum",
     "credited_event_id",
@@ -80,6 +93,10 @@ __all__ = [
     "safe_batch",
     "sign_treasury_challenge",
     "sign_webhook",
+    "stripe_receipt_credit_note",
+    "stripe_receipt_invoice",
+    "stripe_receipt_invoice_item",
+    "transaction_url",
     "verify_attestation_binding",
     "verify_request",
     "verify_webhook",

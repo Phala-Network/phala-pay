@@ -223,3 +223,18 @@ npm (environment `npm`) with trusted publishing and provenance
 [CHANGELOG.md](https://github.com/Phala-Network/phala-pay/blob/main/CHANGELOG.md), under "JS SDK";
 [its releases before v0.5.0](https://github.com/Phala-Network/phala-pay/blob/main/sdk/js/CHANGELOG.md),
 versioned on their own, stay in `sdk/js`.
+
+## Receipt helpers
+
+`@phala/pay-server/helpers` exports `stripeReceiptInvoice(deposit, { customer, description? })`,
+`stripeReceiptInvoiceItem(deposit, { invoice, customer })`, and
+`stripeReceiptCreditNote(deposit, { invoice, previousRefunded, previousReversed })`.
+They return typed plain Stripe parameters for a credited `Deposit` (`ReceiptDeposit` subset),
+without a Stripe dependency. Invoices include transaction hashes, explorer links and live/test
+metadata; credit notes cover new refund/reversal growth only (`null` for no growth). Amounts
+always use the deposit currency. Use the official `stripe` library from a queue and persist one
+invoice per deposit; see [the receipt flow and examples](../../docs/integration.md#27-receipts).
+
+`transactionUrl(chainId, txHash)` and `addressUrl(chainId, address)` are available from both
+`@phala/pay-server` and `/helpers`, with the same explorers as `@phala/pay`; they return
+`undefined` for an unknown chain.
