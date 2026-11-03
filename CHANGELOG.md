@@ -14,6 +14,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+## [0.13.6] - 2026-11-03
+
 ### Added
 
 - Extra read-only discovery every minute for addresses with an open, unexpired quote throughout
@@ -34,7 +36,9 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   `checkQuote`, Node `quotes.check`, and Python `quotes.check`/`check_quote` expose the endpoint.
   Rollback uses the target config without both new discovery keys; admission history is retained.
 
-### JS SDK (`@phala/pay-server`)
+### JS SDK (`@phala/pay`, `@phala/pay-react`, `@phala/pay-server`)
+
+#### Added
 
 - Add pure typed `stripeReceiptInvoice`, `stripeReceiptInvoiceItem` and
   `stripeReceiptCreditNote` parameter builders under `/helpers` for out-of-band paid receipts,
@@ -42,9 +46,6 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - Export `transactionUrl` and `addressUrl` from the server package and `/helpers`, matching
   the browser SDK's explorers, and reject malformed hashes/addresses. Document queue processing
   and resumable Stripe receipt flows.
-
-### JS SDK (`@phala/pay-react`)
-
 - `<Checkout>` (and `<PaymentElement>`'s checkout) offers, while a quote is waiting for payment
   and no wallet-tab payment was sent, an "I've paid — check now" button for a payment sent by
   address or QR code from another wallet or an exchange. It requests a quote check
@@ -55,6 +56,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   again. No new props.
 
 ### Python SDK (`phala-pay`)
+
+#### Added
 
 - Add `topup_sdk.transaction_url` and `address_url` (unknown chains or malformed inputs return
   `None`), and typed `stripe_receipt_invoice`, `stripe_receipt_invoice_item` and
@@ -2655,7 +2658,8 @@ happens only from two-provider finalized data.
   events were held for up to an hour at a time. A notice's outcome now neither cools nor clears
   the endpoint.
 
-[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.13.5...HEAD
+[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.13.6...HEAD
+[0.13.6]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.6
 [0.13.5]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.5
 [0.13.4]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.4
 [0.13.3]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.3
