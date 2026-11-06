@@ -211,7 +211,7 @@ pub(super) fn schema(name: &str) -> Option<Value> {
         "AccountSelfPauseRequest" => json!({"scopes": ["quotes"]}),
         "RollWebhookKeyRequest" => json!({"expires_in": 172_800}),
         "KeyEvidence" => json!({
-            "public_key": "42".repeat(32), "report_data": "24".repeat(32),
+            "public_key": "42".repeat(32), "nonce": "00010203", "report_data": "24".repeat(32),
             "tdx_quote": "00", "app_id": "ab".repeat(20), "compose_hash": "cd".repeat(32)
         }),
         "AttestationResponse" => json!({

@@ -93,7 +93,16 @@ enum TopupCommand {
 #[derive(Subcommand)]
 enum MigrationCommand {
     /// Encrypt and upload the fenced source archive from the private CVM tmpfs.
-    Export(MigrationArgs),
+    Export {
+        #[command(flatten)]
+        args: MigrationArgs,
+        /// Hold an exported database snapshot for pg_dump and manifest metadata.
+        #[arg(long, conflicts_with = "snapshot_check")]
+        snapshot: bool,
+        /// Health check for the snapshot holder, without database access.
+        #[arg(long)]
+        snapshot_check: bool,
+    },
     /// Verify and decrypt a migration, or verify the restored database with --verify.
     Import {
         #[command(flatten)]
@@ -1702,24 +1711,39 @@ async fn check_payment_settings_migration(pool: &PgPool) -> anyhow::Result<()> {
 }
 
 async fn migration_command(command: MigrationCommand) -> anyhow::Result<ExitCode> {
-    let (MigrationCommand::Export(args) | MigrationCommand::Import { args, .. }) = &command;
+    let (MigrationCommand::Export { args, .. } | MigrationCommand::Import { args, .. }) = &command;
+    if matches!(
+        command,
+        MigrationCommand::Export {
+            snapshot_check: true,
+            ..
+        }
+    ) {
+        anyhow::ensure!(
+            args.directory.join("snapshot.id").try_exists()?,
+            "migration snapshot is not ready"
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
+    if matches!(command, MigrationCommand::Export { snapshot: true, .. }) {
+        // Invalidate health readiness before any connection wait on a restarted snapshot job.
+        topup::migration::reset_snapshot(&args.directory)?;
+    }
     let config = topup::migration::Config::load(&args.config)?;
     let pool = connect_owner("migration", 2).await?;
     let signer = DstackSigner::new();
     match &command {
-        MigrationCommand::Export(args) => {
+        MigrationCommand::Export { args, snapshot, .. } => {
+            if *snapshot {
+                topup::migration::snapshot(&pool, &args.directory).await?;
+                return Ok(ExitCode::SUCCESS);
+            }
             let config = config
                 .migration_export
                 .context("migration_export configuration is required")?;
             let transfer = topup::migration::Transfer::s3(&config.object)?;
             transfer
-                .export(
-                    &config,
-                    &pool,
-                    &signer,
-                    &DstackAttestor::new(),
-                    &args.directory,
-                )
+                .export(&config, &signer, &DstackAttestor::new(), &args.directory)
                 .await?;
         }
         MigrationCommand::Import {

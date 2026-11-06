@@ -2518,6 +2518,7 @@
         "example": {
           "app_id": "abababababababababababababababababababab",
           "compose_hash": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+          "nonce": "00010203",
           "public_key": "4242424242424242424242424242424242424242424242424242424242424242",
           "report_data": "2424242424242424242424242424242424242424242424242424242424242424",
           "tdx_quote": "00"
@@ -2529,6 +2530,10 @@
           },
           "compose_hash": {
             "description": "Attested compose hash as hexadecimal.",
+            "type": "string"
+          },
+          "nonce": {
+            "description": "Caller challenge for export evidence, or fresh 32-byte import challenge, as hexadecimal.",
             "type": "string"
           },
           "public_key": {
@@ -2546,6 +2551,7 @@
         },
         "required": [
           "public_key",
+          "nonce",
           "report_data",
           "tdx_quote",
           "app_id",

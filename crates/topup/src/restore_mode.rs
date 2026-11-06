@@ -188,6 +188,18 @@ async fn acknowledge(connection: &mut PgConnection, timeline: i64) -> Result<(),
     Ok(())
 }
 
+/// A logical import starts a new cluster's timeline history. Acknowledge that cluster, even
+/// when the source had a higher timeline, without changing historical restores or active holds.
+/// Call only inside the verified import's completion transaction.
+pub(crate) async fn acknowledge_import(connection: &mut PgConnection) -> Result<(), sqlx::Error> {
+    let (_, current) = lock_timeline(connection).await?;
+    sqlx::query("UPDATE restore_timeline SET timeline_id = $1")
+        .bind(current)
+        .execute(connection)
+        .await?;
+    Ok(())
+}
+
 /// The active freeze, or a new one recording the restore point and each chain's cursor.
 async fn freeze_in(
     connection: &mut PgConnection,

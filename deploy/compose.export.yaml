@@ -1,6 +1,22 @@
 # Fences the old app: no API, ingress, heartbeat or schema migrations. The source's
 # existing pgdata and WAL-G prefix stay attached; all plaintext transfer files are tmpfs.
 services:
+  # Docker unmounts a tmpfs-backed named volume after its last consumer exits. Keep it mounted
+  # across all one-shot jobs without giving this process network access or credentials.
+  migration-holder:
+    image: postgres-walg
+    user: "999:999"
+    entrypoint: [sleep, infinity]
+    command: []
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 8m
+    pids_limit: 8
+    volumes:
+      - migration:/run/migration
+    restart: unless-stopped
   topup: !reset null
   migrate: !reset null
   restore-check: !reset null
@@ -19,7 +35,7 @@ services:
     user: "999:999"
     entrypoint: [bash, -ceu]
     command:
-      - 'umask 077; pg_dump -Fc --exclude-schema=topup_migration --file=/run/migration/dump.pg || { rm -f /run/migration/dump.pg; echo "migration dump failed (private tmpfs limit: 4 GiB)" >&2; exit 1; }'
+      - 'umask 077; pg_dump -Fc --snapshot="$$(cat /run/migration/snapshot.id)" --exclude-schema=topup_migration --file=/run/migration/dump.pg 2>/dev/null || { rm -f /run/migration/dump.pg; echo "migration dump failed (private tmpfs limit: 4 GiB; details suppressed)" >&2; exit 1; }; touch /run/migration/dump.done'
     environment:
       PGHOST: postgres
       PGDATABASE: topup
@@ -29,8 +45,39 @@ services:
       - db_owner:/run/db-owner:ro
       - migration:/run/migration
     depends_on:
+      snapshot:
+        condition: service_healthy
+      migration-holder:
+        condition: service_started
+    restart: "no"
+  snapshot:
+    image: phala-pay
+    user: "999:999"
+    command: [topup, migrate, export, --config, /etc/topup/migration.json, --snapshot]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    pids_limit: 64
+    environment:
+      DATABASE_URL: postgres://postgres@postgres:5432/topup
+      TOKIO_WORKER_THREADS: "2"
+      PGPASSFILE: /run/db-owner/postgres.pgpass
+    volumes:
+      - db_owner:/run/db-owner:ro
+      - migration:/run/migration
+    configs:
+      - source: migration
+        target: /etc/topup/migration.json
+    healthcheck:
+      test: [CMD, topup, migrate, export, --config, /etc/topup/migration.json, --snapshot-check]
+      interval: 1s
+      timeout: 5s
+      retries: 60
+    depends_on:
       backup:
         condition: service_completed_successfully
+      migration-holder:
+        condition: service_started
     restart: "no"
   export:
     image: phala-pay
@@ -42,6 +89,7 @@ services:
     pids_limit: 64
     environment:
       DATABASE_URL: postgres://postgres@postgres:5432/topup
+      TOKIO_WORKER_THREADS: "2"
       PGPASSFILE: /run/db-owner/postgres.pgpass
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
@@ -55,6 +103,10 @@ services:
     depends_on:
       dump:
         condition: service_completed_successfully
+      snapshot:
+        condition: service_completed_successfully
+      migration-holder:
+        condition: service_started
     restart: "no"
 volumes:
   migration:

@@ -3,7 +3,7 @@
 //! PostgreSQL tools run in the pinned postgres-walg image. The distroless topup jobs exchange
 //! the archive over a private tmpfs, then verify the restored database before normal migrations.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt as _;
@@ -141,6 +141,8 @@ fn parse_object(value: &str) -> anyhow::Result<(String, ObjectPath)> {
 pub struct KeyEvidence {
     /// Canonical age recipient, or hexadecimal Ed25519 verification key.
     pub public_key: String,
+    /// Caller challenge for export evidence, or fresh 32-byte import challenge, as hexadecimal.
+    pub nonce: String,
     /// SHA-256 commitment as hexadecimal, zero-padded by dstack to 64 quote bytes.
     pub report_data: String,
     /// Versioned dstack quote as hexadecimal.
@@ -159,6 +161,7 @@ async fn evidence(
     let (quote, info) = attestor.attest_report_data(report_data).await?;
     Ok(KeyEvidence {
         public_key,
+        nonce: String::new(),
         report_data: hex::encode(report_data),
         tdx_quote: hex::encode(quote),
         app_id: hex::encode(info.app_id),
@@ -182,7 +185,9 @@ pub async fn export_key(
     hasher.update([u8::try_from(nonce.len())?]);
     hasher.update(nonce);
     hasher.update(key.0);
-    evidence(attestor, hex::encode(key.0), hasher.finalize().into()).await
+    let mut evidence = evidence(attestor, hex::encode(key.0), hasher.finalize().into()).await?;
+    evidence.nonce = hex::encode(nonce);
+    Ok(evidence)
 }
 
 /// Derives the stable age identity from v0 GetKey's 32-byte migration/import/v1 secret.
@@ -193,9 +198,11 @@ pub async fn import_identity(signer: &DstackSigner) -> anyhow::Result<age::x2551
 fn identity_from_secret(secret: &SecretKey32) -> anyhow::Result<age::x25519::Identity> {
     // Use age's supported Bech32 parsing interface; no private-format or cryptographic code.
     let hrp = bech32::Hrp::parse("AGE-SECRET-KEY-")?;
-    let encoded = Zeroizing::new(
-        bech32::encode::<bech32::Bech32>(hrp, secret.expose_secret())?.to_uppercase(),
-    );
+    let mut encoded = Zeroizing::new(bech32::encode::<bech32::Bech32>(
+        hrp,
+        secret.expose_secret(),
+    )?);
+    encoded.make_ascii_uppercase();
     encoded
         .parse()
         .map_err(|_| anyhow::anyhow!("invalid derived migration identity"))
@@ -205,12 +212,16 @@ fn identity_from_secret(secret: &SecretKey32) -> anyhow::Result<age::x25519::Ide
 pub async fn recipient_evidence(
     identity: &age::x25519::Identity,
     attestor: &DstackAttestor,
+    nonce: &[u8; 32],
 ) -> anyhow::Result<KeyEvidence> {
     let public_key = identity.to_public().to_string();
     let mut hasher = Sha256::new();
     hasher.update(RECIPIENT_DOMAIN);
+    hasher.update(nonce);
     hasher.update(public_key.as_bytes());
-    evidence(attestor, public_key, hasher.finalize().into()).await
+    let mut evidence = evidence(attestor, public_key, hasher.finalize().into()).await?;
+    evidence.nonce = hex::encode(nonce);
+    Ok(evidence)
 }
 
 /// Database invariants collected while all source writers are fenced off.
@@ -233,6 +244,8 @@ pub struct Manifest {
     pub version: u32,
     /// Lowercase SHA-256 of the entire ciphertext.
     pub ciphertext_sha256: String,
+    /// Fresh destination challenge copied from recipient evidence and covered by this signature.
+    pub nonce: String,
     /// Canonical pinned age X25519 recipient.
     pub recipient: String,
     /// Attested source app ID.
@@ -259,11 +272,16 @@ fn signing_bytes(manifest: &Manifest) -> anyhow::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("migration manifest nonce mismatch: waiting for export using current recipient.json")]
+struct NonceMismatch;
+
 /// Verifies the pinned signer, app, destination recipient and object before decryption.
 pub fn verify_manifest(
     signed: &SignedManifest,
     config: &ImportConfig,
     recipient: &str,
+    nonce: &str,
 ) -> anyhow::Result<()> {
     let key = verification_key(&config.export_public_key)?;
     let signature = Signature::from_slice(&hex::decode(&signed.signature)?)?;
@@ -272,16 +290,23 @@ pub fn verify_manifest(
     let manifest = &signed.manifest;
     ensure!(
         manifest.version == 1
+            && nonce.len() == 64
+            && hex::decode(nonce)?.len() == 32
+            && manifest.nonce.len() == 64
+            && hex::decode(&manifest.nonce)?.len() == 32
             && manifest.source_app_id == config.source_app_id
             && manifest.recipient == recipient
             && manifest.object == config.object,
-        "migration manifest does not match the pinned source, recipient, object or version"
+        "migration manifest does not match this import's nonce or pinned source, recipient, object or version"
     );
     ensure!(
         manifest.ciphertext_sha256.len() == 64
             && hex::decode(&manifest.ciphertext_sha256)?.len() == 32,
         "invalid ciphertext hash"
     );
+    if manifest.nonce != nonce {
+        return Err(NonceMismatch.into());
+    }
     Ok(())
 }
 
@@ -291,34 +316,122 @@ pub async fn database_state(pool: &PgPool) -> anyhow::Result<DatabaseState> {
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
         .execute(&mut *tx)
         .await?;
+    let state = state_in(&mut tx).await?;
+    tx.commit().await?;
+    Ok(state)
+}
+
+async fn state_in(connection: &mut sqlx::PgConnection) -> anyhow::Result<DatabaseState> {
     // format('%I') quotes identifiers in PostgreSQL, including embedded quotes.
     let tables: Vec<String> = sqlx::query_scalar(
         "SELECT format('%I.%I', schemaname, tablename) FROM pg_tables \
          WHERE schemaname NOT IN ('pg_catalog', 'information_schema', 'topup_migration') \
          AND schemaname NOT LIKE 'pg_toast%' ORDER BY 1",
     )
-    .fetch_all(&mut *tx)
+    .fetch_all(&mut *connection)
     .await?;
     let mut row_counts = BTreeMap::new();
     for table in tables {
         let count = sqlx::query_scalar(AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
-            .fetch_one(&mut *tx)
+            .fetch_one(&mut *connection)
             .await?;
         row_counts.insert(table, count);
     }
     let latest_migration =
         sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations WHERE success")
-            .fetch_one(&mut *tx)
+            .fetch_one(&mut *connection)
             .await?;
     let last_heartbeat = sqlx::query_scalar("SELECT max(recorded_at) FROM heartbeat")
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut *connection)
         .await?;
-    tx.commit().await?;
     Ok(DatabaseState {
         row_counts,
         latest_migration,
         last_heartbeat,
     })
+}
+
+/// Removes only this export chain's completed or interrupted snapshot coordination files.
+pub fn reset_snapshot(directory: &Path) -> anyhow::Result<()> {
+    for name in [
+        "snapshot.id",
+        "snapshot.tmp",
+        "snapshot-state.json",
+        "dump.done",
+    ] {
+        match fs::remove_file(directory.join(name)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context("failed to reset migration snapshot"),
+        }
+    }
+    Ok(())
+}
+
+/// Holds an exported PostgreSQL snapshot until the dump finishes. Metadata and pg_dump use
+/// this exact snapshot, even if a writer accidentally connects after the fencing step.
+pub async fn snapshot(pool: &PgPool, directory: &Path) -> anyhow::Result<()> {
+    reset_snapshot(directory)?;
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .execute(&mut *tx)
+        .await?;
+    let snapshot: String = sqlx::query_scalar("SELECT pg_export_snapshot()")
+        .fetch_one(&mut *tx)
+        .await?;
+    let state = state_in(&mut tx).await?;
+    private_file(&directory.join("snapshot-state.json"))?
+        .write_all(&serde_json::to_vec(&state)?)?;
+    let mut ready = private_file(&directory.join("snapshot.tmp"))?;
+    ready.write_all(snapshot.as_bytes())?;
+    ready.sync_all()?;
+    fs::rename(
+        directory.join("snapshot.tmp"),
+        directory.join("snapshot.id"),
+    )?;
+    tokio::time::timeout(Duration::from_secs(900), async {
+        while !directory.join("dump.done").try_exists()? {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .context("timed out waiting for snapshot dump")??;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Proves that an existing marker records a fully verified import for these exact pins. The
+/// database may have changed since startup, so its present row counts must not be compared.
+pub async fn completed_import(
+    config: &ImportConfig,
+    pool: &PgPool,
+    identity: &age::x25519::Identity,
+) -> anyhow::Result<bool> {
+    let exists: bool =
+        sqlx::query_scalar("SELECT to_regclass('topup_migration.imported') IS NOT NULL")
+            .fetch_one(pool)
+            .await?;
+    if !exists {
+        return Ok(false);
+    }
+    let records: Vec<serde_json::Value> =
+        sqlx::query_scalar("SELECT manifest FROM topup_migration.imported")
+            .fetch_all(pool)
+            .await?;
+    ensure!(records.len() == 1, "migration completion marker is invalid");
+    let record = records
+        .into_iter()
+        .next()
+        .context("migration completion marker is missing")?;
+    let signed: SignedManifest = serde_json::from_value(record)?;
+    verify_manifest(
+        &signed,
+        config,
+        &identity.to_public().to_string(),
+        &signed.manifest.nonce,
+    )?;
+    Ok(true)
 }
 
 /// Refuses a nonempty destination, including any completed import marker.
@@ -348,6 +461,7 @@ pub async fn verify_database(pool: &PgPool, signed: &SignedManifest) -> anyhow::
         "restored database does not match migration manifest"
     );
     let mut tx = pool.begin().await?;
+    crate::restore_mode::acknowledge_import(&mut tx).await?;
     // No IF NOT EXISTS: concurrent verifiers cannot both authorize startup.
     sqlx::query("CREATE SCHEMA topup_migration AUTHORIZATION postgres")
         .execute(&mut *tx)
@@ -513,7 +627,6 @@ impl Transfer {
     pub async fn export(
         &self,
         config: &ExportConfig,
-        pool: &PgPool,
         signer: &DstackSigner,
         attestor: &DstackAttestor,
         directory: &Path,
@@ -524,7 +637,23 @@ impl Transfer {
             let mut header = [0_u8; 5];
             File::open(&dump)?.read_exact(&mut header)?;
             ensure!(&header == b"PGDMP", "export requires pg_dump custom format");
-            let database = database_state(pool).await?;
+            let database: DatabaseState =
+                serde_json::from_reader(File::open(directory.join("snapshot-state.json"))?)?;
+            let recipient_object = self
+                .store
+                .get(&self.prefix.clone().join("recipient.json"))
+                .await?;
+            ensure!(
+                recipient_object.meta.size <= MAX_METADATA,
+                "recipient evidence is too large"
+            );
+            let recipient: KeyEvidence = serde_json::from_slice(&recipient_object.bytes().await?)?;
+            ensure!(
+                recipient.public_key == config.recipient
+                    && recipient.nonce.len() == 64
+                    && hex::decode(&recipient.nonce)?.len() == 32,
+                "recipient evidence does not match the pinned destination"
+            );
             let public = signer.migration_public_key().await?;
             let source = evidence(
                 attestor,
@@ -535,6 +664,7 @@ impl Transfer {
             encrypt(&dump, &encrypted, &config.recipient)?;
             let manifest = Manifest {
                 version: 1,
+                nonce: recipient.nonce,
                 ciphertext_sha256: hash_file(&encrypted)?,
                 recipient: config.recipient.clone(),
                 source_app_id: source.app_id,
@@ -558,8 +688,10 @@ impl Transfer {
         .await;
         let removed = fs::remove_file(&dump);
         let _ = fs::remove_file(&encrypted);
+        let reset = reset_snapshot(directory);
         result?;
-        removed.context("failed to remove plaintext export")
+        removed.context("failed to remove plaintext export")?;
+        reset
     }
 
     /// Publishes recipient and waits for a signed manifest. Prepares plaintext only after all
@@ -573,9 +705,31 @@ impl Transfer {
         directory: &Path,
         wait: Duration,
     ) -> anyhow::Result<()> {
+        if completed_import(config, pool, identity).await? {
+            return Ok(());
+        }
         require_fresh(pool).await?;
-        self.publish_recipient(&recipient_evidence(identity, attestor).await?)
-            .await?;
+        // A failed invocation may leave files in the holder's still-mounted tmpfs. They cannot
+        // authorize a new invocation: discard only this protocol's files before a fresh nonce.
+        for name in [
+            "recipient.json",
+            "manifest.json",
+            "nonce",
+            "dump.age",
+            "dump.partial",
+            "dump.pg",
+        ] {
+            match fs::remove_file(directory.join(name)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error).context("failed to reset incomplete import files"),
+            }
+        }
+        let nonce = rand::random::<[u8; 32]>();
+        let recipient = recipient_evidence(identity, attestor, &nonce).await?;
+        self.publish_recipient(&recipient).await?;
+        private_file(&directory.join("recipient.json"))?
+            .write_all(&serde_json::to_vec(&recipient)?)?;
         let manifest_path = directory.join("manifest.json");
         let encrypted = directory.join("dump.age");
         let partial = directory.join("dump.partial");
@@ -585,28 +739,34 @@ impl Transfer {
             "migration working directory is not empty"
         );
         let result = async {
-            tokio::time::timeout(wait, async {
+            let signed = tokio::time::timeout(wait, async {
+                let mut warned = BTreeSet::new();
                 loop {
-                    match self
-                        .download("manifest.json", &manifest_path, MAX_METADATA)
-                        .await
-                    {
-                        Ok(()) => return Ok(()),
-                        Err(error)
-                            if error.downcast_ref::<object_store::Error>().is_some_and(
-                                |error| matches!(error, object_store::Error::NotFound { .. }),
-                            ) =>
-                        {
+                    match self.download("manifest.json", &manifest_path, MAX_METADATA).await {
+                        Ok(()) => {}
+                        Err(error) if error.downcast_ref::<object_store::Error>()
+                            .is_some_and(|error| matches!(error, object_store::Error::NotFound { .. })) => {
+                            tokio::time::sleep(Duration::from_secs(5)).await;
+                            continue;
+                        }
+                        Err(error) => return Err(error),
+                    }
+                    let signed: SignedManifest = serde_json::from_reader(File::open(&manifest_path)?)?;
+                    match verify_manifest(&signed, config, &identity.to_public().to_string(), &hex::encode(nonce)) {
+                        Ok(()) => return Ok(signed),
+                        Err(error) if error.is::<NonceMismatch>() => {
+                            let fingerprint: [u8; 32] = Sha256::digest(signing_bytes(&signed.manifest)?).into();
+                            if warned.insert(fingerprint) {
+                                tracing::warn!("migration manifest rejected: nonce mismatch from an earlier import; waiting for export using current recipient.json");
+                            }
+                            // Only public metadata was read. Never fetch/decrypt the old dump.
+                            fs::remove_file(&manifest_path)?;
                             tokio::time::sleep(Duration::from_secs(5)).await;
                         }
                         Err(error) => return Err(error),
                     }
                 }
-            })
-            .await
-            .context("timed out waiting for migration export")??;
-            let signed: SignedManifest = serde_json::from_reader(File::open(&manifest_path)?)?;
-            verify_manifest(&signed, config, &identity.to_public().to_string())?;
+            }).await.context("timed out waiting for migration export")??;
             self.download("dump.age", &encrypted, MAX_ARCHIVE).await?;
             ensure!(
                 hash_file(&encrypted)? == signed.manifest.ciphertext_sha256,
@@ -614,6 +774,7 @@ impl Transfer {
             );
             decrypt(&encrypted, &partial, identity)?;
             fs::rename(&partial, &dump)?;
+            private_file(&directory.join("nonce"))?.write_all(hex::encode(nonce).as_bytes())?;
             Ok(())
         }
         .await;
@@ -622,6 +783,8 @@ impl Transfer {
             let _ = fs::remove_file(&partial);
             let _ = fs::remove_file(&dump);
             let _ = fs::remove_file(&manifest_path);
+            let _ = fs::remove_file(directory.join("recipient.json"));
+            let _ = fs::remove_file(directory.join("nonce"));
         }
         result
     }
@@ -634,6 +797,9 @@ pub async fn verify_import(
     identity: &age::x25519::Identity,
     directory: &Path,
 ) -> anyhow::Result<()> {
+    if completed_import(config, pool, identity).await? {
+        return Ok(());
+    }
     // Remove plaintext even when verification fails. The DB is left stopped for investigation.
     let dump = directory.join("dump.pg");
     if dump.exists() {
@@ -641,9 +807,11 @@ pub async fn verify_import(
     }
     let signed: SignedManifest =
         serde_json::from_reader(File::open(directory.join("manifest.json"))?)?;
-    verify_manifest(&signed, config, &identity.to_public().to_string())?;
+    let nonce = fs::read_to_string(directory.join("nonce"))?;
+    verify_manifest(&signed, config, &identity.to_public().to_string(), &nonce)?;
     verify_database(pool, &signed).await?;
     fs::remove_file(directory.join("manifest.json"))?;
+    fs::remove_file(directory.join("nonce"))?;
     Ok(())
 }
 
@@ -663,6 +831,7 @@ mod tests {
         let manifest = Manifest {
             version: 1,
             ciphertext_sha256: "cd".repeat(32),
+            nonce: "ef".repeat(32),
             source_app_id: config.source_app_id.clone(),
             object: config.object.clone(),
             recipient: identity.to_public().to_string(),
@@ -687,25 +856,34 @@ mod tests {
     fn forged_manifest_wrong_signature_and_wrong_recipient_are_refused() {
         let (signed, mut config, identity) = fixture();
         let recipient = identity.to_public().to_string();
-        verify_manifest(&signed, &config, &recipient).unwrap();
+        verify_manifest(&signed, &config, &recipient, &signed.manifest.nonce).unwrap();
+        assert!(verify_manifest(&signed, &config, &recipient, &"00".repeat(32)).is_err());
         let mut forged = signed.clone();
         forged
             .manifest
             .database
             .row_counts
             .insert("public.accounts".into(), 99);
-        assert!(verify_manifest(&forged, &config, &recipient).is_err());
+        assert!(verify_manifest(&forged, &config, &recipient, &signed.manifest.nonce).is_err());
         let wrong = identity_from_secret(&SecretKey32::new([43; 32])).unwrap();
-        assert!(verify_manifest(&signed, &config, &wrong.to_public().to_string()).is_err());
+        assert!(
+            verify_manifest(
+                &signed,
+                &config,
+                &wrong.to_public().to_string(),
+                &signed.manifest.nonce
+            )
+            .is_err()
+        );
         config.source_app_id = "cd".repeat(20);
-        assert!(verify_manifest(&signed, &config, &recipient).is_err());
+        assert!(verify_manifest(&signed, &config, &recipient, &signed.manifest.nonce).is_err());
         config.source_app_id = signed.manifest.source_app_id.clone();
         config.object.push_str("-replay");
-        assert!(verify_manifest(&signed, &config, &recipient).is_err());
+        assert!(verify_manifest(&signed, &config, &recipient, &signed.manifest.nonce).is_err());
         config.object = signed.manifest.object.clone();
         config.export_public_key =
             hex::encode(SigningKey::from_bytes(&[44; 32]).verifying_key().as_bytes());
-        assert!(verify_manifest(&signed, &config, &recipient).is_err());
+        assert!(verify_manifest(&signed, &config, &recipient, &signed.manifest.nonce).is_err());
     }
 
     #[test]
@@ -771,13 +949,14 @@ mod tests {
         fs::remove_dir_all(directory).unwrap();
     }
 
-    /// Opt-in real two-cluster roundtrip, with the pinned dstack simulator and standard PG tools.
-    /// deploy/tests/migration-roundtrip.sh supplies isolated containers; no staging or production.
+    /// Real two-cluster roundtrip, including shared pg_dump snapshot, freshness and reboot gates.
     #[tokio::test]
     async fn simulator_two_postgres_roundtrip_and_row_count_mismatch() -> anyhow::Result<()> {
         let Ok(endpoint) = std::env::var("MIGRATION_DSTACK_ENDPOINT") else {
-            eprintln!(
-                "skipped: run deploy/tests/migration-roundtrip.sh for the full migration rehearsal"
+            ensure!(
+                std::env::var("CI").as_deref() != Ok("true")
+                    && std::env::var("MIGRATION_SKIP_LOCAL").as_deref() == Ok("1"),
+                "MIGRATION_DSTACK_ENDPOINT is required; MIGRATION_SKIP_LOCAL=1 is an explicit local-only opt-out"
             );
             return Ok(());
         };
@@ -790,6 +969,24 @@ mod tests {
             crate::db::connect(&destination_url, "migration-test-destination", 2).await?;
         crate::db::migrate(&source).await?;
         crate::heartbeat::record(&source).await?;
+        // A source with prior physical restores can have a higher acknowledged timeline than
+        // the fresh destination. Only that acknowledgement is cluster-local; holds/history stay.
+        sqlx::raw_sql(
+            "UPDATE restore_timeline SET timeline_id = 7; \
+             INSERT INTO restores (id, detected_by, timeline_id, restored_cursors, \
+                 unfrozen_at, unfrozen_by, unfreeze_reason) VALUES \
+                 ('00000000-0000-0000-0000-000000000006', 'timeline', 6, '{\"8453\":123}', \
+                  now(), 'migration-test', 'previous recovery reconciled'), \
+                 ('00000000-0000-0000-0000-000000000007', 'timeline', 7, '{\"8453\":456}', \
+                  NULL, NULL, NULL)",
+        )
+        .execute(&source)
+        .await?;
+        let restore_history: serde_json::Value = sqlx::query_scalar(
+            "SELECT jsonb_agg(to_jsonb(restores) ORDER BY timeline_id) FROM restores",
+        )
+        .fetch_one(&source)
+        .await?;
         for pool in [&source, &destination] {
             sqlx::raw_sql("DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='topup_app') THEN CREATE ROLE topup_app NOLOGIN; END IF; END $$; CREATE ROLE topup_service LOGIN IN ROLE topup_app;")
                 .execute(pool).await?;
@@ -806,27 +1003,61 @@ mod tests {
             let attestor = DstackAttestor::with_endpoint(endpoint);
             let identity = import_identity(&signer).await?;
             let public = export_key(&signer, &attestor, b"migration-roundtrip").await?;
+            let pins: serde_json::Value =
+                serde_json::from_str(include_str!("../../../deploy/tests/migration-pins.json"))?;
+            ensure!(
+                pins["source_app_id"] == public.app_id
+                    && pins["export_public_key"] == public.public_key
+                    && pins["recipient"] == identity.to_public().to_string(),
+                "pinned simulator migration keys changed"
+            );
             assert_ne!(
                 public.report_data,
                 export_key(&signer, &attestor, b"another-nonce")
                     .await?
                     .report_data
             );
-            let dump = std::process::Command::new("docker")
-                .args([
-                    "exec",
-                    &source_container,
-                    "pg_dump",
-                    "-U",
-                    "postgres",
-                    "-d",
-                    "topup",
-                    "-Fc",
-                    "--exclude-schema=topup_migration",
-                ])
-                .output()?;
-            ensure!(dump.status.success(), "test pg_dump failed");
-            fs::write(export_dir.join("dump.pg"), dump.stdout)?;
+            let dump_job = async {
+                while !export_dir.join("snapshot.id").try_exists()? {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                // A deliberate write after snapshot export must appear in neither dump nor counts.
+                crate::heartbeat::record(&source).await?;
+                let snapshot = fs::read_to_string(export_dir.join("snapshot.id"))?;
+                let dump = std::process::Command::new("docker")
+                    .args([
+                        "exec",
+                        &source_container,
+                        "pg_dump",
+                        "-U",
+                        "postgres",
+                        "-d",
+                        "topup",
+                        "-Fc",
+                        "--exclude-schema=topup_migration",
+                        "--snapshot",
+                        &snapshot,
+                    ])
+                    .output()?;
+                ensure!(dump.status.success(), "test pg_dump failed");
+                fs::write(export_dir.join("dump.pg"), dump.stdout)?;
+                fs::write(export_dir.join("dump.done"), [])?;
+                Ok::<_, anyhow::Error>(())
+            };
+            let (held, dumped) = tokio::join!(snapshot(&source, &export_dir), dump_job);
+            held?;
+            dumped?;
+            let expected: DatabaseState =
+                serde_json::from_reader(File::open(export_dir.join("snapshot-state.json"))?)?;
+            assert_eq!(expected.row_counts.get("public.heartbeat"), Some(&1));
+            assert_eq!(
+                database_state(&source)
+                    .await?
+                    .row_counts
+                    .get("public.heartbeat"),
+                Some(&2)
+            );
+            fs::copy(export_dir.join("dump.pg"), directory.join("template.pg"))?;
             let export_config = ExportConfig {
                 recipient: identity.to_public().to_string(),
                 object: "s3://test/unique-migration".into(),
@@ -840,86 +1071,70 @@ mod tests {
                 store: Arc::new(object_store::memory::InMemory::new()),
                 prefix: ObjectPath::parse("unique-migration")?,
             };
+            fs::write(import_dir.join("recipient.json"), b"previous invocation")?;
+            fs::write(
+                import_dir.join("dump.partial"),
+                b"incomplete prior transfer",
+            )?;
+            let previous_nonce = [19_u8; 32];
             transfer
-                .export(&export_config, &source, &signer, &attestor, &export_dir)
-                .await?;
-            assert!(!export_dir.join("dump.pg").exists());
-            let manifest_object = transfer.prefix.clone().join("manifest.json");
-            let dump_object = transfer.prefix.clone().join("dump.age");
-            let original_manifest = transfer.store.get(&manifest_object).await?.bytes().await?;
-            let original_dump = transfer.store.get(&dump_object).await?.bytes().await?;
-            let mut forged: SignedManifest = serde_json::from_slice(&original_manifest)?;
-            forged.manifest.database.latest_migration = 1;
-            transfer
-                .store
-                .put(&manifest_object, serde_json::to_vec(&forged)?.into())
-                .await?;
-            assert!(
-                transfer
-                    .import(
-                        &import_config,
-                        &destination,
-                        &identity,
-                        &attestor,
-                        &import_dir,
-                        Duration::from_secs(30)
-                    )
-                    .await
-                    .is_err()
-            );
-            assert!(!import_dir.join("dump.pg").exists());
-            transfer
-                .store
-                .put(&manifest_object, original_manifest.clone().into())
-                .await?;
-            let wrong_identity = identity_from_secret(&topup_core::SecretKey32::new([73; 32]))?;
-            assert!(
-                transfer
-                    .import(
-                        &import_config,
-                        &destination,
-                        &wrong_identity,
-                        &attestor,
-                        &import_dir,
-                        Duration::from_secs(30)
-                    )
-                    .await
-                    .is_err()
-            );
-            assert!(!import_dir.join("dump.pg").exists());
-            transfer
-                .store
-                .put(&dump_object, vec![0_u8; 32].into())
-                .await?;
-            assert!(
-                transfer
-                    .import(
-                        &import_config,
-                        &destination,
-                        &identity,
-                        &attestor,
-                        &import_dir,
-                        Duration::from_secs(30)
-                    )
-                    .await
-                    .is_err()
-            );
-            assert!(!import_dir.join("dump.pg").exists());
-            transfer
-                .store
-                .put(&dump_object, original_dump.into())
-                .await?;
-            transfer
-                .import(
-                    &import_config,
-                    &destination,
-                    &identity,
-                    &attestor,
-                    &import_dir,
-                    Duration::from_secs(30),
+                .publish_recipient(
+                    &recipient_evidence(&identity, &attestor, &previous_nonce).await?,
                 )
                 .await?;
-            let plaintext = File::open(import_dir.join("dump.pg"))?;
+            transfer
+                .export(&export_config, &signer, &attestor, &export_dir)
+                .await?;
+            assert!(!export_dir.join("dump.pg").exists());
+            // Leave the authentic old manifest and dump in place. The new import rejects their
+            // old challenge, keeps waiting, and accepts the following export for its current one.
+            fs::copy(directory.join("template.pg"), export_dir.join("dump.pg"))?;
+            fs::write(
+                export_dir.join("snapshot-state.json"),
+                serde_json::to_vec(&expected)?,
+            )?;
+            let old_recipient: KeyEvidence = serde_json::from_slice(
+                &transfer
+                    .store
+                    .get(&transfer.prefix.clone().join("recipient.json"))
+                    .await?
+                    .bytes()
+                    .await?,
+            )?;
+            let exporter = async {
+                loop {
+                    let current: KeyEvidence = serde_json::from_slice(
+                        &transfer
+                            .store
+                            .get(&transfer.prefix.clone().join("recipient.json"))
+                            .await?
+                            .bytes()
+                            .await?,
+                    )?;
+                    if current.nonce != old_recipient.nonce {
+                        assert!(
+                            !import_dir.join("dump.pg").exists(),
+                            "old-nonce dump must never be decrypted"
+                        );
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                transfer
+                    .export(&export_config, &signer, &attestor, &export_dir)
+                    .await
+            };
+            let importer = transfer.import(
+                &import_config,
+                &destination,
+                &identity,
+                &attestor,
+                &import_dir,
+                Duration::from_secs(30),
+            );
+            let (exported, imported) = tokio::join!(exporter, importer);
+            exported?;
+            imported?;
             let restore = std::process::Command::new("docker")
                 .args([
                     "exec",
@@ -933,15 +1148,24 @@ mod tests {
                     "--single-transaction",
                     "--exit-on-error",
                 ])
-                .stdin(plaintext)
+                .stdin(File::open(import_dir.join("dump.pg"))?)
                 .output()?;
             ensure!(
                 restore.status.success(),
-                "test pg_restore failed: {}",
-                String::from_utf8_lossy(&restore.stderr)
+                "test pg_restore failed (details suppressed)"
             );
             let signed: SignedManifest =
                 serde_json::from_reader(File::open(import_dir.join("manifest.json"))?)?;
+            let current_recipient: KeyEvidence = serde_json::from_slice(
+                &transfer
+                    .store
+                    .get(&transfer.prefix.clone().join("recipient.json"))
+                    .await?
+                    .bytes()
+                    .await?,
+            )?;
+            assert_ne!(signed.manifest.nonce, old_recipient.nonce);
+            assert_eq!(signed.manifest.nonce, current_recipient.nonce);
             let mut mismatch = signed.clone();
             mismatch
                 .manifest
@@ -949,6 +1173,13 @@ mod tests {
                 .row_counts
                 .insert("public.heartbeat".into(), 99);
             assert!(verify_database(&destination, &mismatch).await.is_err());
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>("SELECT timeline_id FROM restore_timeline")
+                    .fetch_one(&destination)
+                    .await?,
+                7,
+                "failed verification cannot acknowledge the destination timeline"
+            );
             assert!(
                 sqlx::query_scalar::<_, bool>(
                     "SELECT to_regclass('topup_migration.imported') IS NULL"
@@ -956,24 +1187,61 @@ mod tests {
                 .fetch_one(&destination)
                 .await?
             );
-            assert_eq!(
-                database_state(&source).await?,
-                database_state(&destination).await?
-            );
-            // ACLs travel with the archive; the destination login retains its NEW cluster identity.
+            assert_eq!(expected, database_state(&destination).await?);
             let granted: bool = sqlx::query_scalar(
                 "SELECT has_table_privilege('topup_service', 'public.heartbeat', 'SELECT')",
             )
             .fetch_one(&destination)
             .await?;
-            ensure!(
-                granted,
-                "restored ACLs must grant the application role access"
-            );
+            ensure!(granted, "restored ACLs must grant application role access");
             verify_import(&import_config, &destination, &identity, &import_dir).await?;
+            assert!(
+                sqlx::query_scalar::<_, bool>(
+                    "SELECT timeline_id = ('x' || left(pg_walfile_name(pg_current_wal_insert_lsn()), 8))::bit(32)::bigint \
+                     FROM restore_timeline"
+                )
+                .fetch_one(&destination)
+                .await?,
+                "future destination recoveries must be detected against its own timeline"
+            );
+            assert_eq!(
+                sqlx::query_scalar::<_, serde_json::Value>(
+                    "SELECT jsonb_agg(to_jsonb(restores) ORDER BY timeline_id) FROM restores"
+                )
+                .fetch_one(&destination)
+                .await?,
+                restore_history
+            );
+            let active = crate::restore_mode::detect(&destination).await?.context("import must preserve active restore hold")?;
+            assert_eq!(active.timeline_id, 7);
+            assert_eq!(active.restored_cursors.get(&8453), Some(&456));
             assert!(!import_dir.join("dump.pg").exists());
             assert!(require_fresh(&destination).await.is_err());
             assert!(verify_database(&destination, &signed).await.is_err());
+            // Reboot with an empty tmpfs does no new import/restore and preserves later writes.
+            crate::heartbeat::record(&destination).await?;
+            let after_start = database_state(&destination).await?;
+            transfer
+                .import(
+                    &import_config,
+                    &destination,
+                    &identity,
+                    &attestor,
+                    &import_dir,
+                    Duration::from_secs(30),
+                )
+                .await?;
+            verify_import(&import_config, &destination, &identity, &import_dir).await?;
+            assert_eq!(after_start, database_state(&destination).await?);
+            // Merely creating the marker table cannot authorize startup.
+            sqlx::query("DELETE FROM topup_migration.imported")
+                .execute(&destination)
+                .await?;
+            assert!(
+                completed_import(&import_config, &destination, &identity)
+                    .await
+                    .is_err()
+            );
             Ok(())
         }
         .await;

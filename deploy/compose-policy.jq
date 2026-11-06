@@ -172,7 +172,7 @@ def common_violations($variant; $project):
 # tmpfs, mounted by exactly these services, and written only by `keys`, which derives them.
 def credential_mounters($variant):
     if $variant == "export" then
-        {walg_key: ["backup", "keys", "postgres"], db_owner: ["backup", "dump", "export", "keys", "postgres"],
+        {walg_key: ["backup", "keys", "postgres"], db_owner: ["backup", "dump", "export", "keys", "postgres", "snapshot"],
          db_app: ["keys", "postgres"]}
     elif $variant == "service" or $variant == "template" then
         {walg_key: ["backup", "keys", "postgres"], db_owner: ["backup", "keys", "migrate", "postgres"],
@@ -331,7 +331,21 @@ def migration_volume_violations($mounters):
         and .volumes.migration.driver_opts == {type: "tmpfs", device: "tmpfs", o: "uid=999,gid=999,mode=0700,size=4g"};
         "migration plaintext must use the private bounded tmpfs"),
      check([.services | to_entries[] | select(.value.volumes[]?.source == "migration") | .key] == $mounters;
-        "only migration jobs may mount the plaintext tmpfs")];
+        "only migration jobs may mount the plaintext tmpfs"),
+     check(.services["migration-holder"] as $holder
+        | $holder.image == .services.postgres.image and $holder.user == "999:999"
+        and $holder.entrypoint == ["sleep", "infinity"] and $holder.command == []
+        and $holder.network_mode == "none" and ($holder.environment // {}) == {}
+        and ($holder.ports // []) == [] and ($holder.configs // []) == []
+        and volume_sources("migration-holder") == ["migration"]
+        and $holder.read_only == true and $holder.cap_drop == ["ALL"]
+        and $holder.security_opt == ["no-new-privileges:true"] and $holder.mem_limit != null
+        and $holder.pids_limit == 8 and $holder.restart == "unless-stopped";
+        "the plaintext tmpfs holder must use only the pinned image, no network or credentials"),
+     check([.services | to_entries[] | select(.key != "migration-holder")
+        | select(.value.volumes[]?.source == "migration")
+        | .value.depends_on["migration-holder"].condition == "service_started"] | all;
+        "the plaintext holder must start before every transfer job")];
 
 def migration_crypto_violations($service; $mode; $verify):
     .services[$service] as $job
@@ -341,7 +355,7 @@ def migration_crypto_violations($service; $mode; $verify):
             + if $verify then ["--verify"] else [] end);
         "migration crypto must run the exact topup job as uid 999"),
        check(($job.environment | env_map) as $env
-        | ($env.DATABASE_URL | database_user) == "postgres" and $env.PGPASSFILE == "/run/db-owner/postgres.pgpass";
+        | ($env.DATABASE_URL | database_user) == "postgres" and $env.TOKIO_WORKER_THREADS == "2" and $env.PGPASSFILE == "/run/db-owner/postgres.pgpass";
         "migration crypto must use the owner pgpass"),
        check((mounted_config($service; "/etc/topup/migration.json") | fromjson? // {})
           | if $mode == "export" then
@@ -363,28 +377,38 @@ def migration_pg_violations($service; $command):
     | [check($job.image == .services.postgres.image and $job.user == "999:999"
         and $job.entrypoint == ["bash", "-ceu"] and $job.command == [$command] and $job.restart == "no";
         "migration PostgreSQL tools must run the exact archive job from the pinned postgres image"),
-       check($job.environment == {PGHOST: "postgres", PGDATABASE: "topup", PGUSER: "postgres", PGPASSFILE: "/run/db-owner/postgres.pgpass"}
+       check($job.environment == ({PGHOST: "postgres", PGDATABASE: "topup", PGUSER: "postgres", PGPASSFILE: "/run/db-owner/postgres.pgpass"}
+            + if $service == "restore" then {PGOPTIONS: "-c log_min_messages=panic -c log_min_error_statement=panic -c log_statement=none"} else {} end)
         and (volume_sources($service) | sort) == ["db_owner", "migration"]
         and [$job.volumes[] | select(.source == "db_owner") | .read_only] == [true];
         "migration PostgreSQL tools may mount only owner credentials and the plaintext tmpfs")];
 
 def export_violations:
-    [check((.services | keys) == ["backup", "dump", "export", "keys", "postgres"] and published == [];
+    [check((.services | keys) == ["backup", "dump", "export", "keys", "migration-holder", "postgres", "snapshot"] and published == [];
         "export must fence topup, ingress, heartbeat and migrations; no ports"),
      check(.services.backup.entrypoint == ["bash", "-ceu"] and .services.backup.restart == "no"
         and .services.backup.command == ["psql -X -v ON_ERROR_STOP=1 -c \"SELECT pg_switch_wal()\"; wal-g backup-push /var/lib/postgresql/data"]
-        and completed("dump"; "backup") and completed("export"; "dump");
+        and completed("snapshot"; "backup") and .services.dump.depends_on.snapshot.condition == "service_healthy"
+        and completed("export"; "dump") and completed("export"; "snapshot");
         "final backup must precede dump and encryption"),
      check([.services | to_entries[] | select(.value.volumes[]?.source == "/var/run/dstack.sock") | .key]
         == ["export", "keys"]; "only export and keys may mount the dstack socket")]
-    + credential_violations("export") + migration_volume_violations(["dump", "export"])
+    + credential_violations("export") + migration_volume_violations(["dump", "export", "migration-holder", "snapshot"])
     + migration_crypto_violations("export"; "export"; false)
-    + migration_pg_violations("dump"; "umask 077; pg_dump -Fc --exclude-schema=topup_migration --file=/run/migration/dump.pg || { rm -f /run/migration/dump.pg; echo \"migration dump failed (private tmpfs limit: 4 GiB)\" >&2; exit 1; }");
+    + [check(.services.snapshot.image == .services.keys.image and .services.snapshot.user == "999:999"
+        and .services.snapshot.command == ["topup", "migrate", "export", "--config", "/etc/topup/migration.json", "--snapshot"]
+        and .services.snapshot.healthcheck.test == ["CMD", "topup", "migrate", "export", "--config", "/etc/topup/migration.json", "--snapshot-check"]
+        and .services.snapshot.entrypoint == null and .services.snapshot.restart == "no"
+        and (volume_sources("snapshot") | sort) == ["db_owner", "migration"]
+        and (.services.snapshot.environment | env_map) == {DATABASE_URL:"postgres://postgres@postgres:5432/topup", TOKIO_WORKER_THREADS:"2", PGPASSFILE:"/run/db-owner/postgres.pgpass"}
+        and mounted_config("snapshot"; "/etc/topup/migration.json") == mounted_config("export"; "/etc/topup/migration.json");
+        "the snapshot job must hold the exact dump snapshot and publish its metadata")]
+    + migration_pg_violations("dump"; "umask 077; pg_dump -Fc --snapshot=\"$$(cat /run/migration/snapshot.id)\" --exclude-schema=topup_migration --file=/run/migration/dump.pg 2>/dev/null || { rm -f /run/migration/dump.pg; echo \"migration dump failed (private tmpfs limit: 4 GiB; details suppressed)\" >&2; exit 1; }; touch /run/migration/dump.done");
 
 def migration_import_violations:
     . as $original
     # Apply the stock service policy after projecting away only the declared import additions.
-    | (del(.services["import", "restore", "import-verify"], .volumes.migration,
+    | (del(.services["import", "restore", "import-verify", "migration-holder"], .volumes.migration,
            .services.migrate.depends_on["import-verify"], .services.backup.depends_on["import-verify"])
        | service_violations)
     + ($original | [
@@ -396,10 +420,10 @@ def migration_import_violations:
       check([.services | to_entries[] | select(.value.volumes[]?.source == "/var/run/dstack.sock") | .key]
         == ["dstack-ingress", "import", "import-verify", "keys", "topup"];
         "only import jobs and service identity consumers may mount the dstack socket")]
-      + migration_volume_violations(["import", "import-verify", "restore"])
+      + migration_volume_violations(["import", "import-verify", "migration-holder", "restore"])
       + migration_crypto_violations("import"; "import"; false)
       + migration_crypto_violations("import-verify"; "import"; true)
-      + migration_pg_violations("restore"; "trap \"rm -f /run/migration/dump.pg\" EXIT; pg_restore --single-transaction --exit-on-error --dbname=topup /run/migration/dump.pg"));
+      + migration_pg_violations("restore"; "trap \"rm -f /run/migration/dump.pg\" EXIT; marker=$$(psql -XAtqc \"SELECT to_regclass('topup_migration.imported') IS NOT NULL\"); if [ \"$$marker\" = t ]; then exit 0; fi; pg_restore --single-transaction --exit-on-error --dbname=topup /run/migration/dump.pg 2>/dev/null || { echo \"migration restore failed (details suppressed)\" >&2; exit 1; }"));
 
 def violations($variant; $project):
     common_violations($variant; $project)

@@ -67,6 +67,14 @@ refuse_migration() {
         'include "compose-policy"; violations($variant; "dstack") | length > 0' \
         "$tmp/mutated.json" >/dev/null || fail "migration policy accepted $mutation"
 }
+refuse_migration export 'del(.services["migration-holder"])'
+refuse_migration export '.services["migration-holder"].network_mode = "host"'
+refuse_migration export '.services["migration-holder"].environment = {PGPASSWORD:"forbidden"}'
+refuse_migration export '.services.snapshot.command |= map(select(. != "--snapshot"))'
+refuse_migration export 'del(.services.dump.depends_on.snapshot)'
+refuse_migration migration-import 'del(.services["migration-holder"])'
+refuse_migration migration-import '.services.restore.command = ["pg_restore", "--verbose"]'
+refuse_migration migration-import 'del(.services.restore.environment.PGOPTIONS)'
 refuse_migration export '.services.topup = .services.export'
 refuse_migration export '.services.export.ports = [{target:8080,published:"80",protocol:"tcp",mode:"ingress"}]'
 refuse_migration export '.services.dump.command = ["pg_dump", "--no-acl"]'
