@@ -155,7 +155,7 @@ read_env_file() {
 # - It is byte for byte a fresh render of ENV_DIR with its own images and gateway or origin, so
 #   no stale render or hand edit reaches the CLI.
 check_artifact() {
-    local env_file=$1 compose=$2 env_dir=$3 variant=$4 compose_bin line violations inputs=()
+    local env_file=$1 compose=$2 env_dir=$3 variant=$4 plan=${5:-} compose_bin line violations inputs=()
     compose_bin=$("$REPO_ROOT/deploy/pinned-compose.sh" --no-download 2>"$tmp/pinned.err") || {
         fail "$(tool_error "$tmp/pinned.err")"
         return
@@ -187,12 +187,15 @@ check_artifact() {
         "$tmp/compose.json" >"$tmp/release-images.json"
     if [[ "$variant" == restore-check ]]; then
         inputs=(--restore-check --origin "$(jq -r '.services.topup.command[-1]' "$tmp/compose.json")")
+    elif [[ "$variant" == export ]]; then
+        inputs=(--export --migration-export "$plan")
     elif [[ "$variant" == template ]]; then
         inputs=(--template)
     else
         inputs=(--gateway-domain
             "$(jq -r '.services["dstack-ingress"].environment.GATEWAY_DOMAIN // ""' "$tmp/compose.json")")
     fi
+    [[ "$variant" != migration-import ]] || inputs+=(--migration-import "$plan")
     if PINNED_COMPOSE=$compose_bin "$REPO_ROOT/deploy/render.sh" "${inputs[@]}" \
         --images "$tmp/release-images.json" "$env_dir" >"$tmp/fresh.yml" 2>"$tmp/render.err"; then
         cmp -s "$tmp/fresh.yml" "$compose" ||

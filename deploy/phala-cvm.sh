@@ -3,6 +3,12 @@
 # Cloud CLI 1.1.22; PHALA_CLOUD_API_KEY and PHALA_CLOUD_DIR come from the environment).
 #
 # Usage:
+#   deploy/phala-cvm.sh provision-prepare REQUEST_JSON OUT ENVIRONMENT_DIR
+#   deploy/phala-cvm.sh provision-commit TX PREPARE_JSON ENVIRONMENT_DIR
+#   deploy/phala-cvm.sh compose-prepare CVM_ID COMPOSE PRE_LAUNCH PORT_POLICY_JSON OUT ENVIRONMENT_DIR
+#   deploy/phala-cvm.sh compose-commit CVM_ID HASH TX|already-registered PREPARE_JSON ENVIRONMENT_DIR
+#                                                    Base KMS only, Safe signs outside CI;
+#                                                    deploy/runbooks/onchain-kms-upgrade.md
 #   deploy/phala-cvm.sh get CVM_ID >cvm.json
 #   deploy/phala-cvm.sh url CVM_JSON PORT            the gateway URL of PORT
 #   deploy/phala-cvm.sh gateway-domain CVM_JSON      the CVM's gateway host, gateway.BASE_DOMAIN: a
@@ -42,6 +48,9 @@ normal_hash='ascii_downcase | ltrimstr("0x")'
 command=${1:-}
 shift || true
 case "$command" in
+    provision-prepare | provision-commit | compose-prepare | compose-commit)
+        exec "$(dirname -- "$0")/phala-onchain.sh" "$command" "$@"
+        ;;
     get)
         stage_start get 60
         phala cvms get "$1" --json

@@ -296,6 +296,16 @@ Deploy `upgrade`, never a runtime setting.
   nothing. Phala's factory is deployed and verified on Sepolia, Base Sepolia, Ethereum, and Base
   ([mainnet evidence](../deploy/CONTRACTS.md#mainnet)).
 
+## Onchain KMS option
+
+The default Phala KMS provision/upgrade flow below is unchanged. To opt into Base governance,
+commit `kms` containing `base`, `dstack-owner` containing your Base Safe, and (after factory
+execution) the DstackApp address in `dstack-app`. Initial Base provisioning uses a full reviewed
+`provision.json` and pinned node gateway; subsequent upgrades use Deploy `prepare`, Safe
+approval, then `commit` with `transaction_hash`. This is a new app with new keys and backup
+prefix, requiring merchant webhook re-pinning. Never change KMS on an existing app. Read the
+[Base upgrade runbook](../deploy/runbooks/onchain-kms-upgrade.md) before selecting this option.
+
 ## 4. Release and provision
 
 1. **Pick the release.** Your workflow's `uses: …@<commit> # v<version>` and `version` name it (section 2, step 5);

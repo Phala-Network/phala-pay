@@ -109,9 +109,12 @@ def sealed_names:
 # where it is used, at every start (deploy/scripts/postgres-walg-entrypoint.sh refuses S3 storage
 # without both credentials, in PostgreSQL and the backup job).
 def allowed_envs_violations($variant; $allowed):
+    # Export retains the stopped service's allowlist, but cannot interpolate unused names.
+    # Other variants still accept only names actually referenced by their compose.
     (sealed_names - if $variant == "template" then ["DSTACK_APP_DOMAIN"] else [] end) as $sealed
     | if ($allowed | type) == "array" and ($allowed | all(type == "string")) then
-        [$allowed[] | select(. as $name | $sealed | index($name) | not)
+        [$allowed[] | select((. as $name | $sealed | index($name)) == null)
+            | select($variant != "export" or (test("^(SENTRY_DSN|TOPUP_RPC_[A-Z0-9_]+_KEY)$") | not))
             | "the env may set only the compose's sealed names, not \(.)"]
       else ["allowed_envs must be a list of names"] end;
 
@@ -321,3 +324,15 @@ def violations($variant; $project):
       elif $variant == "template" then template_violations
       elif $variant == "product" then product_violations
       else ["unknown variant \($variant)"] end;
+
+# Onchain KMS adds explicit provider pins. Phala Cloud deployments retain their existing policy.
+# $identity is the Base KmsAuth.kmsInfo().caPubkey (hex DER), read after checking its proxy pin.
+def kms_violations($kind; $app; $identity):
+    if $kind == "phala" then []
+    elif $kind == "base" then
+        [check($app.kms_enabled == true; "Base KMS requires kms_enabled"),
+         check($app.key_provider == "kms"; "Base KMS requires key_provider kms"),
+         check(($identity | type == "string" and test("^[0-9a-f]+$")) and
+            (($app.key_provider_id // "" | ascii_downcase | ltrimstr("0x")) == $identity);
+            "Base KMS key_provider_id must match KmsAuth.kmsInfo().caPubkey")]
+    else ["kms must be phala or base"] end;

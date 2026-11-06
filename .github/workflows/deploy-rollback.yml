@@ -38,6 +38,16 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-rollback-${{ hashFiles('**/Cargo.lock') }}
+      # Live Base rollback uses Deploy mode commit + already-registered for the retained N-1
+      # hash. This workflow exercises database compatibility; it never mutates a live CVM.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - name: Check onchain rollback approval guards
+        run: |
+          npm ci --prefix deploy/tools --ignore-scripts --no-audit --no-fund
+          node --test deploy/tests/onchain-kms.mjs
+          PYTHONDONTWRITEBYTECODE=1 python3 deploy/tests/test_onchain_policy.py
       - name: Deadline and capacity probe tests
         run: |
           deploy/tests/stage-deadlines.sh

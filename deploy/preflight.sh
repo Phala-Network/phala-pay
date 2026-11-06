@@ -3,7 +3,7 @@
 # read-only against remote systems: it never pushes, deploys, updates, or sends a transaction.
 #
 # Usage: deploy/preflight.sh --env FILE --compose FILE --environment-dir DIR
-#          [--restore-check | --template] (--workspace NAME --os-image NAME | --offline) [--unsealed] [--require-sentry]
+#          [--restore-check | --template | --export --migration-export FILE | --migration-import FILE] (--workspace NAME --os-image NAME | --offline) [--unsealed] [--require-sentry]
 #
 # --compose is the rendered compose (deploy/render.sh), --environment-dir the environment it was
 # rendered from. --restore-check expects the restore-check variant (deploy/RESTORE.md) and its
@@ -42,11 +42,11 @@ networks="$DEPLOY_CONTRACTS_DIR/networks.json"
 approved_os_image=dstack-0.6.1
 
 usage() {
-    echo "usage: $0 --env FILE --compose FILE --environment-dir DIR [--restore-check | --template]" \
+    echo "usage: $0 --env FILE --compose FILE --environment-dir DIR [--restore-check | --template | --export --migration-export FILE | --migration-import FILE]" \
         "(--workspace NAME --os-image NAME | --offline) [--unsealed] [--require-sentry]" >&2
     exit 64
 }
-env_file="" compose="" env_dir="" workspace="" os_image="" offline=0 unsealed=0 require_sentry=0 variant=service
+env_file="" compose="" env_dir="" workspace="" os_image="" offline=0 unsealed=0 require_sentry=0 variant=service migration_plan=""
 while (($#)); do
     case "$1" in
         --env) env_file="${2:-}"; shift 2 ;;
@@ -56,6 +56,9 @@ while (($#)); do
         --os-image) os_image="${2:-}"; shift 2 ;;
         --restore-check) variant=restore-check; shift ;;
         --template) variant=template; shift ;;
+        --export) variant="export"; shift ;;
+        --migration-export) migration_plan=${2:-}; shift 2 ;;
+        --migration-import) variant=migration-import; migration_plan=${2:-}; shift 2 ;;
         --offline) offline=1; shift ;;
         --unsealed) unsealed=1; shift ;;
         --require-sentry) require_sentry=1; shift ;;
@@ -63,6 +66,10 @@ while (($#)); do
     esac
 done
 [[ -f "$env_file" && -f "$compose" && -d "$env_dir" ]] || usage
+if [[ "$variant" == export || "$variant" == migration-import ]]; then
+    [[ -f "$migration_plan" ]] || usage
+elif [[ -n "$migration_plan" ]]; then usage
+fi
 ((offline)) || [[ -n "$workspace" && -n "$os_image" ]] || usage
 for command in docker jq; do
     require_command "$command"
@@ -80,7 +87,7 @@ ok() {
 }
 
 declare -A env=()
-check_artifact "$env_file" "$compose" "$env_dir" "$variant"
+check_artifact "$env_file" "$compose" "$env_dir" "$variant" "$migration_plan"
 refuse_example_values "$compose"
 while IFS= read -r name; do
     value=${env[$name]-}
@@ -105,6 +112,15 @@ if ((failures)); then
 fi
 
 ((offline)) || check_anonymous_pulls "$tmp/images"
+
+# Export has no topup process, RPC traffic or ingress. Its complete compose/plan policy,
+# fresh render and anonymous images above are the acceptance checks before fencing.
+if [[ "$variant" == export ]]; then
+    ((offline)) || check_phala_cloud "$workspace" "$os_image"
+    ((failures == 0)) || { echo "preflight: $failures export check(s) failed" >&2; exit 1; }
+    echo "preflight: export policy and configuration passed"
+    exit 0
+fi
 
 echo "== configuration"
 topup_image=$(jq -r '.services.topup.image' "$tmp/compose.json")

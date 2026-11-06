@@ -21,12 +21,12 @@ set -eu
 # CVM runs with public tcbinfo): the vm_config the quote does not carry. The app-compose's binding to
 # EXPECTED_COMPOSE and the pre-launch script is deploy/attested-compose.sh's, which deploy.sh uses
 # too.
-if [ "$#" -ne 6 ]; then
-    echo "usage: verify-attestation.sh ATTESTATION_JSON INFO_JSON APP_ID EXPECTED_COMPOSE service|restore-check|template|product EXPECTED_OS_IMAGE_HASH" >&2
+if [ "$#" -ne 6 ] && [ "$#" -ne 7 ]; then
+    echo "usage: verify-attestation.sh ATTESTATION_JSON INFO_JSON APP_ID EXPECTED_COMPOSE service|restore-check|template|product EXPECTED_OS_IMAGE_HASH [ENVIRONMENT_DIR]" >&2
     exit 64
 fi
 case "$5" in
-    service | restore-check | template | product) variant=$5 ;;
+    service | restore-check | template | product | export | migration-import) variant=$5 ;;
     *) echo "unknown variant $5" >&2; exit 64 ;;
 esac
 
@@ -40,6 +40,22 @@ printf '%s' "$expected_os_hash" | LC_ALL=C grep -Eq '^[0-9a-f]{64}$' || {
     echo "EXPECTED_OS_IMAGE_HASH must be 64 lowercase hexadecimal characters" >&2
     exit 64
 }
+kms=phala
+identity=""
+if [ "$#" -eq 7 ]; then
+    [ ! -f "$7/kms" ] || kms=$(cat "$7/kms")
+    case "$kms" in
+        phala) ;;
+        base)
+            committed_app=$(tr 'A-F' 'a-f' <"$7/dstack-app")
+            [ "${committed_app#0x}" = "$app_id" ] || {
+                echo "app id differs from environment's committed dstack-app" >&2; exit 1;
+            }
+            identity=$(node "$root/deploy/tools/onchain-kms.mjs" identity)
+            ;;
+        *) echo "kms must be phala or base" >&2; exit 64 ;;
+    esac
+fi
 tmp=$(mktemp -d)
 
 cleanup() {
@@ -76,12 +92,16 @@ jq -r '"dstack verifier: quote and TCB \(.details.tcb_status), RTMR3 event log, 
     "attested app id: \(.details.app_info.app_id)",
     "attested compose hash: 0x\(.details.app_info.compose_hash)"' "$tmp/result.json"
 
+# This event log has already been replayed against the quote by the official verifier.
+if [ "$kms" = base ]; then
+    node "$root/deploy/tools/onchain-kms.mjs" verify-provider-event "$attestation" "$identity"
+fi
 compose=$("$root/deploy/pinned-compose.sh")
 "$compose" -f "$tmp/docker-compose.yml" config --no-interpolate --format json >"$tmp/docker-compose.json"
 # Every setting is attested: the env may set only the compose's sealed names.
-violations=$(jq -r -L "$root/deploy" --arg variant "$variant" --slurpfile app "$tmp/app-compose.json" \
+violations=$(jq -r -L "$root/deploy" --arg variant "$variant" --arg kms "$kms" --arg identity "$identity" --slurpfile app "$tmp/app-compose.json" \
     'include "compose-policy"; (violations($variant; "dstack") + allowed_envs_violations($variant; $app[0].allowed_envs)
-        + port_policy_violations($variant; $app[0]))[]' \
+        + port_policy_violations($variant; $app[0]) + kms_violations($kms; $app[0]; $identity))[]' \
     "$tmp/docker-compose.json")
 if [ -n "$violations" ]; then
     echo "the attested $variant compose breaks deploy/compose-policy.jq:" >&2

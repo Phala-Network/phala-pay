@@ -1,0 +1,6 @@
+{
+  "chain_id": 8453,
+  "kms_auth": "0x2f83172A49584C017F2B256F0FB2Dca14126Ba9C",
+  "kms_implementation": "0x1228e5ec7a5bef029d095f7af02c27193bf5961a",
+  "app_implementation": "0x257fF5b049c27Cf99037217927daF7BB0802b0D9"
+}

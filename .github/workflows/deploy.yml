@@ -33,8 +33,8 @@ name: Deploy
 # - Authentication is the PHALA_CLOUD_API_KEY environment variable, which the CLI prefers over a
 #   stored profile; PHALA_CLOUD_DIR points at an empty directory so no profile or API prefix from
 #   the runner's home can be read. The API key belongs to the workspace in vars.PHALA_WORKSPACE.
-# - `--kms phala` selects Phala Cloud's KMS for every CVM (owner decision, deploy/README.md "KMS"):
-#   no DstackApp contract, no provisioner key, and an update applies directly.
+# - The default `kms: phala` keeps provision/upgrade unchanged. Opt-in Base KMS uses the
+#   reviewed environment's DstackApp and Safe with prepare/sign/commit; no chain key in CI.
 # - Provision sends the kit's pre-launch script with `--pre-launch-script`; compose-update sets
 #   that same script and the explicit port policy on upgrades and provisioning follow-ups.
 #   verify-attestation.sh requires both in the attested app-compose.
@@ -56,9 +56,25 @@ on:
         type: string
         default: topup
       mode:
-        description: "provision: create the target's first CVM; upgrade: update the target's CVM"
+        description: "Phala: provision/upgrade; Base KMS: prepare/commit after Safe approval"
         type: string
         required: true
+      variant:
+        description: "Topup compose: service, export, or migration-import (requires migration tooling release)"
+        type: string
+        default: service
+      migration_plan:
+        description: "Reviewed migration JSON path in the caller repository (export or migration-import only)"
+        type: string
+        default: ""
+      gateway_domain:
+        description: "Pinned node gateway host for initial Base provisioning (gateway.<base-domain>)"
+        type: string
+        default: ""
+      transaction_hash:
+        description: "Executed Base Safe transaction hash; already-registered for an approved rollback"
+        type: string
+        default: ""
       environment_dir:
         description: "The target's environment directory in the caller's repository"
         type: string
@@ -100,6 +116,10 @@ jobs:
       DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
       TARGET: ${{ inputs.target }}
       MODE: ${{ inputs.mode }}
+      REQUESTED_VARIANT: ${{ inputs.variant }}
+      MIGRATION_PLAN: ${{ inputs.migration_plan }}
+      TRANSACTION_HASH: ${{ inputs.transaction_hash }}
+      INITIAL_GATEWAY_DOMAIN: ${{ inputs.gateway_domain }}
       ENVIRONMENT_DIR: ${{ inputs.environment_dir }}
       TOPUP_MAINTENANCE_KEY_ID: ${{ vars.TOPUP_MAINTENANCE_KEY_ID }}
       # The owner-approved OS image (architecture §14); preflight refuses any other.
@@ -133,10 +153,21 @@ jobs:
           kit="$RUNNER_TEMP/kit"
           case "$TARGET" in
             topup)
-              preflight=$kit/deploy/preflight.sh variant=service cvm_id_variable=TOPUP_CVM_ID
+              preflight=$kit/deploy/preflight.sh variant=${REQUESTED_VARIANT:-service} cvm_id_variable=TOPUP_CVM_ID
+              case "$variant" in
+                service) [[ -z "${MIGRATION_PLAN:-}" ]] || { echo "::error::service takes no migration_plan"; status=1; } ;;
+                export | migration-import)
+                  [[ "${MIGRATION_PLAN:-}" =~ ^[A-Za-z0-9._/-]+$ && "$MIGRATION_PLAN" != /* && "$MIGRATION_PLAN" != *..* ]] ||
+                    { echo "::error::migration_plan must be a reviewed relative JSON path"; status=1; }
+                  [[ "$variant" != export || "$MODE" == upgrade || "$MODE" == prepare || "$MODE" == commit ]] ||
+                    { echo "::error::export requires an existing CVM"; status=1; } ;;
+                *) echo "::error::unknown topup variant $variant"; status=1 ;;
+              esac
               cvm_name=phala-pay-$DEPLOY_ENVIRONMENT instance_type=tdx.medium
               images="phala-pay postgres-walg" compose_name=docker-compose.$DEPLOY_ENVIRONMENT.yml ;;
             product)
+              [[ "${REQUESTED_VARIANT:-service}" == service && -z "${MIGRATION_PLAN:-}" ]] ||
+                { echo "::error::product takes no migration variant"; status=1; }
               [[ "$DEPLOY_ENVIRONMENT" == staging ]] ||
                 { echo "::error::the reference product deploys to staging only"; status=1; }
               preflight=$kit/deploy/product/preflight.sh variant=product cvm_id_variable=STAGING_PRODUCT_CVM_ID
@@ -145,6 +176,10 @@ jobs:
             *) echo "::error::unknown target $TARGET"; exit 1 ;;
           esac
           existing=${!cvm_id_variable}
+          [[ "$variant" != export || -n "$existing" ]] ||
+            { echo "::error::export requires an existing CVM"; status=1; }
+          [[ "$variant" != migration-import || "$MODE" == prepare || "$MODE" == commit ]] ||
+            { echo "::error::migration-import requires Base prepare/commit"; status=1; }
           # A new CVM's name is unique per run, since Phala Cloud refuses a duplicate name
           # (ERR-01-004): a reset provisions while the old CVM, stopped, stays for rollback. A CVM is
           # identified by its id variable, never by its name.
@@ -165,6 +200,10 @@ jobs:
                 echo "::error::$cvm_id_variable is set ($existing); use mode upgrade, or clear it to provision a new CVM"
                 status=1
               } ;;
+            prepare | commit)
+              if [[ "$MODE" == commit && ! "${TRANSACTION_HASH:-}" =~ ^(0x[0-9a-fA-F]{64}|already-registered)$ ]]; then
+                echo "::error::commit requires transaction_hash (Base tx or already-registered)"; status=1
+              fi ;;
             upgrade)
               [[ -n "$existing" ]] ||
                 { echo "::error::mode upgrade needs the Environment variable $cvm_id_variable"; status=1; } ;;
@@ -247,8 +286,33 @@ jobs:
             echo "::error::$ENVIRONMENT_DIR does not exist: commit this Environment's settings (docs/self-hosting.md)"
             exit 1
           }
+          kms=phala
+          [[ ! -f "$ENVIRONMENT_DIR/kms" ]] || kms=$(cat "$ENVIRONMENT_DIR/kms")
+          case "$kms:$MODE" in
+            phala:provision | phala:upgrade) ;;
+            base:prepare | base:commit)
+              [[ "$TARGET" == topup ]] || { echo "::error::Base KMS supports topup only"; exit 1; }
+              [[ -s "$ENVIRONMENT_DIR/dstack-owner" ]] ||
+                { echo "::error::Base KMS needs committed dstack-owner"; exit 1; }
+              if [[ -z "$EXISTING_CVM_ID" ]]; then
+                [[ -s "$ENVIRONMENT_DIR/provision.json" && "$INITIAL_GATEWAY_DOMAIN" =~ ^gateway\.[a-z0-9.-]+$ ]] ||
+                  { echo "::error::Initial Base provision needs reviewed provision.json and gateway_domain"; exit 1; }
+                if [[ "$MODE" == commit ]]; then
+                  [[ -s "$ENVIRONMENT_DIR/dstack-app" ]] ||
+                    { echo "::error::Commit the receipt's dstack-app address before initial commit"; exit 1; }
+                fi
+                echo "INITIAL_BASE=true" >>"$GITHUB_ENV"
+              else
+                [[ -s "$ENVIRONMENT_DIR/dstack-app" ]] ||
+                  { echo "::error::Base upgrade needs committed dstack-app"; exit 1; }
+              fi ;;
+            *) echo "::error::kms must be phala (provision/upgrade) or base (prepare/commit)"; exit 1 ;;
+          esac
+          echo "KMS=$kms" >>"$GITHUB_ENV"
           if [[ "$MODE" == provision ]]; then
             gateway=gateway.pending.invalid
+          elif [[ "$kms" == base && -z "$EXISTING_CVM_ID" ]]; then
+            gateway=$INITIAL_GATEWAY_DOMAIN
           else
             "$KIT/deploy/phala-cvm.sh" get "$EXISTING_CVM_ID" >"$WORK/cvm-before.json"
             gateway=$("$KIT/deploy/phala-cvm.sh" gateway-domain "$WORK/cvm-before.json")
@@ -258,10 +322,21 @@ jobs:
       - name: Render the environment with the release's kit and images
         timeout-minutes: 10
         run: |
-          "$KIT/deploy/render.sh" --images "$WORK/release/images.json" --gateway-domain "$GATEWAY" \
+          render_args=(--gateway-domain "$GATEWAY")
+          domain_compose=$COMPOSE
+          if [[ "$VARIANT" == export ]]; then
+            render_args=(--export --migration-export "$MIGRATION_PLAN")
+            domain_compose=$WORK/service-domain.yml
+            "$KIT/deploy/render.sh" --images "$WORK/release/images.json" --gateway-domain "$GATEWAY" \
+              "$ENVIRONMENT_DIR" >"$domain_compose"
+          elif [[ "$VARIANT" == migration-import ]]; then
+            render_args+=(--migration-import "$MIGRATION_PLAN")
+          fi
+          "$KIT/deploy/render.sh" --images "$WORK/release/images.json" "${render_args[@]}" \
             "$ENVIRONMENT_DIR" >"$COMPOSE"
+          # Export retains the old service URL solely for the pre-fencing maintenance pause.
           # The public URL is the domain dstack-ingress serves.
-          domain=$("$("$KIT/deploy/pinned-compose.sh")" -f "$COMPOSE" config --no-interpolate --format json |
+          domain=$("$("$KIT/deploy/pinned-compose.sh")" -f "$domain_compose" config --no-interpolate --format json |
             jq -er '.services["dstack-ingress"].environment.DOMAIN')
           { echo "DOMAIN=$domain"; echo "PUBLIC_URL=https://$domain"; } | tee -a "$GITHUB_ENV"
 
@@ -285,15 +360,18 @@ jobs:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         run: |
           sentry_args=()
-          if [[ "$DEPLOY_ENVIRONMENT" == production && "$TARGET" == topup ]]; then
+          if [[ "$DEPLOY_ENVIRONMENT" == production && "$TARGET" == topup && "$VARIANT" != export ]]; then
             # This local preflight value is never sent to the CVM or printed.
             sed -i '/^SENTRY_DSN=/d' "$ENV_FILE"
             printf 'SENTRY_DSN=%s\n' "$SENTRY_DSN" >>"$ENV_FILE"
             sentry_args=(--require-sentry)
           fi
+          variant_args=()
+          if [[ "$VARIANT" == export ]]; then variant_args=(--export --migration-export "$MIGRATION_PLAN")
+          elif [[ "$VARIANT" == migration-import ]]; then variant_args=(--migration-import "$MIGRATION_PLAN"); fi
           "$PREFLIGHT" --env "$ENV_FILE" --compose "$COMPOSE" --environment-dir "$ENVIRONMENT_DIR" \
-            --workspace "$PHALA_WORKSPACE" --os-image "$DSTACK_OS_IMAGE" --unsealed "${sentry_args[@]}"
-          if [[ "$MODE" == upgrade ]]; then
+            --workspace "$PHALA_WORKSPACE" --os-image "$DSTACK_OS_IMAGE" --unsealed "${sentry_args[@]}" "${variant_args[@]}"
+          if [[ "$MODE" == upgrade || ( "$MODE" == commit && "${INITIAL_BASE:-false}" != true ) ]]; then
             REPO_ROOT=$KIT tmp=$WORK
             fail() { echo "::error::$*" >&2; }
             ok() { echo "ok: $*"; }
@@ -308,12 +386,55 @@ jobs:
       # target is staging-only.
       - name: Check the routes' modes against the Environment
         timeout-minutes: 10
-        if: inputs.target == 'topup'
+        if: inputs.target == 'topup' && inputs.variant != 'export'
         run: '"$KIT/deploy/check-route-modes.sh" "$DEPLOY_ENVIRONMENT" "$COMPOSE"'
+
+      - name: Prepare the Base compose and Safe batches
+        if: inputs.mode == 'prepare' || inputs.mode == 'commit'
+        timeout-minutes: 10
+        env:
+          PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
+        run: |
+          policy=$(jq -cn -L "$KIT/deploy" --arg variant "$VARIANT" 'include "compose-policy"; port_policy($variant)')
+          if [[ "${INITIAL_BASE:-false}" == true ]]; then
+            jq --rawfile compose "$COMPOSE" --rawfile pre_launch "$KIT/deploy/phala-cloud-pre-launch.sh" \
+              --argjson policy "$policy" '.compose_file.docker_compose_file = $compose |
+              .compose_file.pre_launch_script = $pre_launch | .compose_file.port_policy = $policy' \
+              "$ENVIRONMENT_DIR/provision.json" >"$WORK/provision-request.json"
+            "$KIT/deploy/phala-cvm.sh" provision-prepare "$WORK/provision-request.json" \
+              "$WORK/onchain-prepare.json" "$ENVIRONMENT_DIR"
+            jq '{compose_hash, device_id, kms_info}' "$WORK/onchain-prepare.json" >"$WORK/onchain-prepare.json.summary.json"
+          else
+            "$KIT/deploy/phala-cvm.sh" compose-prepare "$EXISTING_CVM_ID" "$COMPOSE" \
+              "$KIT/deploy/phala-cloud-pre-launch.sh" "$policy" "$WORK/onchain-prepare.json" "$ENVIRONMENT_DIR"
+          fi
+          {
+            echo "### Base KMS preparation (no maintenance pause)"
+            echo "Review the artifact's Safe batches: approve the compose and device on Base (8453)."
+            echo "Commit re-prepares the same rendered compose and verifies its approval before pausing."
+            echo '```json'
+            cat "$WORK/onchain-prepare.json.summary.json"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Verify Base approval before pausing
+        if: inputs.mode == 'commit' && env.INITIAL_BASE != 'true'
+        timeout-minutes: 10
+        run: |
+          hash=$(jq -er .compose_hash "$WORK/onchain-prepare.json")
+          device=$(jq -er .device_id "$WORK/onchain-prepare.json")
+          "$KIT/deploy/verify-onchain-app.sh" "$(cat "$ENVIRONMENT_DIR/dstack-app")" \
+            "$(cat "$ENVIRONMENT_DIR/dstack-owner")" "$hash" "$device" >"$WORK/onchain-verification.json"
+          if [[ "$TRANSACTION_HASH" != already-registered ]]; then
+            node "$KIT/deploy/tools/onchain-kms.mjs" receipt "$TRANSACTION_HASH"
+          fi
+          # An OS upgrade is a separate approved operation. Do not introduce an unprepared reboot.
+          [[ $(jq -er .os.name "$WORK/cvm-before.json") == "$DSTACK_OS_IMAGE" ]] ||
+            { echo "::error::Base OS change needs a separately prepared operation; see onchain-kms-upgrade.md"; exit 1; }
 
       - name: Pause new mutations before upgrading
         id: maintenance
-        if: inputs.mode == 'upgrade' && inputs.target == 'topup'
+        if: (inputs.mode == 'upgrade' || inputs.mode == 'commit') && inputs.target == 'topup' && env.INITIAL_BASE != 'true'
         env:
           TOPUP_MAINTENANCE_PRIVATE_KEY_PEM: ${{ secrets.TOPUP_MAINTENANCE_PRIVATE_KEY_PEM }}
         run: |
@@ -326,6 +447,7 @@ jobs:
       # The CLI output (JSON, no secrets: the key is only in the environment and env values are
       # encrypted client-side) goes to the log as well, so a failure shows its reason.
       - name: Deploy (${{ inputs.mode }}) and wait for the CVM
+        if: inputs.mode != 'prepare'
         # OS-image change: <=15 min convergence + <=10 min health + a fresh lease;
         # compose: <=5 min submit + <=15 min convergence + <=10 min health.
         # These are ceilings, not outage promises; the job still has its 75-minute ceiling.
@@ -342,12 +464,15 @@ jobs:
             fi
           }
           trap stop_monitor EXIT
-          if [[ "$MODE" == upgrade ]]; then
+          if [[ "$VARIANT" != export && ( "$MODE" == upgrade || ( "$MODE" == commit && "${INITIAL_BASE:-false}" != true ) ) ]]; then
             # Keep sampling through every reboot, bounded by this step's 60-minute budget.
             python3 "$KIT/deploy/upgrade-monitor.py" "$PUBLIC_URL" "$WORK/unavailability.json" "$WORK/upgrade-monitor.stop" 3600 &
             monitor_pid=$!
           fi
-          if [[ "$MODE" == provision ]]; then
+          if [[ "$MODE" == commit && "${INITIAL_BASE:-false}" == true ]]; then
+            "$KIT/deploy/phala-cvm.sh" provision-commit "$TRANSACTION_HASH" "$WORK/onchain-prepare.json" \
+              "$ENVIRONMENT_DIR" >"$WORK/deploy.json"
+          elif [[ "$MODE" == provision ]]; then
             node_args=()
             [[ -z "$PHALA_NODE_ID" ]] || node_args=(--node-id "$PHALA_NODE_ID")
             "$KIT/deploy/phala-cvm.sh" deploy "$WORK/deploy.json" \
@@ -365,6 +490,11 @@ jobs:
               --no-public-sysinfo \
               --public-tcbinfo \
               --secure-time
+          elif [[ "$MODE" == commit ]]; then
+            cp "$WORK/onchain-prepare.json.summary.json" "$WORK/deploy.json"
+            hash=$(jq -er .compose_hash "$WORK/deploy.json")
+            "$KIT/deploy/phala-cvm.sh" compose-commit "$EXISTING_CVM_ID" "$hash" "$TRANSACTION_HASH" \
+              "$WORK/onchain-prepare.json" "$ENVIRONMENT_DIR"
           else
             current_image=$(jq -er '.os.name' "$WORK/cvm-before.json")
             if [[ "$current_image" != "$DSTACK_OS_IMAGE" ]]; then
@@ -382,8 +512,8 @@ jobs:
             "$KIT/deploy/phala-cvm.sh" compose-update "$EXISTING_CVM_ID" "$COMPOSE" \
               "$KIT/deploy/phala-cloud-pre-launch.sh" "$policy" "$WORK/deploy.json"
           fi
-          if [[ "$MODE" == provision ]]; then
-            cvm_id=$(jq -er '.vm_uuid' "$WORK/deploy.json")
+          if [[ "$MODE" == provision || "${INITIAL_BASE:-false}" == true ]]; then
+            cvm_id=$(jq -er '.vm_uuid // .id' "$WORK/deploy.json")
             app_id=$(jq -er '.app_id' "$WORK/deploy.json")
           else
             cvm_id=$EXISTING_CVM_ID
@@ -422,7 +552,10 @@ jobs:
           # A provision only creates the CVM: unsealed, it boots but does not run, so it is waited for
           # settled in any status (deploy/phala-cvm.sh, wait); the attestation below shows it booted
           # the compose. The upgrade after the sealing is the acceptance step.
-          if [[ "$MODE" == provision ]]; then
+          if [[ "$VARIANT" == export ]]; then
+            expected=$(jq -er '.compose_hash' "$WORK/deploy.json")
+            "$KIT/deploy/phala-cvm.sh" wait --unsealed --compose-hash "$expected" "$cvm_id" >"$WORK/cvm.json"
+          elif [[ "$MODE" == provision || "${INITIAL_BASE:-false}" == true ]]; then
             "$KIT/deploy/phala-cvm.sh" wait --unsealed "$cvm_id" >"$WORK/cvm.json"
           else
             expected=$(jq -er '.compose_hash' "$WORK/deploy.json")
@@ -434,7 +567,7 @@ jobs:
             echo "| CVM node | $(jq -r 'if .node_info.id != null then "\(.node_info.id) (\(.node_info.name), \(.node_info.region // "region not reported"))" else "not reported by Phala Cloud" end' "$WORK/cvm.json") |"
             echo
           } >>"$GITHUB_STEP_SUMMARY"
-          if [[ "$MODE" == upgrade ]]; then
+          if [[ "$VARIANT" != export && ( "$MODE" == upgrade || ( "$MODE" == commit && "${INITIAL_BASE:-false}" != true ) ) ]]; then
             # Keep sampling through boot and service readiness, before stopping the child process.
             "$KIT/deploy/phala-cvm.sh" healthz "$PUBLIC_URL"
           fi
@@ -463,6 +596,7 @@ jobs:
 
       # After an upgrade the attestation can still describe the previous compose for a while.
       - name: Read back and verify the attested compose
+        if: inputs.mode != 'prepare'
         timeout-minutes: 20
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
@@ -475,7 +609,7 @@ jobs:
           # Apply the reviewed OS pin on provision and upgrade, including existing CVMs.
           expected_os_hash=$(cat "$ENVIRONMENT_DIR/os-image-hash")
           "$KIT/deploy/verify-attestation.sh" "$WORK/attestation.json" "$WORK/info.json" "$APP_ID" \
-            "$COMPOSE" "$VARIANT" "$expected_os_hash" 2>&1 | tee "$WORK/verification.txt"
+            "$COMPOSE" "$VARIANT" "$expected_os_hash" "$ENVIRONMENT_DIR" 2>&1 | tee "$WORK/verification.txt"
           {
             echo "| | |"
             echo "|---|---|"
@@ -491,6 +625,7 @@ jobs:
       # domain to this CVM alone; dstack-ingress requests the certificate only once both records
       # resolve. An upgrade keeps the instance id; a new instance (a restore) needs a new TXT value.
       - name: Print the owner's DNS records
+        if: inputs.mode != 'prepare' && inputs.variant != 'export'
         timeout-minutes: 10
         run: |
           instance_id=$("$KIT/deploy/phala-cvm.sh" instance-id "$WORK/attestation.json")
@@ -515,11 +650,11 @@ jobs:
       # until the owner seals the storage credentials, so the first check is the upgrade's.
       - name: Wait for the service
         timeout-minutes: 20
-        if: inputs.mode == 'upgrade'
+        if: (inputs.mode == 'upgrade' || inputs.mode == 'commit') && env.INITIAL_BASE != 'true' && inputs.variant != 'export'
         run: '"$KIT/deploy/phala-cvm.sh" healthz "$PUBLIC_URL"'
 
       - name: Resume mutations after health checks
-        if: steps.maintenance.outputs.enabled == 'true'
+        if: steps.maintenance.outputs.enabled == 'true' && inputs.variant != 'export'
         env:
           TOPUP_MAINTENANCE_PRIVATE_KEY_PEM: ${{ secrets.TOPUP_MAINTENANCE_PRIVATE_KEY_PEM }}
         run: |
@@ -531,7 +666,7 @@ jobs:
       # at most 10 minutes in all (each check bounds its own requests and TLS handshake).
       - name: Verify the certificate evidence
         timeout-minutes: 10
-        if: inputs.mode == 'upgrade'
+        if: (inputs.mode == 'upgrade' || inputs.mode == 'commit') && env.INITIAL_BASE != 'true' && inputs.variant != 'export'
         run: |
           # shellcheck disable=SC2016  # expanded by the inner bash
           if ! timeout 600 bash -c 'until "$0" "$1" "$2" >"$3" 2>&1; do cat "$3"; sleep 30; done' \
@@ -545,7 +680,7 @@ jobs:
 
       - name: Print the owner's sealing step
         timeout-minutes: 10
-        if: inputs.mode == 'provision'
+        if: inputs.mode == 'provision' || (inputs.mode == 'commit' && env.INITIAL_BASE == 'true')
         run: |
           compose_json=$("$("$KIT/deploy/pinned-compose.sh")" -f "$COMPOSE" config --no-interpolate --format json)
           names=$(cut -d= -f1 "$ENV_FILE" | awk '{ printf "%s`%s`", (count++ ? ", " : ""), $0 }')
@@ -609,7 +744,7 @@ jobs:
           fi
 
       - name: Report observed unavailability
-        if: always() && inputs.mode == 'upgrade'
+        if: always() && (inputs.mode == 'upgrade' || inputs.mode == 'commit') && inputs.variant != 'export'
         run: |
           if [[ -f "$WORK/unavailability.json" ]]; then
             python3 "$KIT/deploy/upgrade-monitor.py" summary "$WORK/unavailability.json" >>"$GITHUB_STEP_SUMMARY"
@@ -629,6 +764,10 @@ jobs:
           path: |
             ${{ runner.temp }}/deploy/docker-compose.*.yml
             ${{ runner.temp }}/deploy/release/images.json
+            ${{ runner.temp }}/deploy/onchain-prepare.json.batch.json
+            ${{ runner.temp }}/deploy/onchain-prepare.json.device-batch.json
+            ${{ runner.temp }}/deploy/onchain-prepare.json.summary.json
+            ${{ runner.temp }}/deploy/onchain-verification.json
             ${{ runner.temp }}/deploy/deploy.json
             ${{ runner.temp }}/deploy/deploy-public-url.json
             ${{ runner.temp }}/deploy/cvm.json

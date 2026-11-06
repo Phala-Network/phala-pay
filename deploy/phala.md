@@ -37,6 +37,16 @@ account after its gates pass. Phala, as the operator of this
 instance, is responsible for its compliance, as every operator is for its own (architecture §15,
 "Compliance").
 
+## KMS migration preparation
+
+Production and staging remain on Phala Cloud KMS in this release (`kms` files say `phala`).
+The staging reference product stays on Phala KMS after service cutover. A future reviewed
+cutover directory selects Base, records the Safe-owned `dstack-app` and `dstack-owner`, pins the
+node and uses a new backup prefix. Production uses the treasury Safe; staging uses a separate
+Safe with the same signer. Do not change the existing CVM's KMS in place. Follow the
+[upgrade runbook](runbooks/onchain-kms-upgrade.md) for prepare/sign/commit, and the
+[migration preparation](runbooks/onchain-kms-migration.md) for the pending cutover runbook.
+
 ## Production
 
 Production has been live since October 23, 2026 PDT. `https://pay-api.phala.com` runs v0.13.4

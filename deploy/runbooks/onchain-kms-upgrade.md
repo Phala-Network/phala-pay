@@ -1,0 +1,152 @@
+# Base onchain KMS: prepare, sign, commit
+
+This flow is opt-in. Existing `kms: phala` deployments use `provision` / `upgrade` as before.
+Production and staging are still Phala KMS in the committed directories. Never switch an
+existing CVM's KMS in place: a new Base app has new derived keys.
+
+## Release adoption
+
+`deploy-phala.yml` remains pinned to v0.13.6, whose reusable workflow has no Base inputs. The
+release-adoption PR must repin both its workflow SHA and `version` to the release containing
+this change, extend its mode choices to `[provision, upgrade, prepare, commit]`, add optional
+string dispatch inputs `transaction_hash` and `gateway_domain`, and forward both in `with`.
+Do that together; passing new inputs to the old pinned workflow fails GitHub validation.
+
+## Reviewed inputs
+
+Commit `kms` (`base`), `dstack-app` (DstackApp address), `dstack-owner` (expected Base Safe),
+`os-image-hash` and the ordinary environment settings. Production's owner is
+`0x8AB55148944F837040bbB887f8A5005f70FF7700`; staging uses its own reviewed Base Safe. The
+reference product and template stay on Phala KMS. The Base KmsAuth address and both implementation
+pins are in `deploy/onchain-kms.json`. Review upstream source and chain evidence before changing
+those pins. No private signing key belongs in GitHub or these files.
+
+## Initial provisioning
+
+Commit a complete `provision.json` request in the new environment directory. It holds the full
+initial `compose_file` (including explicit backend defaults, allowed env **names**, KMS provider
+pin, port policy and pre-launch script), `kms: "BASE"`, CVM name, instance type, OS image and a
+pinned `node_id` (or `teepod_id`). Set `prefer_dev: false`. It must contain no secret values or
+`encrypted_env`. Preserve the reviewed backend init script and defaults from verified evidence;
+do not invent them. Resolve the selected node's gateway before preparing.
+
+With `TOPUP_CVM_ID` unset, dispatch Deploy `prepare` with `gateway_domain` set to that node's
+`gateway.<base-domain>`. The workflow renders the compose and sets its reviewed pre-launch and
+port policy in the request, runs preflight, and calls `provision-prepare`. It recomputes the hash
+locally and refuses any backend mutation. If it refuses, inspect the exact backend defaults,
+review a corrected request, and prepare again. Never approve an unexplained hash.
+
+Import the factory batch into Safe Transaction Builder on **Base (8453)**. Review the Safe,
+factory address, pinned device and compose hash. It calls
+`deployAndRegisterApp(Safe,false,false,deviceId,composeHash)`: upgrades remain enabled, hardware
+pinning remains enabled, `requireTcbUpToDate` stays false. Deploy still requires UpToDate quotes.
+Execute it outside GitHub. Record the DstackApp address from the KmsAuth-emitted
+`AppDeployedViaFactory` event in `dstack-app` through a reviewed change.
+
+Dispatch `commit` with the executed transaction hash and the same gateway input. The workflow
+recomputes the request, matches the receipt's factory and Safe, verifies owner/compose/device and
+both implementations, then calls `POST /cvms`. It waits unsealed and verifies the attestation,
+including Base provider and committed app id. Set `TOPUP_CVM_ID` from the deployment record.
+Seal the runtime values from the owner's machine, configure DNS from the verified instance id,
+and run the ordinary Base upgrade acceptance flow below. Backend acceptance of a Safe deployer,
+initial full-compose normalization and target-node Base availability require staging rehearsal.
+
+The shared debugging entry points are:
+
+```sh
+deploy/phala-cvm.sh provision-prepare request.json prepare.json "$ENVIRONMENT_DIR"
+deploy/phala-cvm.sh provision-commit "$TRANSACTION_HASH" prepare.json "$ENVIRONMENT_DIR"
+```
+
+## Upgrades and rollback
+
+1. Commit the new release/configuration, keeping the existing app and node. Dispatch `prepare`.
+   Preflight and preparation do not pause admission. Download the batch, device batch and public
+   summary artifact. Verify the locally computed compose hash and review the exact rendered
+   compose. Base requires `kms_enabled`, `key_provider: kms` and the CA identity from
+   `KmsAuth.kmsInfo().caPubkey` in `key_provider_id`.
+2. Import and execute the compose batch on the expected Safe on Base. Execute the device batch
+   if that device is not already approved; `addDevice` is idempotent. Pre-approve one standby
+   device using its measured PPID hash, while keeping `allowAnyDevice=false`.
+3. Dispatch `commit` with the transaction hash and the same reviewed release/configuration.
+   Commit re-prepares deterministically, verifies the hash is approved, checks device/owner and
+   both proxy pins **before pausing**. It then uses the existing pause → commit → wait → verify →
+   resume path. Read the attestation and ingress evidence before declaring acceptance.
+4. Keep N-1 approved. Rollback selects its release/configuration, prepares it, and commits with
+   `transaction_hash: already-registered`. State checks still run; no Safe signature is needed
+   for an approved hash and device. Never run another writer against the same backup prefix.
+5. After acceptance, remove hashes older than N-1 with a separately reviewed Safe batch.
+   `node deploy/tools/onchain-kms.mjs batch remove.json "$SAFE" "$APP" removeComposeHash "$OLD_HASH"`
+   writes that batch offline. Never remove the running hash or the rollback hash.
+
+A Safe signer is required for every new hash and device. The production Safe is 1/1: arrange
+signer availability before a release, with an operator response target of one hour during an
+agreed maintenance window. Outside that window agree a response time before preparing. Admin
+incident pauses remain available without a Safe signature.
+
+## Migration compose variants
+
+After the migration-tooling release lands, Deploy also accepts `variant: export` or
+`variant: migration-import` and a reviewed relative `migration_plan` JSON path. The caller
+release-adoption PR must forward these optional inputs together with the new Base inputs.
+An export is an upgrade of an existing CVM: preflight checks its exact render/plan and images,
+then the normal maintenance pause precedes replacement. Its **verified attestation**, proving
+that exact export compose with no topup service, is the fencing evidence in the run artifact.
+There is no service health/ingress check or successful maintenance resume on the exporter. A
+failure before fencing still attempts the normal lease cleanup.
+
+Export keeps the old service's allowed env names (AWS, Sentry and RPC keys) without re-sealing;
+its compose may reference only its declared AWS names. That retained-name exception applies
+only to export. Migration import keeps the service ingress and ordinary acceptance checks.
+The PR 2 render/policy/tooling changes are required before either variant can deploy.
+
+## Token lifetime and hash format
+
+Prepare tokens/cache entries last **14 days**. Preparing again invalidates the previous token.
+The workflow keeps token-bearing JSON private in its temporary directory, never in logs or
+artifacts; commit re-prepares from the reviewed inputs to obtain a fresh token. A delayed signature
+is safe only if the new prepare reproduces the signed hash. If any setting, env name, node or
+backend default changes, stop and review a new batch. Sealed env values are excluded from the
+hash; their allowed names are included. Changing allowed names needs a separately reviewed
+prepare operation, followed by sealing; the ordinary upgrade helper preserves the current set.
+
+The hash is SHA-256 over the **exact** sorted compact UTF-8 app-compose JSON, including port policy,
+pre-launch script and public/KMS flags. The production v0.13.6 fixture reproduces its attested
+`ed7dc915…` hash byte for byte. The pinned SDK's public `getComposeHash` matches it; an older
+internal SDK helper uses four-space JSON and yields a different hash. No approval uses that
+older helper. `attested-compose.sh` continues hashing the attested raw bytes.
+
+The implementation follows the pinned CLI 1.1.22's
+[prepare handling](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.1.22/cli/src/commands/deploy/handler.ts#L944)
+and [commit handling](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.1.22/cli/src/commands/deploy/handler.ts#L1223),
+with [SDK PATCH](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.1.22/js/src/actions/cvms/patch_cvm.ts#L159)
+and [SDK commit](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.1.22/js/src/actions/cvms/commit_cvm_update.ts#L67):
+`PATCH /cvms/{id}` with `X-Prepare-Only: true`, then `POST /cvms/{id}/commit-update` with
+`token`, `compose_hash`, `transaction_hash`. Initial provision uses `POST /cvms/provision`, then
+`POST /cvms` with receipt-derived app/contract and Safe deployer addresses. These are in the
+[published OpenAPI](https://github.com/Phala-Network/phala-docs/blob/main/openapi.json), operationIds
+`update_cvm_endpoint_api_v1_cvms__cvm_id__patch`,
+`commit_cvm_update_api_v1_cvms__cvm_id__commit_update_post`,
+`handle_provision_cvm_api_v1_cvms_provision_post`, and
+`handle_create_cvm_from_povision_api_v1_cvms_post`. There is no documented `/compose_file/commit`.
+
+## OS changes and governance alerts
+
+Base compose commit refuses an implicit OS change. Review the new OS measurements and KmsAuth
+OS allowlist, prepare the explicit OS `image` change with the documented unified PATCH token
+flow, and verify the resulting exact compose hash before approval. A pure OS-image field change
+may retain its compose hash; the OS measurement pin is still a separate acceptance check. This
+special operation requires operator rehearsal; do not fall back to the Phala-only OS helper.
+
+Verify contracts scans the real Base KmsAuth and configured apps every day using a keyless RPC.
+Policy, owner and implementation events fail the job for review, including expected changes.
+The report includes transaction hashes and raw topics/data. Its 45,000-block window overlaps
+normal daily runs; for an outage longer than that, run the monitor from the last reviewed block:
+
+```sh
+node deploy/tools/onchain-kms.mjs monitor "$LAST_REVIEWED_BLOCK" "$APP"
+```
+
+Check both implementation slots and review every governance event before updating pins. Phala's
+KMS governance can still approve OS/KMS builds or upgrade KmsAuth; our Safe controls only our
+DstackApp. See [device drift](device-drift.md) for a device approval incident.
