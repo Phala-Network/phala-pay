@@ -19,6 +19,12 @@
       "purls": ["pkg:cargo/crypto-bigint@0.5.5"],
       "statement": "No patched crypto-bigint 0.5.x or compatible Alloy/k256 upgrade exists. Secret-scalar validation constructs a secp256k1 public key only during TEE startup: keys provisioning (backup/database secrets) and client-secret initialization. These paths are not request-triggered or remotely repeatable; runtime webhook signing uses Ed25519, and secp256k1 signature recovery/verification uses public inputs. This accepts startup exposure rather than claiming the dependency is fixed. Remove when Alloy/k256 and the dstack SDK resolve crypto-bigint >=0.7.6; reassess immediately if secret secp256k1 operations become request-triggered. Tracking and required re-review: https://github.com/Phala-Network/phala-pay/issues/536.",
       "expired_at": "2026-11-25T00:00:00Z"
+    },
+    {
+      "id": "RUSTSEC-2026-0441",
+      "purls": ["pkg:cargo/pin-utils@0.1.0"],
+      "statement": "pin-utils is unmaintained after its repository was archived; this is a maintenance notice, not a reported vulnerability, and no patched version exists. The locked Alloy 2.5.0 provider/rpc-client/transport crates pull pin-utils 0.1.0 through wasmtimer 0.4.3 only for cfg(all(target_family = \"wasm\", target_os = \"unknown\")); wasmtimer and pin-utils are absent from the native Linux service runtime. Alloy and wasmtimer are already at their latest supported releases, so no supported parent upgrade removes pin-utils. This entry records the cargo-deny exception's required exposure review and expiry. Remove when a supported Alloy/wasmtimer release drops pin-utils; reassess immediately if a wasm runtime is introduced or the dependency path changes. Tracking and required re-review: https://github.com/Phala-Network/phala-pay/issues/626.",
+      "expired_at": "2026-12-05T00:00:00Z"
     }
   ]
 }
