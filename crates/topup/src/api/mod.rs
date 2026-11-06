@@ -21,6 +21,7 @@ mod ignored_transfers;
 mod instance_pause;
 mod keys;
 pub(crate) mod metadata;
+mod migration;
 pub mod models;
 mod openapi;
 mod pagination;
@@ -492,6 +493,7 @@ fn admin_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(sanctions::remove))
         .routes(routes!(handlers::metrics))
         .routes(routes!(account::admin_get_attestation))
+        .routes(routes!(migration::export_key))
         .routes(routes!(restore::get_restore))
         .routes(routes!(restore::revoke_api_key))
         .routes(routes!(restore::verify_treasuries))

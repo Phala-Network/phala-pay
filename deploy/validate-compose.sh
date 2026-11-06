@@ -45,6 +45,46 @@ render example-restore-check "$root/deploy/environments/example/topup" --restore
 render product "$staging/product"
 render template "$root/deploy/environments/phala-cloud-template/topup" --template
 
+# Migration transfer pins are attested JSON, supplied only to the explicit render modes.
+jq -n '{migration_export: {recipient: "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+    object: "s3://migration-tests/unique-cutover"}}' >"$tmp/migration-export.json"
+jq -n '{migration_import: {source_app_id: ("a" * 40), export_public_key: ("b" * 64),
+    object: "s3://migration-tests/unique-cutover"}}' >"$tmp/migration-import.json"
+"$root/deploy/render.sh" --export --migration-export "$tmp/migration-export.json" \
+    --images "$tmp/images.json" "$staging/topup" >"$tmp/export.yml"
+"$root/deploy/render.sh" --migration-import "$tmp/migration-import.json" \
+    --gateway-domain gateway.dstack-pha-prod5.phala.network --images "$tmp/images.json" \
+    "$staging/topup" >"$tmp/migration-import.yml"
+for migration_variant in export migration-import; do
+    "$compose" -f "$tmp/$migration_variant.yml" config --no-interpolate --format json \
+        >"$tmp/$migration_variant.json"
+done
+# Negative tests mutate the final attested document, exercising the same policy as verification.
+refuse_migration() {
+    local variant=$1 mutation=$2
+    jq "$mutation" "$tmp/$variant.json" >"$tmp/mutated.json"
+    jq -e -L "$root/deploy" --arg variant "$variant" \
+        'include "compose-policy"; violations($variant; "dstack") | length > 0' \
+        "$tmp/mutated.json" >/dev/null || fail "migration policy accepted $mutation"
+}
+refuse_migration export 'del(.services["migration-holder"])'
+refuse_migration export '.services["migration-holder"].network_mode = "host"'
+refuse_migration export '.services["migration-holder"].environment = {PGPASSWORD:"forbidden"}'
+refuse_migration export '.services.snapshot.command |= map(select(. != "--snapshot"))'
+refuse_migration export 'del(.services.dump.depends_on.snapshot)'
+refuse_migration migration-import 'del(.services["migration-holder"])'
+refuse_migration migration-import '.services.restore.command = ["pg_restore", "--verbose"]'
+refuse_migration migration-import 'del(.services.restore.environment.PGOPTIONS)'
+refuse_migration export '.services.topup = .services.export'
+refuse_migration export '.services.export.ports = [{target:8080,published:"80",protocol:"tcp",mode:"ingress"}]'
+refuse_migration export '.services.dump.command = ["pg_dump", "--no-acl"]'
+refuse_migration export '.volumes.migration.driver_opts.type = "disk"'
+refuse_migration migration-import 'del(.services.migrate.depends_on["import-verify"])'
+refuse_migration migration-import '.services.restore.command = ["pg_restore", "--dbname=topup"]'
+refuse_migration migration-import '.services.topup.volumes += [{source:"migration",target:"/leak",type:"volume"}]'
+refuse_migration migration-import '.services.backup.depends_on["import-verify"].condition = "service_started"'
+refuse_migration migration-import '.services["import-verify"].command |= map(select(. != "--verify"))'
+
 # Staging's sealed names are the ones sealed in its CVM: a change needs a re-seal
 # (deploy/README.md, "Sealing the secrets") before the upgrade that makes it.
 [[ "$(sealed service)" == "AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY SENTRY_DSN TOPUP_RPC_ANKR_KEY TOPUP_RPC_INFURA_KEY " ]] ||

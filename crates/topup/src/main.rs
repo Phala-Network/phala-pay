@@ -54,7 +54,10 @@ enum TopupCommand {
     },
     Run(Box<RunArgs>),
     /// Apply the database migrations as the database owner.
-    Migrate,
+    Migrate {
+        #[command(subcommand)]
+        command: Option<MigrationCommand>,
+    },
     Route {
         #[command(subcommand)]
         command: RouteCommand,
@@ -85,6 +88,41 @@ enum TopupCommand {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+}
+
+#[derive(Subcommand)]
+enum MigrationCommand {
+    /// Encrypt and upload the fenced source archive from the private CVM tmpfs.
+    Export {
+        #[command(flatten)]
+        args: MigrationArgs,
+        /// Hold an exported database snapshot for pg_dump and manifest metadata.
+        #[arg(long, conflicts_with = "snapshot_check")]
+        snapshot: bool,
+        /// Health check for the snapshot holder, without database access.
+        #[arg(long)]
+        snapshot_check: bool,
+    },
+    /// Verify and decrypt a migration, or verify the restored database with --verify.
+    Import {
+        #[command(flatten)]
+        args: MigrationArgs,
+        #[arg(long)]
+        verify: bool,
+        /// Maximum time to wait for the source manifest (seconds).
+        #[arg(long, default_value_t = 172800, value_parser = clap::value_parser!(u64).range(1..))]
+        wait_s: u64,
+    },
+}
+
+#[derive(Args)]
+struct MigrationArgs {
+    /// Immutable, attested migration configuration.
+    #[arg(long)]
+    config: PathBuf,
+    /// Private tmpfs shared with the PostgreSQL dump/restore job only.
+    #[arg(long, default_value = "/run/migration")]
+    directory: PathBuf,
 }
 
 #[derive(Subcommand)]
@@ -389,7 +427,10 @@ async fn main() -> ExitCode {
         TopupCommand::Config {
             command: ConfigCommand::Show { file },
         } => return show_config(&file),
-        TopupCommand::Migrate => migrate().await,
+        TopupCommand::Migrate { command: None } => migrate().await,
+        TopupCommand::Migrate {
+            command: Some(command),
+        } => migration_command(command).await,
         TopupCommand::Route {
             command: RouteCommand::Validate { template, file },
         } => return validate_route(&file, template),
@@ -1667,6 +1708,73 @@ async fn check_payment_settings_migration(pool: &PgPool) -> anyhow::Result<()> {
         bail!("payment settings cutover is incomplete; upgrade through 0.9.x first");
     }
     Ok(())
+}
+
+async fn migration_command(command: MigrationCommand) -> anyhow::Result<ExitCode> {
+    let (MigrationCommand::Export { args, .. } | MigrationCommand::Import { args, .. }) = &command;
+    if matches!(
+        command,
+        MigrationCommand::Export {
+            snapshot_check: true,
+            ..
+        }
+    ) {
+        anyhow::ensure!(
+            args.directory.join("snapshot.id").try_exists()?,
+            "migration snapshot is not ready"
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
+    if matches!(command, MigrationCommand::Export { snapshot: true, .. }) {
+        // Invalidate health readiness before any connection wait on a restarted snapshot job.
+        topup::migration::reset_snapshot(&args.directory)?;
+    }
+    let config = topup::migration::Config::load(&args.config)?;
+    let pool = connect_owner("migration", 2).await?;
+    let signer = DstackSigner::new();
+    match &command {
+        MigrationCommand::Export { args, snapshot, .. } => {
+            if *snapshot {
+                topup::migration::snapshot(&pool, &args.directory).await?;
+                return Ok(ExitCode::SUCCESS);
+            }
+            let config = config
+                .migration_export
+                .context("migration_export configuration is required")?;
+            let transfer = topup::migration::Transfer::s3(&config.object)?;
+            transfer
+                .export(&config, &signer, &DstackAttestor::new(), &args.directory)
+                .await?;
+        }
+        MigrationCommand::Import {
+            args,
+            verify,
+            wait_s,
+        } => {
+            let config = config
+                .migration_import
+                .context("migration_import configuration is required")?;
+            let identity = topup::migration::import_identity(&signer).await?;
+            if *verify {
+                topup::migration::verify_import(&config, &pool, &identity, &args.directory).await?;
+            } else {
+                let transfer = topup::migration::Transfer::s3(&config.object)?;
+                transfer
+                    .import(
+                        &config,
+                        &pool,
+                        &identity,
+                        &DstackAttestor::new(),
+                        &args.directory,
+                        Duration::from_secs(*wait_s),
+                    )
+                    .await?;
+            }
+        }
+    }
+    pool.close().await;
+    tracing::info!("migration job completed");
+    Ok(ExitCode::SUCCESS)
 }
 
 async fn migrate() -> anyhow::Result<ExitCode> {

@@ -20,6 +20,12 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   and proxy verification, provider-bound attestation, keyless governance monitoring and operator
   runbooks. Existing Phala KMS deployments and reference-product/template behavior are unchanged;
   production and staging have not switched. Migration to a new app requires new keys and backups.
+- One-time, attested logical database migration between KMS app identities: signed Ed25519
+  manifests, age/X25519 encryption, pinned transfer keys, exact restored row-count checks, and a
+  persistent completion marker preventing a second restore and allowing safe reboot. The export
+  variant fences the API and ingress;
+  the optional import overlay gates schema migrations and startup on transactional restore and
+  verification. An admin-only nonce-bound export-key endpoint supplies the old app's trust pin.
 
 ## [0.13.6] - 2026-11-03
 

@@ -819,4 +819,14 @@ echo "ok: topup priced a lock from hermetic Chainlink/Uniswap fixtures"
 echo "== workload memory (tdx.medium has 4 GiB)"
 dc ps -q keys postgres topup heartbeat backup |
     xargs docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' | tee "$tmp/memory"
+# Release the completed workload before starting the bounded migration rehearsal on CI.
+pc down --volumes --remove-orphans --timeout 10 >/dev/null
+dc down --volumes --remove-orphans --timeout 10 >/dev/null
+docker rm -f "$client" >/dev/null
+# Reuse the three published images and the pinned simulator; no second image build.
+TOPUP_MIGRATION_TOPUP_IMAGE="$TOPUP_IMAGE" \
+TOPUP_MIGRATION_POSTGRES_IMAGE="$POSTGRES_WALG_IMAGE" \
+TOPUP_MIGRATION_SIMULATOR_IMAGE="$TOPUP_LOCAL_DSTACK_IMAGE" \
+    timeout 1200 "$root/deploy/tests/migration-roundtrip.sh" --compose
+
 echo "cvm-rehearsal: all checks passed"

@@ -1329,6 +1329,44 @@ async fn attestation_binds_the_callers_account_keys_and_needs_a_key() -> Result<
 }
 
 #[tokio::test]
+async fn migration_export_key_requires_admin_auth_and_valid_nonce() -> Result<()> {
+    let Some(database) = TestDatabase::create().await? else {
+        return Ok(());
+    };
+    let result = async {
+        let admin = SigningKey::from_bytes(&[31; 32]);
+        let app = topup::api::router(app_state(database.app_pool.clone(), &admin)).0;
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::get("/v1/admin/migration/export-key?nonce=01")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        ensure!(response.status() == StatusCode::UNAUTHORIZED);
+        for nonce in ["", "a", "zz", &"ab".repeat(33)] {
+            let path = format!("/v1/admin/migration/export-key?nonce={nonce}");
+            let response = app
+                .clone()
+                .oneshot(signed_request(
+                    Method::GET,
+                    &path,
+                    vec![],
+                    ADMIN_KID,
+                    &admin,
+                    Utc::now().timestamp(),
+                ))
+                .await?;
+            ensure!(response.status() == StatusCode::BAD_REQUEST);
+        }
+        Ok(())
+    }
+    .await;
+    let cleanup = database.cleanup().await;
+    result.and(cleanup)
+}
+
+#[tokio::test]
 async fn openapi_snapshot() -> Result<()> {
     let admin_key = SigningKey::from_bytes(&[29; 32]);
     let pool = sqlx::postgres::PgPoolOptions::new()

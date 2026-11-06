@@ -2513,6 +2513,52 @@
         ],
         "type": "object"
       },
+      "KeyEvidence": {
+        "description": "Non-secret evidence published for verification with the official dstack verifier.",
+        "example": {
+          "app_id": "abababababababababababababababababababab",
+          "compose_hash": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+          "nonce": "00010203",
+          "public_key": "4242424242424242424242424242424242424242424242424242424242424242",
+          "report_data": "2424242424242424242424242424242424242424242424242424242424242424",
+          "tdx_quote": "00"
+        },
+        "properties": {
+          "app_id": {
+            "description": "Attested dstack application ID as hexadecimal.",
+            "type": "string"
+          },
+          "compose_hash": {
+            "description": "Attested compose hash as hexadecimal.",
+            "type": "string"
+          },
+          "nonce": {
+            "description": "Caller challenge for export evidence, or fresh 32-byte import challenge, as hexadecimal.",
+            "type": "string"
+          },
+          "public_key": {
+            "description": "Canonical age recipient, or hexadecimal Ed25519 verification key.",
+            "type": "string"
+          },
+          "report_data": {
+            "description": "SHA-256 commitment as hexadecimal, zero-padded by dstack to 64 quote bytes.",
+            "type": "string"
+          },
+          "tdx_quote": {
+            "description": "Versioned dstack quote as hexadecimal.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "public_key",
+          "nonce",
+          "report_data",
+          "tdx_quote",
+          "app_id",
+          "compose_hash"
+        ],
+        "type": "object"
+      },
       "KnownErrorCode": {
         "enum": [
           "refund_attachment_limit_exceeded",
@@ -8415,6 +8461,181 @@
             "http_message_signature": []
           }
         ],
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/migration/export-key": {
+      "get": {
+        "operationId": "export_key",
+        "parameters": [
+          {
+            "description": "Non-empty hexadecimal nonce of at most 32 bytes.",
+            "in": "query",
+            "name": "nonce",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyEvidence"
+                }
+              }
+            },
+            "description": "Nonce-bound export key evidence",
+            "headers": {
+              "Cache-Control": {
+                "description": "Tenant data and credentials must never be stored, including errors",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Request-Id": {
+                "description": "The request's id, `req_…` (https://docs.stripe.com/api/request_ids)",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "headers": {
+              "Cache-Control": {
+                "description": "Tenant data and credentials must never be stored, including errors",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Request-Id": {
+                "description": "The request's id, `req_…` (https://docs.stripe.com/api/request_ids)",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized",
+            "headers": {
+              "Cache-Control": {
+                "description": "Tenant data and credentials must never be stored, including errors",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Request-Id": {
+                "description": "The request's id, `req_…` (https://docs.stripe.com/api/request_ids)",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden",
+            "headers": {
+              "Cache-Control": {
+                "description": "Tenant data and credentials must never be stored, including errors",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Request-Id": {
+                "description": "The request's id, `req_…` (https://docs.stripe.com/api/request_ids)",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Attestation unavailable",
+            "headers": {
+              "Cache-Control": {
+                "description": "Tenant data and credentials must never be stored, including errors",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Request-Id": {
+                "description": "The request's id, `req_…` (https://docs.stripe.com/api/request_ids)",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Optional: minimum seconds to wait before retrying; sent for database admission failures and service_restoring, and may be absent for other unavailable errors",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "http_message_signature": []
+          }
+        ],
+        "summary": "Returns the old app's migration/export/v1 Ed25519 verification key. Verify the TDX quote\nand app identity before pinning it. The quote binds SHA256(\"phala-pay/migration/export-key/v1\\\\0\"\n|| len(nonce):u8 || nonce || raw_key). The nonce must be 1 to 32 hexadecimal bytes.",
         "tags": [
           "admin"
         ]

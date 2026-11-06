@@ -91,6 +91,22 @@ impl DstackSigner {
             .secret)
     }
 
+    /// Signs a migration manifest with the fixed export domain through v0 GetKey.
+    pub async fn sign_migration(&self, payload: &[u8]) -> Result<Ed25519Signature, SignerError> {
+        let key = self
+            .derive_key("migration/export/v1", KeyAlgorithm::Ed25519)
+            .await?;
+        Ok(sign_ed25519(&key.secret, payload))
+    }
+
+    /// Returns the Ed25519 public key for the fixed migration export domain.
+    pub async fn migration_public_key(&self) -> Result<Ed25519PublicKey, SignerError> {
+        let key = self
+            .derive_key("migration/export/v1", KeyAlgorithm::Ed25519)
+            .await?;
+        Ok(ed25519_public_key(&key.secret))
+    }
+
     async fn derive_key(
         &self,
         domain: &str,

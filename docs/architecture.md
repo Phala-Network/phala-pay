@@ -2030,3 +2030,86 @@ Ownership: **S** service, **M** merchant (its UI, billing, and support), **O** o
 New snapshot activation also re-screens current treasuries, pending treasury changes and pending
 refund destinations. The signed admin metrics and daily report expose the active publication,
 hash and verification time; the hourly loop sends Sentry Crons check-ins.
+
+## KMS application migration
+
+A new KMS app derives different database, backup, webhook and client-secret keys. Logical
+migration carries database contents and ACLs into the new cluster while each app retains its own
+keys. The operator verifies the old app's admin-only
+`GET /v1/admin/migration/export-key?nonce=` evidence and the new app's `recipient.json` with the
+official dstack verifier, then pins the public keys in immutable migration configuration.
+
+Each import invocation generates a fresh random 32-byte nonce and retains it in memory while
+waiting. Recipient evidence contains the nonce and canonical age recipient. Its quote commits
+to SHA-256 of UTF-8 `phala-pay/migration/import/v1`, a zero byte, the raw 32-byte nonce, and the
+UTF-8 canonical age recipient. The exporter checks that recipient against its attested pin and
+copies the nonce into the signed manifest. Import accepts only its own invocation's nonce:
+replaying a previously valid manifest and ciphertext fails even with the same source, recipient
+and prefix. After any incomplete import restart, **re-run the entire export chain** so it reads
+current `recipient.json` and regenerates its snapshot and dump. The import rejects the old-nonce
+manifest without fetching or decrypting its dump, logs one non-secret warning per distinct
+manifest, and keeps waiting with its existing in-memory nonce until the overall deadline.
+Wrong signatures, recipients or ciphertext hashes remain fatal. Any retry after the old app
+resumed writes **must use a fresh migration prefix**.
+Export-key evidence commits to UTF-8 `phala-pay/migration/export-key/v1`, a zero byte, one-byte
+nonce length, caller nonce, and the raw Ed25519 export key.
+
+The export compose removes the API, ingress, heartbeat and migrator. A final WAL-G backup precedes
+a read-only snapshot job, which exports a PostgreSQL snapshot and holds its transaction until
+`pg_dump -Fc --snapshot` finishes. Exact per-table counts, latest migration and last heartbeat are
+read in that same snapshot. Ownership and ACLs remain intact. PostgreSQL tools run in the pinned
+`postgres-walg` image; the distroless `topup migrate export` job encrypts to the pinned X25519
+recipient using age, signs the nonce and manifest through v0 GetKey at `migration/export/v1`, and
+uploads ciphertext before the manifest.
+
+`topup migrate import` derives `migration/import/v1`, verifies the pinned export signature,
+source app, recipient, invocation nonce, unique S3 prefix and ciphertext SHA-256, then decrypts
+into a private bounded 4 GiB tmpfs. A credential-free holder on the pinned PostgreSQL image keeps
+that volume mounted across every one-shot job: Docker otherwise loses tmpfs contents between
+consumers. The holder has no network or ports. Only it and the migration jobs mount plaintext.
+A PostgreSQL job restores with `--single-transaction --exit-on-error`, suppresses error details
+that could contain row values, disables server error/statement logging for the restore session
+through `PGOPTIONS`, and removes the archive even on failure. `import --verify`
+rechecks the signed manifest and all snapshot invariants before committing an owner-only
+`topup_migration.imported` record. Only then may normal migrations, API, heartbeat and backup run.
+
+A completed import is idempotent across reboot, even after normal service writes: import and
+verification require exactly one completion record whose signed manifest matches the pinned
+source, export key, recipient and object prefix, then skip transfer and restore. Creating an
+empty marker table or inserting a forged manifest cannot authorize startup. The original row
+counts are not compared again after a completed import, because the service may have advanced.
+A second restore never runs; malformed completion evidence or any failed initial gate keeps the
+API stopped.
+
+After checking the signed snapshot invariants, the completion transaction sets only
+`restore_timeline.timeline_id` to the destination cluster's actual WAL timeline. A source may
+have acknowledged a higher timeline after earlier physical restores; carrying that value into
+the fresh cluster would hide its next physical recovery. Historical `restores` records and active
+restore holds remain unchanged. Heartbeat history, persistent route pauses, reconciliation
+holds, chain checkpoints, cursors, usage counters and bounded retry leases also carry over.
+PostgreSQL session/advisory locks and the in-memory maintenance lease restart normally. WAL LSNs,
+backup prefixes and observability file markers are not database state; the new app uses its own
+backup keys and prefix.
+
+Idempotency responses and their replay protection remain intact. Old client secrets become
+invalid under the new app's key: obtaining a fresh deposit-address secret requires a new request
+with a fresh idempotency key, because replaying an old completed request returns its original
+response, which can contain the old secret. Historical event payloads remain immutable too.
+
+The migration-import compose hash remains a live trust path until **both** the no-overlay
+service is deployed and the import/provision hash is removed onchain. A fresh clone has no
+completion marker and could accept a current-nonce dump signed by the still-existing old export
+key. Closeout is therefore security-relevant: complete both steps at the **end of the cutover
+window**, rather than leaving them for T+1..7. The removal batch can be pre-signed at T-1 with the
+correct Safe nonce ordering and executed immediately after verification; stop the old CVM too.
+
+Render with `deploy/render.sh --export --migration-export FILE` or
+`deploy/render.sh --migration-import FILE` plus ordinary image/environment inputs. The JSON file
+contains exactly `migration_export: {recipient, object}` or
+`migration_import: {source_app_id, export_public_key, object}`. Pins and the unique `s3://bucket/prefix`
+are inlined into the attested compose; only existing AWS credentials remain sealed. Transfer uses
+the environment's HTTPS S3 endpoint and region. `deploy/tests/migration-roundtrip.sh` exercises
+real PostgreSQL and simulator calls; missing setup fails in CI (only an explicit
+`MIGRATION_SKIP_LOCAL=1` skips locally). `make cvm-rehearsal` also runs its `--compose` case using
+already-built images, TLS Garage and the actual rendered variants, including tmpfs handoffs,
+shared-snapshot consistency and reboot. Its local overlay bounds each transfer tmpfs to 64 MiB.

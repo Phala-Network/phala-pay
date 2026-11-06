@@ -24,7 +24,8 @@
 # The project is `dstack`, the name dstack gives the stack it runs in /dstack, so the volumes keep
 # their names; --project-name is for local rehearsals only. Values are never printed on error.
 #
-# Usage: deploy/render.sh [--restore-check | --template] --images FILE
+# Usage: deploy/render.sh [--restore-check | --template | --export --migration-export FILE]
+#          [--migration-import FILE] --images FILE
 #          [--gateway-domain HOST | --origin URL] [--project-name NAME] [--no-download] ENV_DIR
 #          >docker-compose.yml
 set -euo pipefail
@@ -32,13 +33,18 @@ export LC_ALL=C
 
 root="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
 usage() {
-    echo "usage: $0 [--restore-check | --template] --images FILE" \
+    echo "usage: $0 [--restore-check | --template | --export --migration-export FILE]" \
+        "[--migration-import FILE] --images FILE" \
         "[--gateway-domain HOST | --origin URL] [--project-name NAME] [--no-download] ENV_DIR" >&2
     exit 64
 }
+export_variant=0 migration_import="" migration_export=""
 restore_check=0 template=0 images="" gateway="" origin="" project=dstack download=()
 while (($#)); do
     case "$1" in
+        --export) export_variant=1; shift ;;
+        --migration-import) migration_import=${2:-}; shift 2 ;;
+        --migration-export) migration_export=${2:-}; shift 2 ;;
         --restore-check) restore_check=1; shift ;;
         --template) template=1; shift ;;
         --images) images=${2:-}; shift 2 ;;
@@ -68,8 +74,22 @@ else
     echo "$env_dir must hold topup.yaml (a topup CVM) or config.json (the product)" >&2
     exit 64
 fi
-((!restore_check || !template)) || usage
-if ((template)); then
+((restore_check + template + export_variant <= 1)) || usage
+if [[ -n "$migration_import" ]]; then
+    ((restore_check + template + export_variant == 0)) || usage
+    [[ "$variant" == service && -f "$migration_import" ]] || usage
+    variant=migration-import
+    variant_file+=(-f "$root/deploy/compose.migration-import.yaml")
+fi
+if ((export_variant)); then
+    [[ "$variant" == service && -f "$migration_export" && -z "$gateway" && -z "$origin" ]] || usage
+    variant=export variant_file=(-f "$root/deploy/compose.export.yaml")
+elif [[ -n "$migration_export" ]]; then
+    usage
+fi
+if ((export_variant)); then
+    :
+elif ((template)); then
     variant=template variant_file=(-f "$root/deploy/compose.template.yaml")
     [[ -z "$gateway" && -z "$origin" ]] || {
         echo "--template serves the app's gateway domain: no --gateway-domain or --origin" >&2
@@ -113,6 +133,19 @@ merge() {
             then map(capture("^(?<key>[^=]+)=(?<value>.*)$")) | from_entries else . end) else . end)' \
             >"$out"
 }
+migration_config=${migration_import:-$migration_export}
+if [[ -n "$migration_config" ]]; then
+    # Public pins are reviewed JSON, embedded under a digest and never read from sealed env.
+    jq -e --arg variant "$variant" '
+        if $variant == "export" then
+          keys == ["migration_export"] and (.migration_export | keys == ["object", "recipient"])
+        else
+          keys == ["migration_import"] and (.migration_import | keys == ["export_public_key", "object", "source_app_id"])
+        end' "$migration_config" >/dev/null || { echo "invalid migration settings" >&2; exit 64; }
+    jq --arg file "$(realpath "$migration_config")" '.configs.migration = {file: $file}' \
+        "$tmp/config.json" >"$tmp/config-migration.json"
+    mv "$tmp/config-migration.json" "$tmp/config.json"
+fi
 merge "$tmp/base.json"
 merge "$tmp/merged.json" -f "$env_dir/compose.yaml"
 # The environment's settings: every leaf the overlay adds, changes, or removes must be one of them.
@@ -153,10 +186,16 @@ jq --slurpfile images "$images" --slurpfile configs <(jq -s . "$tmp/contents.jso
     | .services |= with_entries(.value |= (
         (if has("image") and ($images[0][.image] != null) then .image = $images[0][.image] else . end)
         | (if has("configs") then .configs |= map(.source |= ($files[.].renamed // .)) else . end)))
+    | (if $variant == "export" or $variant == "migration-import" then
+        (.services.postgres.environment | {AWS_ENDPOINT, AWS_REGION}) as $s3
+        | (if $variant == "export" then .services.export.environment += $s3
+           else .services.import.environment += $s3 end)
+       else . end)
     | .configs |= with_entries(if $files[.key] then
         {key: $files[.key].renamed, value: {content: $files[.key].content}} else . end)
     | if $variant == "restore-check" then
         .services.topup.command += ["--public-origin", $origin]
+      elif $variant == "export" then .
       elif $variant == "template" then .
       else
         .services["dstack-ingress"].environment.GATEWAY_DOMAIN = $gateway

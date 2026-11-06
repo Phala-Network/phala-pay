@@ -1,0 +1,110 @@
+# Optional service overlay. Completed, authenticated imports are idempotent on reboot.
+# Immutable pins and the unique object prefix come from --migration-import FILE.
+services:
+  # Docker unmounts a tmpfs-backed named volume after its last consumer exits. Keep it mounted
+  # across all one-shot jobs without giving this process network access or credentials.
+  migration-holder:
+    image: postgres-walg
+    user: "999:999"
+    entrypoint: [sleep, infinity]
+    command: []
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 8m
+    pids_limit: 8
+    volumes:
+      - migration:/run/migration
+    restart: unless-stopped
+  import:
+    image: phala-pay
+    user: "999:999"
+    command: [topup, migrate, import, --config, /etc/topup/migration.json]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    pids_limit: 64
+    environment:
+      DATABASE_URL: postgres://postgres@postgres:5432/topup
+      TOKIO_WORKER_THREADS: "2"
+      PGPASSFILE: /run/db-owner/postgres.pgpass
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock
+      - db_owner:/run/db-owner:ro
+      - migration:/run/migration
+    configs:
+      - source: migration
+        target: /etc/topup/migration.json
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migration-holder:
+        condition: service_started
+    restart: "no"
+  restore:
+    image: postgres-walg
+    user: "999:999"
+    entrypoint: [bash, -ceu]
+    # The trap removes plaintext on restore failure too; successful verification checks DB state.
+    command:
+      - 'trap "rm -f /run/migration/dump.pg" EXIT; marker=$$(psql -XAtqc "SELECT to_regclass(''topup_migration.imported'') IS NOT NULL"); if [ "$$marker" = t ]; then exit 0; fi; pg_restore --single-transaction --exit-on-error --dbname=topup /run/migration/dump.pg 2>/dev/null || { echo "migration restore failed (details suppressed)" >&2; exit 1; }'
+    environment:
+      # Suppress server error/statement logging for this restore session too: PostgreSQL DETAIL
+      # and primary errors can contain row values even when pg_restore stderr is redirected.
+      PGOPTIONS: "-c log_min_messages=panic -c log_min_error_statement=panic -c log_statement=none"
+      PGHOST: postgres
+      PGDATABASE: topup
+      PGUSER: postgres
+      PGPASSFILE: /run/db-owner/postgres.pgpass
+    volumes:
+      - db_owner:/run/db-owner:ro
+      - migration:/run/migration
+    depends_on:
+      import:
+        condition: service_completed_successfully
+      migration-holder:
+        condition: service_started
+    restart: "no"
+  import-verify:
+    image: phala-pay
+    user: "999:999"
+    command: [topup, migrate, import, --config, /etc/topup/migration.json, --verify]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    pids_limit: 64
+    environment:
+      DATABASE_URL: postgres://postgres@postgres:5432/topup
+      TOKIO_WORKER_THREADS: "2"
+      PGPASSFILE: /run/db-owner/postgres.pgpass
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock
+      - db_owner:/run/db-owner:ro
+      - migration:/run/migration
+    configs:
+      - source: migration
+        target: /etc/topup/migration.json
+    depends_on:
+      restore:
+        condition: service_completed_successfully
+      migration-holder:
+        condition: service_started
+    restart: "no"
+  migrate:
+    depends_on:
+      import-verify:
+        condition: service_completed_successfully
+  backup:
+    depends_on:
+      import-verify:
+        condition: service_completed_successfully
+volumes:
+  migration:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: uid=999,gid=999,mode=0700,size=4g

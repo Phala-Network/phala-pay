@@ -50,16 +50,16 @@ async fn dstack_signing_and_attestation() -> Result<(), Box<dyn std::error::Erro
         public_key,
     }];
     assert_eq!(evidence.webhook_keys, attested);
-    // The attestation is msgpack whose byte fields are integer arrays; the TDX quote in it carries
-    // report_data zero-padded to 64 bytes.
+    // The pinned simulator emits versioned binary attestation bytes. TDX report_data is a raw
+    // 64-byte field, not a MsgPack integer array. This checks the SDK plumbing only: patching
+    // report_data invalidates the simulator fixture's original signature.
     let mut padded = evidence.report_data.to_vec();
     padded.resize(64, 0);
-    let encoded = msgpack_uints(&padded);
     assert!(
         evidence
             .quote
-            .windows(encoded.len())
-            .any(|window| window == encoded)
+            .windows(padded.len())
+            .any(|window| window == padded)
     );
     assert_eq!(
         evidence.report_data,
@@ -68,18 +68,4 @@ async fn dstack_signing_and_attestation() -> Result<(), Box<dyn std::error::Erro
     assert!(!evidence.info.app_id.is_empty());
     assert_eq!(evidence.info.compose_hash.len(), 32);
     Ok(())
-}
-
-/// Encodes each byte as a msgpack unsigned integer: a positive fixint below 0x80, else `0xcc b`.
-fn msgpack_uints(bytes: &[u8]) -> Vec<u8> {
-    bytes
-        .iter()
-        .flat_map(|&byte| {
-            if byte < 0x80 {
-                vec![byte]
-            } else {
-                vec![0xcc, byte]
-            }
-        })
-        .collect()
 }

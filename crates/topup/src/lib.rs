@@ -35,6 +35,7 @@ pub mod jitter;
 pub mod keys;
 pub mod limits;
 pub mod locks;
+pub mod migration;
 pub mod observability;
 pub mod outbox;
 mod pause;

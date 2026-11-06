@@ -25,6 +25,12 @@
       "purls": ["pkg:cargo/pin-utils@0.1.0"],
       "statement": "pin-utils is unmaintained after its repository was archived; this is a maintenance notice, not a reported vulnerability, and no patched version exists. The locked Alloy 2.5.0 provider/rpc-client/transport crates pull pin-utils 0.1.0 through wasmtimer 0.4.3 only for cfg(all(target_family = \"wasm\", target_os = \"unknown\")); wasmtimer and pin-utils are absent from the native Linux service runtime. Alloy and wasmtimer are already at their latest supported releases, so no supported parent upgrade removes pin-utils. This entry records the cargo-deny exception's required exposure review and expiry. Remove when a supported Alloy/wasmtimer release drops pin-utils; reassess immediately if a wasm runtime is introduced or the dependency path changes. Tracking and required re-review: https://github.com/Phala-Network/phala-pay/issues/626.",
       "expired_at": "2026-12-05T00:00:00Z"
+    },
+    {
+      "id": "RUSTSEC-2026-0374",
+      "purls": ["pkg:cargo/basic-toml@0.1.10"],
+      "statement": "age 0.12.1 unconditionally uses i18n-config 0.4.8 to compile localization macros; its basic-toml parser is build-time only and has no runtime use in topup or migration jobs. This is an unmaintained-crate notice, with no fixed supported release. Upstream age and i18n-config releases were checked on 2026-11-06. Remove when an upstream release drops basic-toml; reassess immediately if the dependency enters runtime or processes untrusted inputs. Tracking and required re-review: https://github.com/Phala-Network/phala-pay/issues/625.",
+      "expired_at": "2026-12-05T00:00:00Z"
     }
   ]
 }
