@@ -30,17 +30,20 @@ from the public endpoints, the admin API, Sentry, and the chain.
 ### KMS
 
 The environment directory's `kms` selects `phala` (the existing default) or `base`. The committed
-production, staging and reference-product directories still select `phala`; this release does
-not migrate them. Existing operator repositories without that file keep the Phala workflow.
+active production, staging and reference-product directories still select `phala`. The prepared
+[staging Base directory](environments/phala-network/staging/topup-okms/README.md) is selected only
+for an authorized migration; adding it does not migrate an existing CVM. Existing operator
+repositories without that file keep the Phala workflow.
 
 `phala` uses Phala Cloud's KMS, with no DstackApp or onchain compose approval. `base` releases
 keys only for compose hashes and hardware devices allowed by a Safe-owned DstackApp on Base
 (8453). Commit its address in `dstack-app`, its expected owner in `dstack-owner`, and a full reviewed
 `app-compose.json` baseline (or `provision.json`'s `compose_file`). Every non-render field and exact
 key set must match that baseline before approval and in attestation; `init_script` must be absent
-or `[]`. Production's
-owner is the treasury Safe; staging uses a separate reviewed Safe. Product and template keep
-Phala KMS. Both modes still require attestation verification.
+or `[]`. Staging and production use treasury Safe
+`0x8AB55148944F837040bbB887f8A5005f70FF7700` as owner, with a separate DstackApp per
+environment. Product and template keep Phala KMS. Both modes still require attestation
+verification.
 
 The reviewed KmsAuth and both implementation pins live in `onchain-kms.json`. Key release also
 trusts Phala's KmsAuth governance (OS images, KMS builds and upgrades). The daily Verify contracts

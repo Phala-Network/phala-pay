@@ -1,0 +1,228 @@
+# Phala's staging instance (deploy/phala.md): the service configuration of `topup`
+# (docs/configuration.md), attested as an inline config of the rendered compose. A change is a pull
+# request and a Deploy `upgrade`.
+environment: staging
+max_attached_pending_refunds: 1
+max_refund_attachments_per_day: 1
+hints_per_day: 20
+quote_snapshots_per_day: 30
+discovery:
+  quote_window_hours: 24
+  deposit_window_days: 7
+  fresh_quote_rounds_per_day: 30
+  quote_checks_per_day: 10
+public_origin: https://pay-api-staging.phala.com
+admin_key:
+  id: admin/staging-v1
+  public_key: 23Y9wEJMOTySGV3UXmcTFnQsbigA9/cYTvmqdQxzmdo=
+# Maintenance-only key for deploy pause/resume (deploy/README.md); its PEM is the staging
+# Environment's TOPUP_MAINTENANCE_PRIVATE_KEY_PEM, its id TOPUP_MAINTENANCE_KEY_ID.
+maintenance_keys:
+  - id: maintenance/staging-v1
+    public_key: CtqyNNdC0DWZ/+TKeI+nvBvlV6Dq+A2/NXw5zDU7AFQ=
+# Operational caps: D=10/day, 10 new issuances/chain/day; see deploy/RPC.md.
+# Independent Ankr read and Infura verify endpoints, with both sealed keys (deploy/RPC.md).
+# Fast discovery uses read; coverage and money decisions require read/verify agreement.
+# Daily monitoring allocations; shared Ankr allocations total 25,000 calls (deploy/RPC.md).
+quota_alerts:
+  deposits_per_day: 10
+  rpc:
+    - name: ankr
+      providers: [ankr-sepolia, ankr-base-sepolia, ankr-mainnet, ankr-base-mainnet]
+      unit: calls
+      stop_line: 4734
+    - name: infura
+      providers: [infura-sepolia, infura-base-sepolia, infura-mainnet, infura-base-mainnet]
+      unit: infura_credits
+      stop_line: 1500000
+rpc:
+  - chain_id: 11155111
+    max_issued_addresses: 1000
+    read:
+      id: ankr-sepolia
+      url: "https://rpc.ankr.com/eth_sepolia/{key}"
+      sealed_key: TOPUP_RPC_ANKR_KEY
+      max_log_blocks: 3000
+    verify:
+      id: infura-sepolia
+      url: "https://sepolia.infura.io/v3/{key}"
+      sealed_key: TOPUP_RPC_INFURA_KEY
+      max_log_blocks: 3000
+  - chain_id: 84532
+    max_issued_addresses: 1000
+    read:
+      id: ankr-base-sepolia
+      url: "https://rpc.ankr.com/base_sepolia/{key}"
+      sealed_key: TOPUP_RPC_ANKR_KEY
+      max_log_blocks: 3000
+    verify:
+      id: infura-base-sepolia
+      url: "https://base-sepolia.infura.io/v3/{key}"
+      sealed_key: TOPUP_RPC_INFURA_KEY
+      max_log_blocks: 3000
+  - chain_id: 1
+    max_issued_addresses: 1000
+    read:
+      id: ankr-mainnet
+      url: "https://rpc.ankr.com/eth/{key}"
+      sealed_key: TOPUP_RPC_ANKR_KEY
+      max_log_blocks: 3000
+    verify:
+      id: infura-mainnet
+      url: "https://mainnet.infura.io/v3/{key}"
+      sealed_key: TOPUP_RPC_INFURA_KEY
+      max_log_blocks: 3000
+  - chain_id: 8453
+    max_issued_addresses: 1000
+    read:
+      id: ankr-base-mainnet
+      url: "https://rpc.ankr.com/base/{key}"
+      sealed_key: TOPUP_RPC_ANKR_KEY
+      max_log_blocks: 3000
+    verify:
+      id: infura-base-mainnet
+      url: "https://base-mainnet.infura.io/v3/{key}"
+      sealed_key: TOPUP_RPC_INFURA_KEY
+      max_log_blocks: 3000
+
+routes:
+  # Base Sepolia supports only Circle's testnet USDC (https://faucet.circle.com): a test-mode
+  # route (`livemode: false`) any account can quote on and pay its own treasury through.
+  # The token is the one Circle lists for Base Sepolia
+  # (https://developers.circle.com/stablecoins/usdc-contract-addresses): FiatTokenV2_2 behind
+  # Circle's proxy, a plain ERC-20 with no transfer fee or rebasing. Route files carry no treasury
+  # (design D10).
+  - route: phala-cloud-base-sepolia-usdc-usd
+    version: 1
+    livemode: false
+
+    chain:
+      chain_id: 84532
+      forwarder_factory: "0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747"
+      # Base Sepolia is an OP-stack chain (design D1, architecture §8): credited at depth 3 on the
+      # sequencer's unsafe head, 4 s after inclusion (about 7 s after paying), and watched to
+      # finality like Sepolia's depth 2. `3` is the family default, written out here; an account
+      # may require more, `safe`, or `finalized`, never less.
+      confirmations: 3
+      sanctions_oracle: "0x8A0C93d85a05aD30741C193068abF2e5E16e7b35" # no Chainalysis oracle on Base Sepolia
+
+    asset:
+      symbol: usdc
+      contract: "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+      decimals: 6
+      # About 1 to 1.5 transfers per block on Base Sepolia (1 740 to 3 065 in 2 000 blocks, up to 14 in
+      # requests by recipient (architecture §8).
+
+    price:
+      mode: stablecoin
+      sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600 }
+      sources:
+        - { source: chainlink, feed: USDC_USD, chain_id: 1, observation_chain_id: 84532 }
+      peg_band_bps: 100
+
+    merchant:
+      min_amount: { default: 100 } # USD 1.00
+      max_deposit_atomic: { default: "10000000000" } # 10,000 USDC
+      min_refund_atomic: { default: "1000000" } # 1 USDC
+      quote_spread_bps: { default: 0 } # valued at a fixed 1.00 USD: no price move within the quote window for a spread to cover
+  # Staging route on Sepolia: a test-mode route (`livemode: false`) any account can quote on and pay
+  # its own treasury through; the staging reference-product CVM uses it (deploy/phala.md, "Staging
+  # reference product"). Route files carry no treasury: each account proves its own per chain
+  # through the API (docs/design/multi-tenant.md D10). The factory and implementation are the
+  # deterministic deployment of deploy/CONTRACTS.md, the same address on every chain.
+  - route: phala-cloud-sepolia-pha-usd
+    version: 3
+    livemode: false
+
+    chain:
+      chain_id: 11155111
+      forwarder_factory: "0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747"
+      confirmations: 2 # the floor and default (design D1); an account may require more, never less
+      sanctions_oracle: "0x28A73f8235d966244210D9c49E34EDdA4fF9e1f6" # no Chainalysis oracle on Sepolia
+
+    asset:
+      symbol: pha
+      contract: "0x8F40e7E99678F44c88158f049E62817580ab113B"
+      decimals: 18
+
+    price:
+      mode: volatile
+      allow_unclear_sources: true # noncommercial staging only; production refuses non-Allowed sources
+      primary: [{ source: uniswap_v2_twap, twap: { max_sample_age_s: 900, max_sample_jump_bps: 1100 }, observation_chain_id: 11155111 }]
+      check: [{ source: kraken, symbol: PHAUSD, company: kraken }] # production requires written permission
+      fx:
+        - { source: chainlink, feed: USDT_USD, chain_id: 1, observation_chain_id: 11155111 }
+
+    merchant:
+      min_amount: { default: 100 }
+      max_deposit_atomic: { default: "200000000000000000000000" }
+      min_refund_atomic: { default: "20000000000000000000" }
+  # Staging route on Sepolia for Circle's testnet USDC (https://faucet.circle.com), beside the PHA
+  # route: a test-mode route (`livemode: false`) any account can quote on and pay its own treasury
+  # through. The token is the one Circle lists for Ethereum Sepolia
+  # (https://developers.circle.com/stablecoins/usdc-contract-addresses): FiatTokenV2_2 behind
+  # Circle's proxy, a plain ERC-20 with no transfer fee or rebasing. The chain section is the PHA
+  # route's: one chain has one set of chain settings. Route files carry no treasury (design D10).
+  - route: phala-cloud-sepolia-usdc-usd
+    version: 1
+    livemode: false
+
+    chain:
+      chain_id: 11155111
+      forwarder_factory: "0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747"
+      confirmations: 2 # the floor and default (design D1); an account may require more, never less
+      sanctions_oracle: "0x28A73f8235d966244210D9c49E34EDdA4fF9e1f6" # no Chainalysis oracle on Sepolia
+
+    asset:
+      symbol: usdc
+      contract: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
+      decimals: 6
+      # response caps. Address mode puts the whole chain, PHA included, on requests by recipient
+      # (architecture §8).
+
+    price:
+      mode: stablecoin
+      sources:
+        - { source: chainlink, feed: USDC_USD, chain_id: 1, observation_chain_id: 11155111 }
+      peg_band_bps: 100
+
+    merchant:
+      min_amount: { default: 100 } # USD 1.00, as on the PHA route
+      max_deposit_atomic: { default: "10000000000" } # 10,000 USDC, about the PHA route's 200,000 PHA
+      min_refund_atomic: { default: "1000000" } # 1 USDC, about the PHA route's 20 PHA
+      quote_spread_bps: { default: 0 } # valued at a fixed 1.00 USD: no price move within the quote window for a spread to cover
+  # Staging route on Sepolia for Aave's testnet USDT, beside the PHA and USDC routes: a test-mode
+  # route (`livemode: false`) any account can quote on and pay its own treasury through. Tether
+  # publishes no testnet USDT; the token is the one Aave's address book lists for its Sepolia market
+  # (bgd-labs/aave-address-book, `AaveV3Sepolia.USDT_UNDERLYING`), a plain 6-decimal ERC-20 with no
+  # transfer fee or rebasing that its faucet, `0xC959483DBa39aa9E78757139af0e9a2EDEb3f42D`, mints to
+  # anyone (`mint(token, to, amount)`). The chain section is the PHA route's: one chain has one set
+  # of chain settings. Route files carry no treasury (design D10).
+  - route: phala-cloud-sepolia-usdt-usd
+    version: 1
+    livemode: false
+
+    chain:
+      chain_id: 11155111
+      forwarder_factory: "0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747"
+      confirmations: 2 # the floor and default (design D1); an account may require more, never less
+      sanctions_oracle: "0x28A73f8235d966244210D9c49E34EDdA4fF9e1f6" # no Chainalysis oracle on Sepolia
+
+    asset:
+      symbol: usdt
+      contract: "0xaA8E23Fb1079EA71e0a56F48a2aA51851D8433D0"
+      decimals: 6
+      # 175 transfers in 2 000 blocks, up to 3 in one (Oct 2026): one token-wide log request per
+      # range. The USDC route still puts the whole chain in address mode (architecture §8).
+
+    price:
+      mode: stablecoin
+      sources:
+        - { source: chainlink, feed: USDT_USD, chain_id: 1, observation_chain_id: 11155111 }
+      peg_band_bps: 100
+
+    merchant:
+      min_amount: { default: 100 } # USD 1.00, as on the PHA route
+      max_deposit_atomic: { default: "10000000000" } # 10,000 USDT, as on the USDC route
+      min_refund_atomic: { default: "1000000" } # 1 USDT, as on the USDC route
+      quote_spread_bps: { default: 0 } # valued at a fixed 1.00 USD: no price move within the quote window for a spread to cover

@@ -1,0 +1,6 @@
+{
+  "migration_export": {
+    "recipient": "T1_VERIFIED_IMPORT_RECIPIENT",
+    "object": "T1_MIGRATION_OBJECT_PREFIX"
+  }
+}

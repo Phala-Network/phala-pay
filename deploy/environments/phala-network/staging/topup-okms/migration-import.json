@@ -1,0 +1,7 @@
+{
+  "migration_import": {
+    "source_app_id": "95174fcad739ae76c7510dc1b2bc00a32e25c644",
+    "export_public_key": "T1_VERIFIED_EXPORT_PUBLIC_KEY",
+    "object": "T1_MIGRATION_OBJECT_PREFIX"
+  }
+}

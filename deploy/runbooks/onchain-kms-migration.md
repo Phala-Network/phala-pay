@@ -34,8 +34,9 @@ and [restore procedure](../RESTORE.md) first.
   Finish any webhook key roll first. Preserve old pins, DNS, CVM id, app id and environment commit.
   Book the signer for preparation and incident response ([response target](onchain-kms-upgrade.md#upgrades-and-rollback)).
 
-All three batches are on **Base (8453)**. Staging uses a **separate staging Safe**, 1/1 with the
-same signer; production uses treasury Safe `0x8AB55148944F837040bbB887f8A5005f70FF7700`.
+All three batches are on **Base (8453)**. Staging and production use treasury Safe
+`0x8AB55148944F837040bbB887f8A5005f70FF7700` as DstackApp owner, with a separate app per
+environment.
 Verify each target app, device, hash and Safe nonce before signing.
 
 | Owner action | Prepare/sign | Execute | Calls |
@@ -52,6 +53,10 @@ prepare/review/sign again; do not substitute an unreviewed hash. Tokens last 14 
 re-prepares and must reproduce the approved hash ([token rules](onchain-kms-upgrade.md#token-lifetime-and-hash-format)).
 
 ## T-7d to T-1: prepare both applications
+
+Phala staging has a prepared [new Base environment](../environments/phala-network/staging/topup-okms/README.md)
+and an inert export-plan template in the old `staging/topup` directory. Fill and review their
+T-1 public evidence before use; the existing staging service remains on Phala KMS.
 
 Use the release's `deploy/` scripts below, `images.json`, and the
 [admin helper](README.md#environment). Keep public evidence in a private, task-scoped directory
