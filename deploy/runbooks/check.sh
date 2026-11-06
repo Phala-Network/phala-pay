@@ -292,8 +292,8 @@ validate_api() {
 # The arguments of the deploy scripts the documentation runs, by path under deploy/: its flags,
 # `--flag=` for one taking a value, and its number of positional arguments.
 declare -A script_flags=(
-    [render.sh]="--restore-check --template --images= --gateway-domain= --origin= --project-name= --no-download"
-    [preflight.sh]="--env= --compose= --environment-dir= --workspace= --os-image= --restore-check --offline --unsealed --require-sentry"
+    [render.sh]="--restore-check --template --export --migration-export= --migration-import= --images= --gateway-domain= --origin= --project-name= --no-download"
+    [preflight.sh]="--env= --compose= --environment-dir= --workspace= --os-image= --restore-check --migration-import= --offline --unsealed --require-sentry"
     [product/preflight.sh]="--env= --compose= --environment-dir= --workspace= --os-image= --offline --unsealed"
     [pinned-compose.sh]="--no-download"
 )
