@@ -64,7 +64,7 @@ on:
         type: string
         default: service
       migration_plan:
-        description: "Reviewed migration JSON path in the caller repository (export or migration-import only)"
+        description: "Reviewed migration JSON path: export/import, or the current export plan for a service rollback (Phala upgrade only)"
         type: string
         default: ""
       gateway_domain:
@@ -155,7 +155,13 @@ jobs:
             topup)
               preflight=$kit/deploy/preflight.sh variant=${REQUESTED_VARIANT:-service} cvm_id_variable=TOPUP_CVM_ID
               case "$variant" in
-                service) [[ -z "${MIGRATION_PLAN:-}" ]] || { echo "::error::service takes no migration_plan"; status=1; } ;;
+                service)
+                  if [[ -n "${MIGRATION_PLAN:-}" ]]; then
+                    [[ "$MODE" == upgrade ]] ||
+                      { echo "::error::service migration_plan requires a Phala upgrade from export"; status=1; }
+                    [[ "$MIGRATION_PLAN" =~ ^[A-Za-z0-9._/-]+$ && "$MIGRATION_PLAN" != /* && "$MIGRATION_PLAN" != *..* ]] ||
+                      { echo "::error::migration_plan must be a reviewed relative JSON path"; status=1; }
+                  fi ;;
                 export | migration-import)
                   [[ "${MIGRATION_PLAN:-}" =~ ^[A-Za-z0-9._/-]+$ && "$MIGRATION_PLAN" != /* && "$MIGRATION_PLAN" != *..* ]] ||
                     { echo "::error::migration_plan must be a reviewed relative JSON path"; status=1; }
@@ -436,8 +442,27 @@ jobs:
         id: maintenance
         if: (inputs.mode == 'upgrade' || inputs.mode == 'commit') && inputs.target == 'topup' && env.INITIAL_BASE != 'true'
         env:
+          PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
           TOPUP_MAINTENANCE_PRIVATE_KEY_PEM: ${{ secrets.TOPUP_MAINTENANCE_PRIVATE_KEY_PEM }}
         run: |
+          if [[ "$MODE" == upgrade && "$VARIANT" == service && -n "${MIGRATION_PLAN:-}" ]]; then
+            # The exporter has no API or ingress. Prove it is the reviewed, fenced compose
+            # before skipping the pause; never send maintenance requests to a switched origin.
+            [[ $(jq -er .os.name "$WORK/cvm-before.json") == "$DSTACK_OS_IMAGE" ]] ||
+              { echo "::error::Export rollback cannot change the OS image; use the export's approved OS"; exit 1; }
+            "$KIT/deploy/render.sh" --images "$WORK/release/images.json" --export \
+              --migration-export "$MIGRATION_PLAN" "$ENVIRONMENT_DIR" >"$WORK/rollback-export.yml"
+            current=$(jq -er '.compose_hash | ascii_downcase | ltrimstr("0x")' "$WORK/cvm-before.json")
+            app_id=$(jq -er .app_id "$WORK/cvm-before.json")
+            "$KIT/deploy/phala-cvm.sh" attestation "$EXISTING_CVM_ID" "$current" >"$WORK/rollback-export-attestation.json"
+            curl -fsS --max-time 30 --retry 5 --retry-all-errors \
+              "$("$KIT/deploy/phala-cvm.sh" url "$WORK/cvm-before.json" 8090)/prpc/Info" >"$WORK/rollback-export-info.json"
+            "$KIT/deploy/verify-attestation.sh" "$WORK/rollback-export-attestation.json" \
+              "$WORK/rollback-export-info.json" "$app_id" "$WORK/rollback-export.yml" export \
+              "$(cat "$ENVIRONMENT_DIR/os-image-hash")" "$ENVIRONMENT_DIR" 2>&1 | tee "$WORK/rollback-export-verification.txt"
+            echo "Verified the current export compose is fenced; no maintenance pause or resume. Routes remain paused; the operator resumes them through admin only after acceptance." >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           "$KIT/deploy/instance-pause.sh" pause "$PUBLIC_URL" "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >"$WORK/maintenance.json"
           # The response proves the lease was committed before any Phala Cloud upgrade call.
           jq -e '.paused_scopes == ["mutations"]' "$WORK/maintenance.json"
@@ -774,6 +799,10 @@ jobs:
             ${{ runner.temp }}/deploy/attestation.json
             ${{ runner.temp }}/deploy/info.json
             ${{ runner.temp }}/deploy/verification.txt
+            ${{ runner.temp }}/deploy/rollback-export.yml
+            ${{ runner.temp }}/deploy/rollback-export-attestation.json
+            ${{ runner.temp }}/deploy/rollback-export-info.json
+            ${{ runner.temp }}/deploy/rollback-export-verification.txt
             ${{ runner.temp }}/deploy/ingress-evidence.txt
             ${{ runner.temp }}/deploy/unavailability.json
             ${{ runner.temp }}/deploy/maintenance.json

@@ -27,6 +27,13 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   the optional import overlay gates schema migrations and startup on transactional restore and
   verification. An admin-only nonce-bound export-key endpoint supplies the old app's trust pin.
 
+### Fixed
+
+- Deploy can roll a Phala KMS export back to service without an API maintenance call: supplying
+  the reviewed export plan requires full attestation verification of the fenced source before
+  any mutation. Target attestation, health and TLS checks still apply; routes remain paused
+  until the operator resumes them through admin after acceptance.
+
 ## [0.13.6] - 2026-11-03
 
 ### Added
