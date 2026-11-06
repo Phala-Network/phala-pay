@@ -14,8 +14,9 @@ and [restore procedure](../RESTORE.md) first.
 
 ## Preconditions and owner actions
 
-- Release vN containing both [deploy support (#628)](https://github.com/Phala-Network/phala-pay/pull/628)
-  and [migration tooling (#629)](https://github.com/Phala-Network/phala-pay/pull/629). Download and
+- Release vN containing [deploy support (#628)](https://github.com/Phala-Network/phala-pay/pull/628),
+  [migration tooling (#629)](https://github.com/Phala-Network/phala-pay/pull/629) and
+  [export-to-service rollback (#632)](https://github.com/Phala-Network/phala-pay/pull/632). Download and
   [verify its kit and images.json](../../docs/self-hosting.md#verify-a-release).
 - Adopt that release in the caller: repin workflow SHA and `version` together, expose modes
   `provision`, `upgrade`, `prepare`, `commit`, and forward `transaction_hash`, `gateway_domain`,
@@ -32,9 +33,6 @@ and [restore procedure](../RESTORE.md) first.
 - Confirm merchant contacts, pin rollout/restart procedure and fresh deposit-secret fetching.
   Finish any webhook key roll first. Preserve old pins, DNS, CVM id, app id and environment commit.
   Book the signer for preparation and incident response ([response target](onchain-kms-upgrade.md#upgrades-and-rollback)).
-- **Production gate:** a separately reviewed Deploy workflow rollback path from the export
-  variant must be available before production cutover. The emergency Phala helper procedure
-  below is interim; this runbook change does not add that workflow path.
 
 All three batches are on **Base (8453)**. Staging uses a **separate staging Safe**, 1/1 with the
 same signer; production uses treasury Safe `0x8AB55148944F837040bbB887f8A5005f70FF7700`.
@@ -271,17 +269,34 @@ deploy/phala cvms stop "$NEW_CVM_ID"
 Repeat for every abandoned import hash/its removal transaction. A retry starts only after all
 those hashes are revoked, with a fresh migration prefix and a new approved import hash.
 
-### Interim emergency rollback before resume
+### Roll back before resume through Deploy
 
-Normal Deploy currently tries to pause the public API before every upgrade; the exporter has no
-API, and after DNS switch that URL reaches the new app. Until the separate workflow fix lands,
-restore the **old Phala KMS CVM only** through the existing Phala `compose-update` helper, with
-the saved reviewed vN service render. This retains sealed env, app/KMS identity and pgdata.
-Do not apply this path to Base. First complete [import-path revocation](#close-an-abandoned-import-path)
-and stop the new CVM; keep both apps' routes paused. The supported Deploy rollback being added
-in [#632](https://github.com/Phala-Network/phala-pay/pull/632) must use the **same release
-`version` and the same `ENVIRONMENT_DIR` commit as the export run**; otherwise its source-export
-verification fails before mutation. Do not change either when adopting that path.
+First complete [import-path revocation](#close-an-abandoned-import-path) and stop the new CVM;
+keep both apps' routes paused. Restore the **old Phala KMS CVM** through the
+[export-to-service Deploy path](../README.md#planned-upgrade-admission-and-downtime):
+
+1. Re-select `TOPUP_CVM_ID=OLD_CVM_ID` and `environment_dir: OLD_ENV`. Use the **same release
+   `version` and the same `ENVIRONMENT_DIR` commit as the export run**, including its reviewed
+   export plan and OS pin. Otherwise source-export verification fails before mutation.
+2. Revert TXT to the old verified instance id and CNAME to `OLD_GATEWAY` before the workflow's
+   service health/TLS checks. The old exporter has no ingress until service is restored.
+3. Dispatch Deploy with `mode: upgrade`, `variant: service`, and
+   `migration_plan: OLD_ENV/migration-export.json` (the **export** plan). Deploy verifies the
+   current fenced export attestation before skipping maintenance pause/resume, then restores
+   service with the normal target attestation, health and TLS checks. Record the source-export
+   verification and target acceptance artifacts. Database route pauses remain; there is
+   **no automatic route resume**.
+4. Require the restored service's exact reviewed compose, old app/OS identity and ingress
+   evidence. Check admin state and have merchants verify/restore their old pins, then manually
+   resume only migration-owned route pauses. Record this acceptance and import-hash revocation
+   evidence before declaring rollback complete; keep the new CVM stopped.
+
+### Fallback when the Deploy workflow is unavailable
+
+After import-path revocation and stopping the new CVM, the existing Phala `compose-update`
+helper can restore the saved reviewed vN service render, retaining sealed env, app/KMS identity
+and pgdata. Use this only when the workflow is unavailable; verification failures require
+investigation. This fallback applies to the old Phala KMS CVM; keep routes paused throughout.
 
 ```sh
 policy=$(jq -cn -L deploy --arg variant service 'include "compose-policy"; port_policy($variant)')
