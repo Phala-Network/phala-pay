@@ -30,7 +30,7 @@ RUN git init -q . \
     && git fetch -q --depth 1 https://github.com/stripe/smokescreen.git \
         609eb8931420453daf5893509be0b25b21bd9edb \
     && git checkout -q FETCH_HEAD \
-    && GOTOOLCHAIN=local go get github.com/sirupsen/logrus@v1.9.3 golang.org/x/net@v0.60.0 \
+    && GOTOOLCHAIN=local go get github.com/sirupsen/logrus@v1.9.3 golang.org/x/net@v0.62.0 \
     && GOTOOLCHAIN=local go mod vendor \
     && CGO_ENABLED=0 GOTOOLCHAIN=local GOFLAGS=-mod=vendor \
         go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o /out/smokescreen .
