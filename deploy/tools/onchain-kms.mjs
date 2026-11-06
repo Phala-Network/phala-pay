@@ -105,9 +105,15 @@ export async function deployment(c, tx, safe) {
   requireThat(events.length === 1, 'expected exactly one AppDeployedViaFactory by this Safe from Base KmsAuth');
   return address(events[0].args.appId);
 }
-const appEvents = ['PolicyChanged(address,bytes32,bytes32,bool)', 'Upgraded(address)', 'OwnershipTransferred(address,address)'];
-const kmsEvents = [...appEvents, 'OsImageHashAdded(bytes32)', 'OsImageHashRemoved(bytes32)', 'KmsAggregatedMrAdded(bytes32)',
-  'KmsAggregatedMrRemoved(bytes32)', 'AppImplementationSet(address)', 'KmsInfoSet(bytes)', 'KmsDeviceAdded(bytes32)', 'KmsDeviceRemoved(bytes32)'];
+// Topics verified against the bytecode of the pinned deployed implementations in
+// deploy/tests/fixtures/base-kms-bytecode.json. Newer upstream PolicyChanged is absent there.
+export const appEvents = ['ComposeHashAdded(bytes32)', 'ComposeHashRemoved(bytes32)',
+  'DeviceAdded(bytes32)', 'DeviceRemoved(bytes32)', 'AllowAnyDeviceSet(bool)', 'UpgradesDisabled()',
+  'RequireTcbUpToDateSet(bool)', 'OwnershipTransferred(address,address)', 'Upgraded(address)'];
+export const kmsEvents = ['OwnershipTransferred(address,address)', 'Upgraded(address)',
+  'AppRegistered(address)', 'GatewayAppIdSet(string)', 'OsImageHashAdded(bytes32)',
+  'OsImageHashRemoved(bytes32)', 'KmsAggregatedMrAdded(bytes32)', 'KmsAggregatedMrRemoved(bytes32)',
+  'AppImplementationSet(address)', 'KmsInfoSet(bytes)', 'KmsDeviceAdded(bytes32)', 'KmsDeviceRemoved(bytes32)'];
 export async function monitor(c, apps, from, to) {
   const targets = [[config.kms_auth, kmsEvents], ...apps.map(app => [address(app), appEvents])];
   const events = [];

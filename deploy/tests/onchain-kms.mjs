@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { getComposeHash } from '../tools/node_modules/@phala/cloud/dist/index.mjs';
-import { canonical, composeHash, compareHash, batch, verify, deployment, identity, verifyProviderEvent, config, slot } from '../tools/onchain-kms.mjs';
-import { encodeEventTopics } from '../tools/node_modules/viem/_esm/index.js';
+import { canonical, composeHash, compareHash, batch, verify, deployment, identity, verifyProviderEvent, config, slot, appEvents, kmsEvents } from '../tools/onchain-kms.mjs';
+import { encodeEventTopics, toEventSelector } from '../tools/node_modules/viem/_esm/index.js';
 
 const safe = '0x8AB55148944F837040bbB887f8A5005f70FF7700';
 const app = '0x1111111111111111111111111111111111111111';
@@ -129,5 +129,16 @@ test('Cloud prepare uses official PATCH token flow without printing the token or
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));
     await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('every monitored governance topic occurs in the pinned deployed implementation bytecode', () => {
+  const fixture = JSON.parse(readFileSync(new URL('./fixtures/base-kms-bytecode.json', import.meta.url)));
+  assert.equal(fixture.chain_id, 8453);
+  assert.equal(fixture.implementations.app.address, config.app_implementation);
+  assert.equal(fixture.implementations.kms.address, config.kms_implementation);
+  for (const [name, events] of [['app', appEvents], ['kms', kmsEvents]]) {
+    for (const event of events) assert.ok(fixture.implementations[name].code.includes(toEventSelector(event).slice(2)), `${name}: ${event}`);
+    assert.equal(fixture.implementations[name].code.includes(toEventSelector('PolicyChanged(address,bytes32,bytes32,bool)').slice(2)), false);
   }
 });

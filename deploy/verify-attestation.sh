@@ -76,6 +76,14 @@ jq -e --slurpfile info "$info" '{
 "$root/deploy/dstack-verifier.sh" <"$tmp/request.json" >"$tmp/result.json"
 
 compose_hash=$("$root/deploy/attested-compose.sh" "$attestation" "$expected_compose" "$tmp")
+if [ "$kms" = base ]; then
+    # shellcheck source=deploy/app-compose-baseline.sh
+    . "$root/deploy/app-compose-baseline.sh"
+    load_app_compose_baseline "$7" "$tmp/baseline.json"
+    baseline_violations=$(jq -r -L "$root/deploy" --slurpfile baseline "$tmp/baseline.json" \
+        'include "compose-policy"; base_app_violations(.; $baseline[0])[]' "$tmp/app-compose.json")
+    [ -z "$baseline_violations" ] || { printf '%s\n' "$baseline_violations" >&2; exit 1; }
+fi
 jq -e --arg app_id "$app_id" --arg compose_hash "$compose_hash" --arg os_hash "$expected_os_hash" '
     .is_valid == true
     and .details.tcb_status == "UpToDate"

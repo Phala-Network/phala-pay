@@ -15,7 +15,14 @@ Do that together; passing new inputs to the old pinned workflow fails GitHub val
 ## Reviewed inputs
 
 Commit `kms` (`base`), `dstack-app` (DstackApp address), `dstack-owner` (expected Base Safe),
-`os-image-hash` and the ordinary environment settings. Production's owner is
+`os-image-hash`, a full reviewed `app-compose.json` baseline and the ordinary environment settings.
+The baseline may instead be the committed `provision.json`'s `compose_file`. Every non-render
+field and the exact key set must match that baseline in Cloud and attestation. `init_script`
+must be absent or `[]`; no root init commands are accepted. Allowed env names, flags, runner,
+manifest, features, storage, provider and any other fields are pinned. Only docker-compose and
+pre-launch bytes are replaced by the reviewed render and kit script. A change to another field
+requires a reviewed baseline change and explicit operation; never copy unreviewed Cloud fields
+into a baseline to make a check pass. Production's owner is
 `0x8AB55148944F837040bbB887f8A5005f70FF7700`; staging uses its own reviewed Base Safe. The
 reference product and template stay on Phala KMS. The Base KmsAuth address and both implementation
 pins are in `deploy/onchain-kms.json`. Review upstream source and chain evidence before changing
@@ -27,14 +34,15 @@ Commit a complete `provision.json` request in the new environment directory. It 
 initial `compose_file` (including explicit backend defaults, allowed env **names**, KMS provider
 pin, port policy and pre-launch script), `kms: "BASE"`, CVM name, instance type, OS image and a
 pinned `node_id` (or `teepod_id`). Set `prefer_dev: false`. It must contain no secret values or
-`encrypted_env`. Preserve the reviewed backend init script and defaults from verified evidence;
-do not invent them. Resolve the selected node's gateway before preparing.
+`encrypted_env`. Set `init_script` to `[]` or omit it; include the supported secure flags and
+exact allowed env-name set. Any backend-injected init command, extra key or changed flag causes
+refusal before a batch is produced. Backend defaults must be reviewed in the baseline. Resolve the selected node's gateway before preparing.
 
 With `TOPUP_CVM_ID` unset, dispatch Deploy `prepare` with `gateway_domain` set to that node's
 `gateway.<base-domain>`. The workflow renders the compose and sets its reviewed pre-launch and
 port policy in the request, runs preflight, and calls `provision-prepare`. It recomputes the hash
-locally and refuses any backend mutation. If it refuses, inspect the exact backend defaults,
-review a corrected request, and prepare again. Never approve an unexplained hash.
+locally and refuses any backend mutation. If it refuses, stop and investigate the backend mutation against the reviewed baseline and
+supported schema. Never copy an unexplained stored field into the baseline or approve its hash.
 
 Import the factory batch into Safe Transaction Builder on **Base (8453)**. Review the Safe,
 factory address, pinned device and compose hash. It calls
@@ -70,7 +78,8 @@ deploy/phala-cvm.sh provision-commit "$TRANSACTION_HASH" prepare.json "$ENVIRONM
    device using its measured PPID hash, while keeping `allowAnyDevice=false`.
 3. Dispatch `commit` with the transaction hash and the same reviewed release/configuration.
    Commit re-prepares deterministically, verifies the hash is approved, checks device/owner and
-   both proxy pins **before pausing**. It then uses the existing pause → commit → wait → verify →
+   both proxy pins **before pausing**. A transaction receipt check establishes success only;
+   separate state reads establish the expected owner, approved hash/device and proxy pins. It then uses the existing pause → commit → wait → verify →
    resume path. Read the attestation and ingress evidence before declaring acceptance.
 4. Keep N-1 approved. Rollback selects its release/configuration, prepares it, and commits with
    `transaction_hash: already-registered`. State checks still run; no Safe signature is needed
@@ -139,7 +148,12 @@ may retain its compose hash; the OS measurement pin is still a separate acceptan
 special operation requires operator rehearsal; do not fall back to the Phala-only OS helper.
 
 Verify contracts scans the real Base KmsAuth and configured apps every day using a keyless RPC.
-Policy, owner and implementation events fail the job for review, including expected changes.
+ComposeHashAdded/Removed, DeviceAdded/Removed, AllowAnyDeviceSet, UpgradesDisabled,
+RequireTcbUpToDateSet, owner and implementation events fail the job for review, including expected
+changes. KmsAuth monitoring also includes AppRegistered, GatewayAppIdSet, OS-image, KMS-MR,
+KMS-device, KMS-info and app-implementation events. Each topic is tested against recorded
+bytecode of the pinned deployed implementation; those implementations do not emit the newer
+upstream PolicyChanged event.
 The report includes transaction hashes and raw topics/data. Its 45,000-block window overlaps
 normal daily runs; for an outage longer than that, run the monitor from the last reviewed block:
 

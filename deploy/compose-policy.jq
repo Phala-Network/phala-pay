@@ -336,3 +336,25 @@ def kms_violations($kind; $app; $identity):
             (($app.key_provider_id // "" | ascii_downcase | ltrimstr("0x")) == $identity);
             "Base KMS key_provider_id must match KmsAuth.kmsInfo().caPubkey")]
     else ["kms must be phala or base"] end;
+
+
+# Every Base non-render field, including the exact key set, is reviewed in the environment.
+# Cloud cannot introduce even an unused key. Rendered compose/pre-launch bytes are checked
+# separately by attested-compose.sh; all other values must match this baseline exactly.
+def base_app_violations($app; $baseline):
+    [check(($app | del(.docker_compose_file, .pre_launch_script)) ==
+            ($baseline | del(.docker_compose_file, .pre_launch_script));
+        "Base app-compose non-render fields/key set differ from the reviewed baseline"),
+     check(($app | has("init_script") | not) or $app.init_script == [];
+        "Base app-compose init_script must be absent or an empty array"),
+     check($app.kms_enabled == true and $app.key_provider == "kms" and
+        $app.local_key_provider_enabled == false and $app.no_instance_id == false and
+        $app.public_logs == false and $app.public_sysinfo == false and
+        $app.public_tcbinfo == true and $app.secure_time == true and
+        $app.gateway_enabled == true and $app.tproxy_enabled == true and
+        $app.storage_fs == "ext4" and $app.runner == "docker-compose" and
+        ($app.manifest_version == 2 or $app.manifest_version == 3) and
+        $app.features == ["kms", "tproxy-net"];
+        "Base app-compose flags must match the supported secure configuration"),
+     check(($app.allowed_envs | type == "array" and all(type == "string") and length == (unique | length));
+        "Base allowed_envs must be a unique reviewed list")];

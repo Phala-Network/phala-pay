@@ -5,6 +5,8 @@ set -euo pipefail
 root=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=deploy/deadline.sh
 source "$root/deadline.sh"
+# shellcheck source=deploy/app-compose-baseline.sh
+source "$root/app-compose-baseline.sh"
 stage_start onchain-cloud 300
 phala() { stage_call 30 "$root/phala" "$@"; }
 kms() { stage_call 120 node "$root/tools/onchain-kms.mjs" "$@"; }
@@ -15,6 +17,12 @@ load_environment() {
     [[ "$safe" =~ ^0x[0-9a-fA-F]{40}$ ]] || fail "dstack-owner must be an expected Base Safe address"
     app=""
     [[ ! -f "$env_dir/dstack-app" ]] || app=$(cat "$env_dir/dstack-app")
+}
+check_baseline() {
+    local actual=$1 baseline=$2 violations
+    violations=$(jq -r -L "$root" --slurpfile baseline "$baseline" 'include "compose-policy";
+        base_app_violations(.; $baseline[0])[]' "$actual")
+    [[ -z "$violations" ]] || fail "$violations"
 }
 check_response() {
     kms check-hash "$request" "$output" >/dev/null
@@ -34,13 +42,19 @@ case "$command" in
         jq -e '.kms == "BASE" and (.node_id // .teepod_id | type == "number") and
             (.compose_file | type == "object") and (has("encrypted_env") | not)' "$request" >/dev/null ||
             fail "provision requires full compose_file, kms BASE, a pinned node and no encrypted_env"
+        load_app_compose_baseline "$env_dir" "$output.baseline.json"
         jq '.compose_file' "$request" >"$output.request.json"
+        check_baseline "$output.request.json" "$output.baseline.json"
         identity=$(kms identity)
         violations=$(jq -r -L "$root" --arg identity "$identity" 'include "compose-policy";
             kms_violations("base"; .; $identity)[]' "$output.request.json")
         [[ -z "$violations" ]] || fail "$violations"
         # Published OpenAPI: handle_provision_cvm_api_v1_cvms_provision_post.
-        phala api /cvms/provision -X POST --input "$request" >"$output"
+        # Construct from the reviewed baseline, carrying only the two reviewed render fields.
+        jq --slurpfile baseline "$output.baseline.json" '.compose_file as $render |
+            .compose_file = ($baseline[0] | .docker_compose_file = $render.docker_compose_file |
+                .pre_launch_script = $render.pre_launch_script)' "$request" >"$output.provision-request.json"
+        phala api /cvms/provision -X POST --input "$output.provision-request.json" >"$output"
         request=$output.request.json
         check_response
         factory=$(jq -r .kms_auth "$root/onchain-kms.json")
@@ -50,6 +64,9 @@ case "$command" in
         [[ $# == 3 ]] || fail "usage: phala-cvm.sh provision-commit TX PREPARE_JSON ENVIRONMENT_DIR"
         tx=$1 output=$2 env_dir=$3 request=$2.request.json
         load_environment
+        [[ "$app" =~ ^0x[0-9a-fA-F]{40}$ ]] || fail "commit the receipt's dstack-app before provision-commit"
+        load_app_compose_baseline "$env_dir" "$output.baseline.json"
+        check_baseline "$request" "$output.baseline.json"
         check_response
         deployed=$(kms deployment "$tx" "$safe")
         [[ -z "$app" || "${app,,}" == "${deployed,,}" ]] || fail "receipt app differs from committed dstack-app"
@@ -76,16 +93,18 @@ case "$command" in
             ((.kms_info.dstack_kms_address // .kms_info.kms_contract_address) | ascii_downcase) ==
                 ($pin[0].kms_auth | ascii_downcase)' "$output.cvm.json" >/dev/null ||
             fail "existing CVM must use the reviewed Base KmsAuth before prepare"
+        load_app_compose_baseline "$env_dir" "$output.baseline.json"
         phala api "/cvms/$cvm_id/compose_file" >"$output.current.json"
+        check_baseline "$output.current.json" "$output.baseline.json"
         # Unified PATCH cannot alter port_policy: it must already equal the reviewed policy
-        # installed during initial provisioning. Preserve every other app-compose field.
+        # installed during initial provisioning. Every other field comes from the baseline.
         jq -e --argjson policy "$policy" '.port_policy == $policy and
             (has("encrypted_env") | not) and (has("env_keys") | not) and
             (has("update_env_vars") | not)' "$output.current.json" >/dev/null ||
             fail "current port policy differs or current compose contains env update fields"
         jq --rawfile compose "$compose" --rawfile pre_launch "$pre_launch" '
-            .docker_compose_file = $compose | .pre_launch_script = $pre_launch
-            | .public_logs = false | .public_sysinfo = false' "$output.current.json" >"$request"
+            .docker_compose_file = $compose | .pre_launch_script = $pre_launch' "$output.baseline.json" >"$request"
+        check_baseline "$request" "$output.baseline.json"
         identity=$(kms identity)
         violations=$(jq -r -L "$root" --arg identity "$identity" 'include "compose-policy";
             kms_violations("base"; .; $identity)[]' "$request")
@@ -118,6 +137,8 @@ case "$command" in
         [[ "$tx" == already-registered || "$tx" =~ ^0x[0-9a-fA-F]{64}$ ]] || fail "invalid transaction hash"
         expected_hash=$hash
         load_environment
+        load_app_compose_baseline "$env_dir" "$output.baseline.json"
+        check_baseline "$request" "$output.baseline.json"
         check_response
         [[ "${hash#0x}" == "${expected_hash#0x}" ]] || fail "commit hash differs from prepared hash"
         "$root/verify-onchain-app.sh" "$app" "$safe" "$hash" "$device" >"$output.onchain.json"
@@ -129,7 +150,16 @@ case "$command" in
         jq --arg tx "$tx" '{token, compose_hash, transaction_hash: $tx}' "$output" >"$output.commit.json"
         # Pinned CLI deploy --commit calls commitCvmUpdate (POST commit-update).
         # OpenAPI: commit_cvm_update_api_v1_cvms__cvm_id__commit_update_post.
-        phala api "/cvms/$cvm_id/commit-update" -X POST --input "$output.commit.json"
+        status=0
+        phala api "/cvms/$cvm_id/commit-update" -X POST --input "$output.commit.json" \
+            >"$output.commit-response.json" 2>"$output.commit-error.txt" || status=$?
+        ((status == 0)) || fail "Cloud commit-update failed (exit $status); prepare again if the token expired"
+        # A token endpoint's response is untrusted; never print arbitrary stdout or stderr.
+        jq '{status: (if .status == "in_progress" then .status else "accepted" end),
+            correlation_id: (if (.correlation_id | type) == "string" and
+                (.correlation_id | test("^[A-Za-z0-9_-]{1,100}$")) then .correlation_id else null end)}' \
+            "$output.commit-response.json" 2>"$output.commit-parse-error.txt" ||
+            fail "Cloud commit-update returned an invalid response"
         ;;
     *) fail "unknown onchain command" ;;
 esac

@@ -35,7 +35,10 @@ not migrate them. Existing operator repositories without that file keep the Phal
 
 `phala` uses Phala Cloud's KMS, with no DstackApp or onchain compose approval. `base` releases
 keys only for compose hashes and hardware devices allowed by a Safe-owned DstackApp on Base
-(8453). Commit its address in `dstack-app` and its expected owner in `dstack-owner`. Production's
+(8453). Commit its address in `dstack-app`, its expected owner in `dstack-owner`, and a full reviewed
+`app-compose.json` baseline (or `provision.json`'s `compose_file`). Every non-render field and exact
+key set must match that baseline before approval and in attestation; `init_script` must be absent
+or `[]`. Production's
 owner is the treasury Safe; staging uses a separate reviewed Safe. Product and template keep
 Phala KMS. Both modes still require attestation verification.
 
