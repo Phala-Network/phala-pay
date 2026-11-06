@@ -159,6 +159,22 @@ impl DstackAttestor {
 
         let report_data = report_data(nonce, account, livemode, &webhook_keys)
             .ok_or(AttestationError::InvalidRequest)?;
+        let (quote, info) = self.attest_report_data(report_data).await?;
+
+        Ok(AttestationBundle {
+            webhook_keys,
+            report_data,
+            quote,
+            info,
+        })
+    }
+
+    /// Collects versioned evidence for a domain-separated SHA-256 commitment, plus app identity.
+    pub async fn attest_report_data(
+        &self,
+        report_data: [u8; 32],
+    ) -> Result<(Vec<u8>, AttestationInfo), AttestationError> {
+        let client = DstackClient::new(self.endpoint.as_deref());
         let response = timeout(self.timeout, client.attest(report_data.to_vec()))
             .await
             .map_err(|_| AttestationError::DstackUnavailable)?
@@ -175,16 +191,14 @@ impl DstackAttestor {
             hex::decode(&info.compose_hash).map_err(|_| AttestationError::DstackUnavailable)?;
         let app_compose = info.tcb_info.app_compose;
 
-        Ok(AttestationBundle {
-            webhook_keys,
-            report_data,
+        Ok((
             quote,
-            info: AttestationInfo {
+            AttestationInfo {
                 app_id,
                 compose_hash,
                 app_compose: (!app_compose.is_empty()).then_some(app_compose),
             },
-        })
+        ))
     }
 
     /// Derives the public webhook keys of `account` in the given mode at `versions`, in order,

@@ -1,0 +1,67 @@
+# Fences the old app: no API, ingress, heartbeat or schema migrations. The source's
+# existing pgdata and WAL-G prefix stay attached; all plaintext transfer files are tmpfs.
+services:
+  topup: !reset null
+  migrate: !reset null
+  restore-check: !reset null
+  dstack-ingress: !reset null
+  smokescreen: !reset null
+  heartbeat: !reset null
+  capacity: !reset null
+  backup:
+    # Final rollback point before the logical archive. No automatic restart/re-export.
+    entrypoint: [bash, -ceu]
+    command:
+      - 'psql -X -v ON_ERROR_STOP=1 -c "SELECT pg_switch_wal()"; wal-g backup-push /var/lib/postgresql/data'
+    restart: "no"
+  dump:
+    image: postgres-walg
+    user: "999:999"
+    entrypoint: [bash, -ceu]
+    command:
+      - 'umask 077; pg_dump -Fc --exclude-schema=topup_migration --file=/run/migration/dump.pg || { rm -f /run/migration/dump.pg; echo "migration dump failed (private tmpfs limit: 4 GiB)" >&2; exit 1; }'
+    environment:
+      PGHOST: postgres
+      PGDATABASE: topup
+      PGUSER: postgres
+      PGPASSFILE: /run/db-owner/postgres.pgpass
+    volumes:
+      - db_owner:/run/db-owner:ro
+      - migration:/run/migration
+    depends_on:
+      backup:
+        condition: service_completed_successfully
+    restart: "no"
+  export:
+    image: phala-pay
+    user: "999:999"
+    command: [topup, migrate, export, --config, /etc/topup/migration.json]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    pids_limit: 64
+    environment:
+      DATABASE_URL: postgres://postgres@postgres:5432/topup
+      PGPASSFILE: /run/db-owner/postgres.pgpass
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock
+      - db_owner:/run/db-owner:ro
+      - migration:/run/migration
+    configs:
+      - source: migration
+        target: /etc/topup/migration.json
+    depends_on:
+      dump:
+        condition: service_completed_successfully
+    restart: "no"
+volumes:
+  migration:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: uid=999,gid=999,mode=0700,size=4g
+  ingress_certs: !reset null
+  ingress_evidences: !reset null

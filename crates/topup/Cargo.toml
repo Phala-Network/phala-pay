@@ -16,6 +16,9 @@ test-support = []
 dev-signer = ["topup-adapters/dev-signer"]
 
 [dependencies]
+age = "=0.12.1"
+bech32 = "=0.11.1"
+object_store = { version = "=0.14.2", default-features = false, features = ["aws"] }
 alloy.workspace = true
 alloy-consensus.workspace = true
 alloy-primitives.workspace = true

@@ -4,6 +4,9 @@ all-features = true
 [advisories]
 yanked = "deny"
 ignore = [
+    # age -> i18n-config uses basic-toml only while compiling localization macros; no runtime
+    # use or fixed upstream release. Review by 2026-12-05; tracked in issue #625.
+    { id = "RUSTSEC-2026-0374", reason = "Build-time age localization parser only, no fix available. Expires 2026-12-05T00:00:00Z; review enforced in .github/security/trivy-ignore.yaml. Tracking: https://github.com/Phala-Network/phala-pay/issues/625" },
     { id = "RUSTSEC-2024-0436", reason = "paste is a transitive Alloy dependency and the advisory has no safe upgrade" },
     { id = "RUSTSEC-2026-0387", reason = "No compatible Alloy/k256 upgrade; startup-only secret-scalar validation inside the TEE. Expires 2026-11-25T00:00:00Z; exposure review and expiry enforced via .github/security/trivy-ignore.yaml. Tracking: https://github.com/Phala-Network/phala-pay/issues/536" },
     { id = "RUSTSEC-2026-0441", reason = "pin-utils is unmaintained, with no patched version or supported Alloy/wasmtimer upgrade. Alloy uses wasmtimer only on wasm; pin-utils is absent from the native Linux runtime. Remove when a supported parent release drops pin-utils; reassess if wasm runtime is introduced. Expires 2026-12-05T00:00:00Z; review and expiry enforced via .github/security/trivy-ignore.yaml. Tracking: https://github.com/Phala-Network/phala-pay/issues/626" },

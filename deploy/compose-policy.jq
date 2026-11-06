@@ -3,7 +3,7 @@
 # `docker compose config --format json` prints it. `violations($variant; $project)` is the list of
 # broken rules, empty when the compose passes. $variant is `service`, `restore-check` (the topup
 # CVM, deploy/RESTORE.md), `template` (the Phala Cloud template, deploy/compose.template.yaml), or
-# `product` (the reference product); $project is `dstack` on a CVM. `allowed_envs_violations` checks
+# `product` (the reference product), `export`, or `migration-import`; $project is `dstack` on a CVM. `allowed_envs_violations` checks
 # the names a CVM's env may set against the compose.
 
 def env_map:
@@ -17,8 +17,8 @@ def check(ok; message): if ok then empty else message end;
 # service's app-compose, so restore-check inherits its PROXY-on policy for 443. Nothing listens
 # on 443 there; only plain HTTP on 8081 is published. Template and product keep PROXY off.
 def port_policy($variant):
-    if (["service", "restore-check", "template", "product"] | index($variant)) != null then
-        {ports: [{port: 443, pp: ($variant == "service" or $variant == "restore-check")}], restrict_mode: false}
+    if (["service", "restore-check", "template", "product", "export", "migration-import"] | index($variant)) != null then
+        {ports: [{port: 443, pp: ($variant == "service" or $variant == "restore-check" or $variant == "export" or $variant == "migration-import")}], restrict_mode: false}
     else error("unknown variant \($variant)") end;
 
 def port_policy_violations($variant; $app):
@@ -79,6 +79,8 @@ def secret_allowed($variant; $service; $key; $name):
             and ($service == "topup" or $service == "restore-check"))
         or (($name == "AWS_ACCESS_KEY_ID" or $name == "AWS_SECRET_ACCESS_KEY") and $key == $name
             and ($service == "postgres" or ($service == "backup" and $variant != "restore-check")))
+        or (($variant == "export" and $service == "export" or $variant == "migration-import" and $service == "import")
+            and ($name == "AWS_ACCESS_KEY_ID" or $name == "AWS_SECRET_ACCESS_KEY") and $key == $name)
         or ($variant == "template" and template_runtime_setting($service; $key; $name))
     end;
 
@@ -141,7 +143,7 @@ def common_violations($variant; $project):
               | select(.type == "bind") | select(.source != "/var/run/dstack.sock")] == [];
             "only the dstack socket may be bind-mounted")
     ] + secret_violations($variant)
-      + (if $variant == "product" then [] elif $variant == "restore-check" then ["topup"] else ["topup", "smokescreen", "heartbeat"] end | map(
+      + (if $variant == "product" or $variant == "export" then [] elif $variant == "restore-check" then ["topup"] else ["topup", "smokescreen", "heartbeat"] end | map(
         . as $service
         | $root | [
           (if $service == "topup" then
@@ -169,7 +171,10 @@ def common_violations($variant; $project):
 # The derived credentials (deploy/README.md, "Database credentials"): each volume is the committed
 # tmpfs, mounted by exactly these services, and written only by `keys`, which derives them.
 def credential_mounters($variant):
-    if $variant == "service" or $variant == "template" then
+    if $variant == "export" then
+        {walg_key: ["backup", "keys", "postgres"], db_owner: ["backup", "dump", "export", "keys", "postgres"],
+         db_app: ["keys", "postgres"]}
+    elif $variant == "service" or $variant == "template" then
         {walg_key: ["backup", "keys", "postgres"], db_owner: ["backup", "keys", "migrate", "postgres"],
          db_app: ["heartbeat", "keys", "postgres", "topup"]}
     else
@@ -317,9 +322,90 @@ def product_violations:
                 == ["dstack-ingress"]; "only dstack-ingress may mount the dstack socket")
       ] + ingress_violations(false);
 
+# One-time migration variants. Keep the split postgres/crypto trust boundary explicit.
+def completed($service; $dependency):
+    .services[$service].depends_on[$dependency].condition == "service_completed_successfully";
+
+def migration_volume_violations($mounters):
+    [check(.volumes.migration.driver == "local"
+        and .volumes.migration.driver_opts == {type: "tmpfs", device: "tmpfs", o: "uid=999,gid=999,mode=0700,size=4g"};
+        "migration plaintext must use the private bounded tmpfs"),
+     check([.services | to_entries[] | select(.value.volumes[]?.source == "migration") | .key] == $mounters;
+        "only migration jobs may mount the plaintext tmpfs")];
+
+def migration_crypto_violations($service; $mode; $verify):
+    .services[$service] as $job
+    | [check($job.image == .services.keys.image and $job.user == "999:999"
+        and $job.entrypoint == null and $job.restart == "no"
+        and $job.command == (["topup", "migrate", $mode, "--config", "/etc/topup/migration.json"]
+            + if $verify then ["--verify"] else [] end);
+        "migration crypto must run the exact topup job as uid 999"),
+       check(($job.environment | env_map) as $env
+        | ($env.DATABASE_URL | database_user) == "postgres" and $env.PGPASSFILE == "/run/db-owner/postgres.pgpass";
+        "migration crypto must use the owner pgpass"),
+       check((mounted_config($service; "/etc/topup/migration.json") | fromjson? // {})
+          | if $mode == "export" then
+                keys == ["migration_export"] and (.migration_export | keys == ["object", "recipient"]
+                    and (.recipient | test("^age1[023456789acdefghjklmnpqrstuvwxyz]{58}$")) and (.object | startswith("s3://")))
+            else keys == ["migration_import"] and (.migration_import | keys == ["export_public_key", "object", "source_app_id"]
+                    and (.export_public_key | test("^[0-9a-f]{64}$")) and (.source_app_id | test("^[0-9a-f]{40,64}$"))
+                    and (.object | startswith("s3://"))) end;
+        "migration pins must be inline attested configuration"),
+       check((volume_sources($service) | sort) == ["/var/run/dstack.sock", "db_owner", "migration"]
+        and [$job.volumes[] | select(.source == "db_owner") | .read_only] == [true];
+        "migration crypto may mount only its socket, read-only owner credentials and plaintext tmpfs"),
+       check($job.cap_drop == ["ALL"] and $job.security_opt == ["no-new-privileges:true"]
+        and $job.mem_limit != null and $job.pids_limit > 0;
+        "migration crypto must have resource and privilege limits")];
+
+def migration_pg_violations($service; $command):
+    .services[$service] as $job
+    | [check($job.image == .services.postgres.image and $job.user == "999:999"
+        and $job.entrypoint == ["bash", "-ceu"] and $job.command == [$command] and $job.restart == "no";
+        "migration PostgreSQL tools must run the exact archive job from the pinned postgres image"),
+       check($job.environment == {PGHOST: "postgres", PGDATABASE: "topup", PGUSER: "postgres", PGPASSFILE: "/run/db-owner/postgres.pgpass"}
+        and (volume_sources($service) | sort) == ["db_owner", "migration"]
+        and [$job.volumes[] | select(.source == "db_owner") | .read_only] == [true];
+        "migration PostgreSQL tools may mount only owner credentials and the plaintext tmpfs")];
+
+def export_violations:
+    [check((.services | keys) == ["backup", "dump", "export", "keys", "postgres"] and published == [];
+        "export must fence topup, ingress, heartbeat and migrations; no ports"),
+     check(.services.backup.entrypoint == ["bash", "-ceu"] and .services.backup.restart == "no"
+        and .services.backup.command == ["psql -X -v ON_ERROR_STOP=1 -c \"SELECT pg_switch_wal()\"; wal-g backup-push /var/lib/postgresql/data"]
+        and completed("dump"; "backup") and completed("export"; "dump");
+        "final backup must precede dump and encryption"),
+     check([.services | to_entries[] | select(.value.volumes[]?.source == "/var/run/dstack.sock") | .key]
+        == ["export", "keys"]; "only export and keys may mount the dstack socket")]
+    + credential_violations("export") + migration_volume_violations(["dump", "export"])
+    + migration_crypto_violations("export"; "export"; false)
+    + migration_pg_violations("dump"; "umask 077; pg_dump -Fc --exclude-schema=topup_migration --file=/run/migration/dump.pg || { rm -f /run/migration/dump.pg; echo \"migration dump failed (private tmpfs limit: 4 GiB)\" >&2; exit 1; }");
+
+def migration_import_violations:
+    . as $original
+    # Apply the stock service policy after projecting away only the declared import additions.
+    | (del(.services["import", "restore", "import-verify"], .volumes.migration,
+           .services.migrate.depends_on["import-verify"], .services.backup.depends_on["import-verify"])
+       | service_violations)
+    + ($original | [
+      check(completed("restore"; "import") and completed("import-verify"; "restore")
+        and completed("migrate"; "import-verify") and completed("backup"; "import-verify")
+        and completed("topup"; "migrate") and completed("heartbeat"; "migrate")
+        and .services.import.depends_on.postgres.condition == "service_healthy";
+        "import, transactional restore and verification must complete before migrate, topup, heartbeat and backup"),
+      check([.services | to_entries[] | select(.value.volumes[]?.source == "/var/run/dstack.sock") | .key]
+        == ["dstack-ingress", "import", "import-verify", "keys", "topup"];
+        "only import jobs and service identity consumers may mount the dstack socket")]
+      + migration_volume_violations(["import", "import-verify", "restore"])
+      + migration_crypto_violations("import"; "import"; false)
+      + migration_crypto_violations("import-verify"; "import"; true)
+      + migration_pg_violations("restore"; "trap \"rm -f /run/migration/dump.pg\" EXIT; pg_restore --single-transaction --exit-on-error --dbname=topup /run/migration/dump.pg"));
+
 def violations($variant; $project):
     common_violations($variant; $project)
-    + if $variant == "service" then service_violations
+    + if $variant == "export" then export_violations
+      elif $variant == "migration-import" then migration_import_violations
+      elif $variant == "service" then service_violations
       elif $variant == "restore-check" then restore_check_violations
       elif $variant == "template" then template_violations
       elif $variant == "product" then product_violations

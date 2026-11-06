@@ -1,0 +1,83 @@
+# Optional service overlay. Remove after successful cutover: every second import is refused.
+# Immutable pins and the unique object prefix come from --migration-import FILE.
+services:
+  import:
+    image: phala-pay
+    user: "999:999"
+    command: [topup, migrate, import, --config, /etc/topup/migration.json]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    pids_limit: 64
+    environment:
+      DATABASE_URL: postgres://postgres@postgres:5432/topup
+      PGPASSFILE: /run/db-owner/postgres.pgpass
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock
+      - db_owner:/run/db-owner:ro
+      - migration:/run/migration
+    configs:
+      - source: migration
+        target: /etc/topup/migration.json
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+  restore:
+    image: postgres-walg
+    user: "999:999"
+    entrypoint: [bash, -ceu]
+    # The trap removes plaintext on restore failure too; successful verification checks DB state.
+    command:
+      - 'trap "rm -f /run/migration/dump.pg" EXIT; pg_restore --single-transaction --exit-on-error --dbname=topup /run/migration/dump.pg'
+    environment:
+      PGHOST: postgres
+      PGDATABASE: topup
+      PGUSER: postgres
+      PGPASSFILE: /run/db-owner/postgres.pgpass
+    volumes:
+      - db_owner:/run/db-owner:ro
+      - migration:/run/migration
+    depends_on:
+      import:
+        condition: service_completed_successfully
+    restart: "no"
+  import-verify:
+    image: phala-pay
+    user: "999:999"
+    command: [topup, migrate, import, --config, /etc/topup/migration.json, --verify]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    pids_limit: 64
+    environment:
+      DATABASE_URL: postgres://postgres@postgres:5432/topup
+      PGPASSFILE: /run/db-owner/postgres.pgpass
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock
+      - db_owner:/run/db-owner:ro
+      - migration:/run/migration
+    configs:
+      - source: migration
+        target: /etc/topup/migration.json
+    depends_on:
+      restore:
+        condition: service_completed_successfully
+    restart: "no"
+  migrate:
+    depends_on:
+      import-verify:
+        condition: service_completed_successfully
+  backup:
+    depends_on:
+      import-verify:
+        condition: service_completed_successfully
+volumes:
+  migration:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: uid=999,gid=999,mode=0700,size=4g

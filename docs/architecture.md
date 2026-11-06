@@ -2030,3 +2030,41 @@ Ownership: **S** service, **M** merchant (its UI, billing, and support), **O** o
 New snapshot activation also re-screens current treasuries, pending treasury changes and pending
 refund destinations. The signed admin metrics and daily report expose the active publication,
 hash and verification time; the hourly loop sends Sentry Crons check-ins.
+
+## KMS application migration
+
+A new KMS app derives different database, backup, webhook and client-secret keys. Logical
+migration carries database contents and ACLs into the new cluster while each app retains its own
+keys. The operator verifies the old app's admin-only
+`GET /v1/admin/migration/export-key?nonce=` evidence and the new app's `recipient.json` with the
+official dstack verifier, then pins the public keys in immutable migration configuration. The
+recipient quote commits to SHA-256 of `phala-pay/migration/import/v1` plus a zero byte and the
+canonical age recipient string. Export-key evidence commits to `phala-pay/migration/export-key/v1`
+plus a zero byte, one-byte nonce length, nonce, and the raw Ed25519 key.
+
+The export compose removes the API, ingress, heartbeat and migrator. A final WAL-G backup precedes
+`pg_dump -Fc` with ownership and ACLs intact. PostgreSQL tools run in the existing pinned
+`postgres-walg` image; the distroless `topup migrate export` job encrypts to the pinned X25519
+recipient using the standard age format, signs the manifest through v0 GetKey at
+`migration/export/v1`, and uploads ciphertext before the manifest. It removes the plaintext
+archive on completion or failure. Only these jobs mount the private, bounded 4 GiB tmpfs.
+
+`topup migrate import` derives `migration/import/v1`, publishes attested recipient evidence, and
+waits for the manifest. The signed manifest binds source app ID, destination recipient, unique
+S3 prefix, ciphertext SHA-256, exact per-table counts, latest migration and last heartbeat.
+After verifying the pinned export key and ciphertext, it decrypts into a private tmpfs. A
+separate PostgreSQL job restores with `--single-transaction --exit-on-error` and removes the
+archive even on failure. `topup migrate import --verify` rechecks the signed manifest and all DB
+invariants, then records an owner-only `topup_migration.imported` marker. Only then may the normal
+migrator, API, heartbeat and first new-prefix backup start. Any failed gate leaves the API stopped.
+Remove the import overlay after cutover: rerunning it against an imported database is refused.
+
+Render with `deploy/render.sh --export --migration-export FILE` or
+`deploy/render.sh --migration-import FILE` plus the ordinary image/environment inputs. The JSON
+file contains exactly `migration_export: {recipient, object}` or
+`migration_import: {source_app_id, export_public_key, object}`. Public pins and the unique
+`s3://bucket/prefix` are inlined into the attested compose; only existing `AWS_ACCESS_KEY_ID` and
+`AWS_SECRET_ACCESS_KEY` remain sealed. Transfer uses the environment's existing HTTPS S3 endpoint
+and region. The prefix is unique per cutover and must never be reused. The local two-cluster
+rehearsal is `deploy/tests/migration-roundtrip.sh`; it uses dstack's pinned simulator and an
+in-memory object store in place of remote S3.
