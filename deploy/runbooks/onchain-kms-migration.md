@@ -44,7 +44,7 @@ Verify each target app, device, hash and Safe nonce before signing.
 |---|---|---|---|
 | Safe batch #1 | T-1, from Deploy `prepare` | T-1, before provision commit | Base KmsAuth `deployAndRegisterApp(Safe,false,false,deviceId,importHash)`; record the receipt's new DstackApp in `dstack-app` |
 | Safe batch #2 | T-1, after new app is known | T-1 | New DstackApp `addComposeHash(restoreCheckHash)`, `addComposeHash(serviceHash)` without migration overlay, and optional `addDevice(standbyDeviceId)` |
-| Safe batch #3 | **Pre-sign at T-1**, Safe nonce ordered after #2 | **T0, immediately after imported-app verification** | New DstackApp `removeComposeHash(importHash)` (the initial provision/overlay hash); retain the no-overlay service and restore-check approvals |
+| Safe batch #3 | **Pre-sign at T-1**, Safe nonce ordered after #2 | **T0, immediately after imported-app verification, or on rollback** | New DstackApp `removeComposeHash(importHash)` (the initial provision/overlay hash); retain the no-overlay service and restore-check approvals |
 | Runtime env and deploy state | T-1 | T-1/T0 | Seal env locally; select the correct `TOPUP_CVM_ID` and environment directory per run; never run concurrent deploys |
 | DNS, merchant pins and route controls | Agree before T-1 | T0 | Owner switches TXT/CNAME; each merchant verifies/re-pins; admin resumes only after final acceptance |
 
@@ -112,11 +112,20 @@ mkdir -p "$EVIDENCE"
    `migration_plan: NEW_ENV/migration-import.json`, `environment_dir: NEW_ENV`,
    `gateway_domain: GATEWAY`. Check its locally recomputed hash/device summary; execute batch #1.
    Commit the receipt-derived `dstack-app`, then dispatch `commit` with the same inputs and the
-   batch #1 transaction hash. Record `NEW_CVM_ID` from the artifact and set `TOPUP_CVM_ID` to it.
+   batch #1 transaction hash. Record `NEW_CVM_ID`, `IMPORT_HASH` and `NEW_DEVICE_ID` from the
+   artifact; save its rendered compose as `EVIDENCE/import.yml` and set `TOPUP_CVM_ID` to the new CVM.
    Verify owner, hash, device, proxy pins, attestation, OS and Base provider as in the upgrade
    runbook. Initial provisioning is unsealed evidence, **not service acceptance**.
-5. **T-1: seal.** Owner runs the provision summary's local preflight and
-   `deploy/phala envs update "$NEW_CVM_ID" -e .env.ENV` using the complete secret set.
+5. **T-1: seal.** Owner prepares `.env.ENV` with the complete secret set and pulls the pinned
+   image as directed by the provision summary. **The summary's printed preflight command is
+   incomplete for migration-import:** it omits the plan flag. Run this full command instead:
+
+   ```sh
+   deploy/preflight.sh --env .env.ENV --compose "$EVIDENCE/import.yml" \
+     --environment-dir "$NEW_ENV" --migration-import "$NEW_ENV/migration-import.json" --offline
+   deploy/phala envs update "$NEW_CVM_ID" -e .env.ENV
+   ```
+
    The import now publishes `recipient.json` and waits; API, migrations and backup stay gated.
    Default manifest wait is **172800 seconds (48h)** from import invocation; allow enough margin
    for the window. Do not run ordinary service acceptance against the old origin yet.
@@ -126,8 +135,6 @@ mkdir -p "$EVIDENCE"
    ```sh
    aws --endpoint-url "$AWS_ENDPOINT" s3 cp \
      "${MIGRATION_OBJECT%/}/recipient.json" "$EVIDENCE/recipient.json"
-   deploy/render.sh --migration-import "$NEW_ENV/migration-import.json" \
-     --images images.json --gateway-domain "$GATEWAY" "$NEW_ENV" >"$EVIDENCE/import.yml"
    verify_key_evidence import "$EVIDENCE/recipient.json" "$NEW_APP_ID" \
      "$IMPORT_HASH" "$(cat "$NEW_ENV/os-image-hash")"
    jq -n --arg recipient "$(jq -er .public_key "$EVIDENCE/recipient.json")" \
@@ -167,7 +174,8 @@ mkdir -p "$EVIDENCE"
    These are **full app-compose** hashes (sorted compact JSON SHA-256), never hashes of YAML.
    Keep inherited service port policy/allowed env names for restore-check. Combine the approval
    calls into Safe Transaction Builder batch #2 (include standby if needed), execute it, then
-   pre-sign removal batch #3 at the next reserved Safe nonce. Record both final hashes.
+   pre-sign removal batch #3 at the next reserved Safe nonce. Record the no-overlay service hash
+   as `SERVICE_HASH` and the restore-check hash alongside it.
 8. **T-1: DNS and merchants.** Lower TXT/CNAME TTL to 60 seconds early enough for the previous
    TTL to expire. Record old values; check any Let's Encrypt CAA account restriction. Notify each
    merchant of downtime, old-secret expiry, fresh idempotency keys, unchanged addresses and the
@@ -194,6 +202,8 @@ Record every transition in US Pacific time with its workflow run/commit. Target 
 Route commands below use the signed `admin` helper; repeat for each route and record returned
 `paused_scopes`. For resume, use the same path with `/resume` and only the scopes this cutover paused.
 The Deploy workflow owns the separate [instance maintenance lease](instance-maintenance.md).
+**All route pauses must be in place before export:** Deploy does not inspect database route
+state, so a successful export deployment does not prove those business pauses were set.
 
 ```sh
 admin POST "/v1/admin/routes/$ROUTE/pause" '{"scopes":["quotes"]}'
@@ -213,21 +223,53 @@ admin GET /v1/admin/restore
   fresh recipient evidence, then re-run the entire old export chain. A same-compose Deploy can
   be a no-op: it is not an exporter retry. Restart the **fenced exporter CVM** to re-run its
   one-shot chain, and verify its export attestation again.
-- **Any retry after the old app resumed writes MUST use a fresh migration prefix.** Review both
-  updated plans and their new compose hashes/approvals; a pre-signed #3 for an old import hash
-  cannot close out a changed one. Do not reuse a partially restored destination: without a valid
-  completion marker it fails the fresh-database gate; return to reviewed fresh provisioning.
+- **Any retry after the old app resumed writes MUST use a fresh migration prefix.** Any retry
+  of an abandoned cutover must revoke **every abandoned import hash**, verify each revocation,
+  and use a fresh migration prefix and new import hash with reviewed plans/approvals and a new
+  removal batch. A pre-signed #3 for an old hash cannot close out its replacement. This is
+  separate from re-running export for the current waiting import's nonce. Do not reuse a
+  partially restored destination: without a valid completion marker it fails the fresh-database
+  gate; return to reviewed fresh provisioning.
 - A completed `topup_migration.imported` marker makes reboot idempotent: verified matching
   signed completion evidence skips transfer/restore even after service writes. Empty/forged or
   mismatched markers fail closed. Original row counts are not rechecked after completion; never
   delete a marker or re-restore a running destination.
-- **Before any write resume:** stop the new CVM first, then use the interim emergency procedure
-  below. The export only read its data; keep the new CVM stopped. If #3 already ran, returning
-  to import needs a new Safe approval.
+- **Before any write resume:** execute batch #3 if still pending, verify import-hash revocation
+  as below, then stop the new CVM and use the rollback procedure. Executing #3 also consumes its
+  reserved Safe nonce and unblocks the treasury Safe queue. Stopping a CVM alone does not close
+  its import key-release path. The export only read its data; keep the new CVM stopped.
 - **After write resume:** do not switch DNS back to the stale database. Fence the current writer;
   plan a reverse logical migration (new → old, reviewed import/export configs and approvals) or
   use [RESTORE.md](../RESTORE.md) and [reconciliation](restore.md) for writes/credits since cutover.
   Preserve immutable webhook ids and merchant deduplication throughout.
+
+### Close an abandoned import path
+
+Execute the pre-signed batch #3 if it has not executed. Set `REMOVAL_TX` to its executed
+transaction hash, verify receipt success, then check the new app's owner, approved final service
+hash, device and proxy pins. Read the import allowlist entry explicitly and require **false**;
+`verify-onchain-app.sh` alone requires an approved hash, so its failure on an import hash would
+not prove revocation. Record these results before declaring rollback complete, even if the
+no-overlay service never deployed:
+
+```sh
+node deploy/tools/onchain-kms.mjs receipt "$REMOVAL_TX"
+deploy/verify-onchain-app.sh "$NEW_APP_ID" "$SAFE" "$SERVICE_HASH" "$NEW_DEVICE_ID" \
+  >"$EVIDENCE/abandoned-app-policy.json"
+node --input-type=module - "$NEW_APP_ID" "$IMPORT_HASH" <<'JS' >"$EVIDENCE/import-revoked.json"
+import {abi, address, client, hex} from './deploy/tools/onchain-kms.mjs';
+const [app, hash] = process.argv.slice(2);
+const chain = await client();
+const allowed = await chain.readContract({address: address(app), abi,
+  functionName: 'allowedComposeHashes', args: [hex(hash, 32)]});
+if (allowed !== false) throw new Error('abandoned import hash is still approved');
+console.log(JSON.stringify({app: address(app), import_hash: hex(hash, 32), allowed}));
+JS
+deploy/phala cvms stop "$NEW_CVM_ID"
+```
+
+Repeat for every abandoned import hash/its removal transaction. A retry starts only after all
+those hashes are revoked, with a fresh migration prefix and a new approved import hash.
 
 ### Interim emergency rollback before resume
 
@@ -235,10 +277,13 @@ Normal Deploy currently tries to pause the public API before every upgrade; the 
 API, and after DNS switch that URL reaches the new app. Until the separate workflow fix lands,
 restore the **old Phala KMS CVM only** through the existing Phala `compose-update` helper, with
 the saved reviewed vN service render. This retains sealed env, app/KMS identity and pgdata.
-Do not apply this path to Base. With the new CVM stopped and both apps' routes still paused:
+Do not apply this path to Base. First complete [import-path revocation](#close-an-abandoned-import-path)
+and stop the new CVM; keep both apps' routes paused. The supported Deploy rollback being added
+in [#632](https://github.com/Phala-Network/phala-pay/pull/632) must use the **same release
+`version` and the same `ENVIRONMENT_DIR` commit as the export run**; otherwise its source-export
+verification fails before mutation. Do not change either when adopting that path.
 
 ```sh
-deploy/phala cvms stop "$NEW_CVM_ID"
 policy=$(jq -cn -L deploy --arg variant service 'include "compose-policy"; port_policy($variant)')
 deploy/phala-cvm.sh compose-update "$OLD_CVM_ID" "$EVIDENCE/old-service.yml" \
   deploy/phala-cloud-pre-launch.sh "$policy" "$EVIDENCE/rollback.json"
@@ -256,7 +301,8 @@ Stop on any failure or hash mismatch. Revert TXT to the old verified instance id
 `OLD_GATEWAY`; wait for TLS and `/healthz`, then verify ingress with
 `deploy/verify-ingress-evidence.sh "$DOMAIN" "$OLD_APP_ID"`. Check admin state, have merchants
 verify/restore their old pins, and resume only migration-owned route pauses. Record this full
-acceptance before declaring rollback complete. Re-select the old CVM/directory in deploy state.
+acceptance and the import-hash revocation evidence before declaring rollback complete.
+Re-select the old CVM/directory in deploy state.
 
 ## Key evidence
 
