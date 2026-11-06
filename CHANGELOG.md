@@ -14,6 +14,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+## [0.13.7] - 2026-11-06
+
 ### Added
 
 - Optional Base onchain KMS deployment: Safe prepare/sign/commit batches, owner/device/compose
@@ -2678,7 +2680,8 @@ happens only from two-provider finalized data.
   events were held for up to an hour at a time. A notice's outcome now neither cools nor clears
   the endpoint.
 
-[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.13.6...HEAD
+[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.13.7...HEAD
+[0.13.7]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.7
 [0.13.6]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.6
 [0.13.5]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.5
 [0.13.4]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.4
