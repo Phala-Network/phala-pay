@@ -73,7 +73,7 @@ jobs:
   # isolated PostgreSQL clusters exercise attested logical migration and replay rejection.
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       # The test harness's database owner and application login (crates/topup/tests/support).
       OWNER_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
@@ -133,7 +133,7 @@ jobs:
           tags: phala-pay-dstack-simulator:migration-ci
           cache-from: type=gha,scope=ci-phala-pay-dstack-simulator
       - name: Test the workspace on Anvil and PostgreSQL, including migration
-        timeout-minutes: 25
+        timeout-minutes: 10
         env:
           TOPUP_MIGRATION_SIMULATOR_IMAGE: phala-pay-dstack-simulator:migration-ci
         run: deploy/tests/migration-roundtrip.sh --workspace
