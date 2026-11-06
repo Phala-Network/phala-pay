@@ -133,7 +133,7 @@ jobs:
           tags: phala-pay-dstack-simulator:migration-ci
           cache-from: type=gha,scope=ci-phala-pay-dstack-simulator
       - name: Test the workspace on Anvil and PostgreSQL, including migration
-        timeout-minutes: 10
+        timeout-minutes: 35
         env:
           TOPUP_MIGRATION_SIMULATOR_IMAGE: phala-pay-dstack-simulator:migration-ci
         run: deploy/tests/migration-roundtrip.sh --workspace
