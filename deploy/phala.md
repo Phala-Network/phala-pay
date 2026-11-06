@@ -39,13 +39,15 @@ instance, is responsible for its compliance, as every operator is for its own (a
 
 ## KMS migration preparation
 
-Production and staging remain on Phala Cloud KMS in this release (`kms` files say `phala`).
-The staging reference product stays on Phala KMS after service cutover. A future reviewed
-cutover directory selects Base, records the Safe-owned `dstack-app` and `dstack-owner`, pins the
-node and uses a new backup prefix. Production uses the treasury Safe; staging uses a separate
-Safe with the same signer. Do not change the existing CVM's KMS in place. Follow the
+The active production and staging directories remain on Phala Cloud KMS (`kms` files say
+`phala`). The staging reference product stays on Phala KMS after service cutover. The prepared
+[staging cutover directory](environments/phala-network/staging/topup-okms/README.md) selects Base,
+records `dstack-owner`, pins the node and uses a new backup prefix; `dstack-app` is recorded
+after the factory transaction. Staging and production use treasury Safe
+`0x8AB55148944F837040bbB887f8A5005f70FF7700` as DstackApp owner, with a separate app per
+environment. Do not change the existing CVM's KMS in place. Follow the
 [upgrade runbook](runbooks/onchain-kms-upgrade.md) for prepare/sign/commit, and the
-[migration preparation](runbooks/onchain-kms-migration.md) for the pending cutover runbook.
+[migration preparation and cutover runbook](runbooks/onchain-kms-migration.md).
 
 ## Production
 

@@ -22,10 +22,10 @@ must be absent or `[]`; no root init commands are accepted. Allowed env names, f
 manifest, features, storage, provider and any other fields are pinned. Only docker-compose and
 pre-launch bytes are replaced by the reviewed render and kit script. A change to another field
 requires a reviewed baseline change and explicit operation; never copy unreviewed Cloud fields
-into a baseline to make a check pass. Production's owner is
-`0x8AB55148944F837040bbB887f8A5005f70FF7700`; staging uses its own reviewed Base Safe. The
-reference product and template stay on Phala KMS. The Base KmsAuth address and both implementation
-pins are in `deploy/onchain-kms.json`. Review upstream source and chain evidence before changing
+into a baseline to make a check pass. Staging and production use treasury Safe
+`0x8AB55148944F837040bbB887f8A5005f70FF7700` as DstackApp owner, with a separate app per
+environment. The reference product and template stay on Phala KMS. The Base KmsAuth address and
+both implementation pins are in `deploy/onchain-kms.json`. Review upstream source and chain evidence before changing
 those pins. No private signing key belongs in GitHub or these files.
 
 ## Initial provisioning
