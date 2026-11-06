@@ -20,10 +20,31 @@ on:
         options: [topup, product]
         required: true
       mode:
-        description: "provision: create the target's first CVM; upgrade: update the target's CVM"
+        description: "provision/upgrade (kms phala); prepare/commit (kms base, onchain approval)"
         type: choice
-        options: [provision, upgrade]
+        options: [provision, upgrade, prepare, commit]
         required: true
+      variant:
+        description: "service, export, or migration-import (onchain KMS migration)"
+        type: choice
+        options: [service, export, migration-import]
+        default: service
+      migration_plan:
+        description: "Reviewed migration JSON path in this repository (export, import, or rollback from export)"
+        type: string
+        default: ""
+      environment_dir:
+        description: "Reviewed environment directory; empty selects deploy/environments/phala-network/<environment>/<target>"
+        type: string
+        default: ""
+      transaction_hash:
+        description: "Executed Base Safe transaction hash, or already-registered (commit mode)"
+        type: string
+        default: ""
+      gateway_domain:
+        description: "Pinned node gateway host for an initial Base provision"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -31,13 +52,17 @@ permissions:
 
 jobs:
   deploy:
-    uses: Phala-Network/phala-pay/.github/workflows/deploy.yml@c654136b71a6c2f67aeaf85e00f18a82ec4ef4f1 # v0.13.6
+    uses: Phala-Network/phala-pay/.github/workflows/deploy.yml@df9d14383a8a41f4b5ebad41bbe550fedafe8697 # v0.13.7
     with:
-      version: v0.13.6
+      version: v0.13.7
       environment: ${{ inputs.environment }}
       target: ${{ inputs.target }}
       mode: ${{ inputs.mode }}
-      environment_dir: deploy/environments/phala-network/${{ inputs.environment }}/${{ inputs.target }}
+      variant: ${{ inputs.variant }}
+      migration_plan: ${{ inputs.migration_plan }}
+      transaction_hash: ${{ inputs.transaction_hash }}
+      gateway_domain: ${{ inputs.gateway_domain }}
+      environment_dir: ${{ inputs.environment_dir || format('deploy/environments/phala-network/{0}/{1}', inputs.environment, inputs.target) }}
     # The called job's Environment secret (PHALA_CLOUD_API_KEY) resolves only when the caller
     # inherits secrets (actions/runner#4453); this repository holds no other secret.
     secrets: inherit
