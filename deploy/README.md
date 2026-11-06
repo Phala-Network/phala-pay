@@ -364,6 +364,14 @@ or persistent lease to carry across process replacement. The release's
 customer, treasury, and route incident pauses remain. See the
 [stuck-maintenance runbook](runbooks/instance-maintenance.md) for inspection and manual clear.
 
+For a Phala KMS rollback from the fenced `export` variant, use `mode: upgrade`, `variant: service`
+and `migration_plan` pointing to the reviewed export plan, with the same release images and
+environment settings used for export. Deploy fully verifies the current export attestation
+against that render before skipping maintenance pause/resume; a mismatch or OS image change
+fails before mutation. The target service still passes the normal attestation, health and TLS
+checks. Database route pauses stay in place; resume them through admin only after acceptance.
+Other upgrades retain the maintenance pause.
+
 Upgrade probes run from before the upgrade call through service readiness, sampling `/healthz`
 every 2 seconds with a 3-second timeout. Recovery closes a window and sampling continues.
 `unavailability.json` records each failure/recovery pair in `outage_windows` and their summed

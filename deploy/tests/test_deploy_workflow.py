@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Run Deploy's actual input/deploy shell steps with the real CVM wrapper and a stub CLI."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,10 @@ def step_run(name):
                       r"(?:(?!^      - ).*\n)*?        run: \|\n"
                       r"((?:          .*\n|\n)+)", workflow, re.MULTILINE)
     if match is None:
+        inline = re.search(r"^      - name: " + re.escape(name) + r"\n"
+                           r"(?:(?!^      - ).*\n)*?        run: '(.*)'\n", workflow, re.MULTILINE)
+        if inline is not None:
+            return inline[1].replace("''", "'")
         raise AssertionError(f"No shell step found: {name}")
     return "\n".join(line[10:] for line in match[1].splitlines())
 
@@ -43,25 +48,31 @@ case "$1" in
         if [[ "$2" == */available-os-images ]]; then
             printf '%s\\n' "$STUB_AVAILABLE_IMAGES"
         elif [[ "$2" == */compose_file/provision ]]; then
-            jq -nc '{compose_hash: ("ab" * 32), app_id: null}'
+            jq -nc --arg hash "${STUB_TARGET_HASH:-$(printf 'ab%.0s' {1..32})}" '{compose_hash:$hash, app_id:null}'
         elif [[ "$2" == */compose_file ]]; then
             if [[ "${3:-}" == -X ]]; then
                 touch "$STUB_COMPOSE_COMMITTED"
             else
-                echo '{"docker_compose_file":"old", "allowed_envs":["SENTRY_DSN"]}'
+                if [[ -n "${STUB_SOURCE_APP:-}" ]]; then cat "$STUB_SOURCE_APP"
+                else echo '{"docker_compose_file":"old", "allowed_envs":["SENTRY_DSN"]}'; fi
             fi
         else
             [[ "${STUB_OS_STATUS:-0}" == 0 ]] || exit "$STUB_OS_STATUS"
             touch "$STUB_OS_STARTED"
         fi ;;
     cvms)
+        if [[ "$2" == attestation ]]; then
+            if [[ -f "$STUB_COMPOSE_COMMITTED" ]]; then cat "$STUB_TARGET_ATTESTATION"
+            else cat "$STUB_SOURCE_ATTESTATION"; fi
+            exit 0
+        fi
         busy=false
         if [[ -f "$STUB_OS_STARTED" ]]; then
             busy=true
             rm "$STUB_OS_STARTED"
         fi
-        hash=$(printf 'cd%.0s' {1..32})
-        [[ ! -f "$STUB_COMPOSE_COMMITTED" ]] || hash=$(printf 'ab%.0s' {1..32})
+        hash=${STUB_SOURCE_HASH:-$(printf 'cd%.0s' {1..32})}
+        [[ ! -f "$STUB_COMPOSE_COMMITTED" ]] || hash=${STUB_TARGET_HASH:-$(printf 'ab%.0s' {1..32})}
         jq -nc --arg hash "$hash" --argjson busy "$busy" '{os:{name:"dstack-0.6.1"},status:"running",in_progress:$busy,
             compose_hash:$hash,node_info:{id:26,name:"prod5",region:"US-WEST-1"}}' ;;
     *) exit 64 ;;
@@ -82,6 +93,12 @@ echo '{"paused_scopes":["mutations"]}'
         bin_dir.mkdir()
         curl = bin_dir / "curl"
         curl.write_text('''#!/usr/bin/env bash
+if [[ "${*: -1}" == */prpc/Info ]]; then
+    jq -nc '["info"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
+    [[ "${STUB_INFO_STATUS:-0}" == 0 ]] || exit "$STUB_INFO_STATUS"
+    echo '{"vm_config":"fixture-vm-config"}'
+    exit 0
+fi
 jq -nc '["health"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
 ''')
         curl.chmod(0o755)
@@ -258,6 +275,207 @@ jq -nc '["health"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
                 result = self.run_step("Preflight (read-only)")
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("does not include enabled production image", result.stderr)
+
+
+class ExportRollbackWorkflowTests(unittest.TestCase):
+    setUp = DeployWorkflowTests.setUp
+    run_step = DeployWorkflowTests.run_step
+    calls = DeployWorkflowTests.calls
+    set_current_image = DeployWorkflowTests.set_current_image
+
+    def prepare_rollback(self):
+        """Real renders, compose binding and policy; only the external quote verifier is stubbed."""
+        deploy = self.kit / "deploy"
+        for script in ("verify-attestation.sh", "attested-compose.sh", "pinned-compose.sh"):
+            shutil.copy2(ROOT / "deploy" / script, deploy)
+        # The renderer uses the real kit's compose/config files and the reviewed environment.
+        render = deploy / "render.sh"
+        render.write_text('#!/bin/sh\nexec "$REAL_RENDER" "$@"\n')
+        render.chmod(0o755)
+        verifier = deploy / "dstack-verifier.sh"
+        verifier.write_text('''#!/usr/bin/env bash
+set -euo pipefail
+request=$(cat)
+jq -c '["verify-quote", .quote]' <<<"$request" >>"$STUB_LOG"
+quote=$(jq -er .quote <<<"$request")
+cat "$STUB_RESULTS/$quote.json"
+''')
+        verifier.chmod(0o755)
+        self.env.update(MODE="upgrade", VARIANT="service", REAL_RENDER=str(ROOT / "deploy/render.sh"),
+                        ENVIRONMENT_DIR=str(ROOT / "deploy/environments/phala-network/staging/topup"),
+                        MIGRATION_PLAN=str(self.tmp / "export.json"), STUB_RESULTS=str(self.tmp),
+                        CVM_ID="cvm-1", APP_ID="app-1", DOMAIN="example.invalid")
+        images = {"phala-pay": "ghcr.io/phala-network/phala-pay@sha256:" + "1" * 64,
+                  "postgres-walg": "ghcr.io/phala-network/postgres-walg@sha256:" + "2" * 64}
+        (self.work / "release/images.json").write_text(json.dumps(images))
+        pins = json.loads((ROOT / "deploy/tests/migration-pins.json").read_text())
+        (self.tmp / "export.json").write_text(json.dumps({"migration_export": {
+            "recipient": pins["recipient"], "object": "s3://migration-test/rollback"}}))
+        for name, args in (("source", ["--export", "--migration-export", self.env["MIGRATION_PLAN"]]),
+                           ("target", ["--gateway-domain", "gateway.example.net"])):
+            result = subprocess.run([str(render), "--images", str(self.work / "release/images.json"),
+                                     *args, self.env["ENVIRONMENT_DIR"]],
+                                    env=self.env, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            (self.tmp / f"{name}.yml").write_text(result.stdout)
+        self.write_attestation("source", self.tmp / "source.yml")
+        self.write_attestation("target", self.tmp / "target.yml")
+        shutil.copy2(self.tmp / "target.yml", self.env["COMPOSE"])
+
+    def write_attestation(self, name, compose):
+        app = {"name": name, "docker_compose_file": compose.read_text(),
+               "pre_launch_script": (ROOT / "deploy/phala-cloud-pre-launch.sh").read_text(),
+               "allowed_envs": ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "SENTRY_DSN",
+                                "TOPUP_RPC_ANKR_KEY", "TOPUP_RPC_INFURA_KEY"],
+               "port_policy": {"ports": [{"port": 443, "pp": True}], "restrict_mode": False}}
+        app_text = json.dumps(app)
+        digest = hashlib.sha256(app_text.encode()).hexdigest()
+        (self.tmp / f"{name}-app.json").write_text(app_text)
+        attestation = {"compose_file": app_text, "app_certificates": [{"position_in_chain": 0, "quote": name}],
+                       "tcb_info": {"event_log": [{"event": "compose-hash", "event_payload": digest}]}}
+        (self.tmp / f"{name}-attestation.json").write_text(json.dumps(attestation))
+        os_hash = (Path(self.env["ENVIRONMENT_DIR"]) / "os-image-hash").read_text().strip()
+        verified = {"is_valid": True, "details": {"tcb_status": "UpToDate", "app_info": {
+            "app_id": "app-1", "compose_hash": digest, "os_image_hash": os_hash}}}
+        (self.tmp / f"{name}.json").write_text(json.dumps(verified))
+        self.env[f"STUB_{name.upper()}_HASH"] = digest
+        self.env[f"STUB_{name.upper()}_ATTESTATION"] = str(self.tmp / f"{name}-attestation.json")
+        if name == "source":
+            self.env["STUB_SOURCE_APP"] = str(self.tmp / "source-app.json")
+            (self.work / "cvm-before.json").write_text(json.dumps({
+                "os": {"name": "dstack-0.6.1"}, "app_id": "app-1", "compose_hash": digest,
+                "gateway": {"base_domain": "example.net"}}))
+
+    def assert_no_mutation(self):
+        self.assertFalse((self.tmp / "compose-committed").exists())
+        self.assertFalse(any(call[0] in ("maintenance", "health", "api", "deploy") for call in self.calls()))
+        self.assertFalse((self.tmp / "output").exists())
+
+    def test_export_to_service_skips_maintenance_and_verifies_both_composes(self):
+        self.prepare_rollback()
+        result = self.run_step("Pause new mutations before upgrading")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((self.tmp / "output").exists())  # Neither resume condition is enabled.
+        self.assertIn("Routes remain paused", (self.tmp / "summary").read_text())
+        for step in ("Deploy (${{ inputs.mode }}) and wait for the CVM",
+                     "Read back and verify the attested compose", "Wait for the service"):
+            result = self.run_step(step)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = self.calls()
+        self.assertFalse(any(call[0] == "maintenance" for call in calls))
+        self.assertEqual([call for call in calls if call[0] == "verify-quote"],
+                         [["verify-quote", "source"], ["verify-quote", "target"]])
+        self.assertTrue(any(call[0:2] == ["api", "/cvms/cvm-1/compose_file/provision"] for call in calls))
+        self.assertEqual(len([call for call in calls if call[0] == "health"]), 2)
+        self.assertEqual(json.loads((self.work / "cvm.json").read_text())["compose_hash"],
+                         self.env["STUB_TARGET_HASH"])
+        self.assertIn("service policy passed", (self.work / "verification.txt").read_text())
+        ingress = self.kit / "deploy/verify-ingress-evidence.sh"
+        ingress.write_text('''#!/usr/bin/env bash
+jq -nc '["ingress"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
+echo 'certificate evidence verified'
+''')
+        ingress.chmod(0o755)
+        result = self.run_step("Verify the certificate evidence")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.calls()[-1], ["ingress", "example.invalid", "app-1"])
+        # TLS acceptance and both maintenance-clear steps keep their normal conditions.
+        workflow = (ROOT / ".github/workflows/deploy.yml").read_text()
+        for step in ("Resume mutations after health checks", "Clear maintenance after a failed upgrade"):
+            block = workflow.split(f"      - name: {step}\n", 1)[1].split("        env:", 1)[0]
+            self.assertIn("steps.maintenance.outputs.enabled == 'true'", block)
+
+    def test_rollback_rejects_an_unexpected_target_compose_after_deployment(self):
+        self.prepare_rollback()
+        self.write_attestation("target", self.tmp / "source.yml")
+        for step in ("Pause new mutations before upgrading", "Deploy (${{ inputs.mode }}) and wait for the CVM"):
+            result = self.run_step(step)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        result = self.run_step("Read back and verify the attested compose")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("attested docker_compose_file differs", result.stdout)
+        self.assertFalse((self.tmp / "output").exists())
+        self.assertFalse(any(call[0] == "maintenance" for call in self.calls()))
+
+    def test_other_upgrades_still_require_a_successful_pause(self):
+        for mode, variant in (("upgrade", "service"), ("upgrade", "export"),
+                              ("commit", "service"), ("commit", "migration-import")):
+            with self.subTest(mode=mode, variant=variant):
+                (self.tmp / "cli.jsonl").unlink(missing_ok=True)
+                self.env.update(MODE=mode, VARIANT=variant, STUB_PAUSE_STATUS="42")
+                # Migration plans for export/import never select the service rollback path.
+                self.env["MIGRATION_PLAN"] = "" if variant == "service" else "migration.json"
+                result = self.run_step("Pause new mutations before upgrading")
+                self.assertEqual(result.returncode, 42, result.stdout + result.stderr)
+                self.assertEqual([call[0] for call in self.calls()], ["maintenance"])
+                self.assertFalse((self.tmp / "output").exists())
+
+    def test_service_source_cannot_claim_to_be_the_reviewed_export(self):
+        self.prepare_rollback()
+        self.write_attestation("source", self.tmp / "target.yml")
+        result = self.run_step("Pause new mutations before upgrading")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("attested docker_compose_file differs", result.stdout)
+        self.assert_no_mutation()
+
+    def test_export_render_mismatch_fails_before_mutation(self):
+        self.prepare_rollback()
+        plan = json.loads((self.tmp / "export.json").read_text())
+        plan["migration_export"]["object"] = "s3://migration-test/different-run"
+        (self.tmp / "export.json").write_text(json.dumps(plan))
+        result = self.run_step("Pause new mutations before upgrading")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("attested docker_compose_file differs", result.stdout)
+        self.assert_no_mutation()
+
+    def test_unverified_source_quote_identity_or_os_fails_before_mutation(self):
+        self.prepare_rollback()
+        verified_path = self.tmp / "source.json"
+        original = verified_path.read_text()
+        for field, value in (("is_valid", False), ("tcb_status", "OutOfDate"),
+                             ("app_id", "wrong-app"), ("os_image_hash", "0" * 64),
+                             ("compose_hash", "0" * 64)):
+            with self.subTest(field=field):
+                verified = json.loads(original)
+                if field == "is_valid":
+                    verified[field] = value
+                elif field == "tcb_status":
+                    verified["details"][field] = value
+                else:
+                    verified["details"]["app_info"][field] = value
+                verified_path.write_text(json.dumps(verified))
+                result = self.run_step("Pause new mutations before upgrading")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("verified attestation does not match", result.stdout)
+                self.assert_no_mutation()
+
+    def test_os_upgrade_and_info_failure_cannot_bypass_maintenance(self):
+        self.prepare_rollback()
+        self.set_current_image("dstack-0.5.12")
+        result = self.run_step("Pause new mutations before upgrading")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Export rollback cannot change the OS", result.stdout)
+        self.assertFalse((self.tmp / "cli.jsonl").exists())
+        self.write_attestation("source", self.tmp / "source.yml")
+        self.env["STUB_INFO_STATUS"] = "42"
+        result = self.run_step("Pause new mutations before upgrading")
+        self.assertEqual(result.returncode, 42, result.stdout + result.stderr)
+        self.assert_no_mutation()
+
+    def test_rollback_input_guards(self):
+        self.env.update(REQUESTED_VARIANT="service", TOPUP_CVM_ID="cvm-1", MODE="upgrade",
+                        MIGRATION_PLAN="migration/export.json")
+        result = self.run_step("Check inputs and Environment settings")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for mode in ("provision", "prepare", "commit"):
+            self.env["MODE"] = mode
+            self.assertNotEqual(self.run_step("Check inputs and Environment settings").returncode, 0)
+        self.env["MODE"] = "upgrade"
+        for plan in ("../export.json", "/export.json", "export.json\n", "$(echo unsafe)"):
+            self.env["MIGRATION_PLAN"] = plan
+            self.assertNotEqual(self.run_step("Check inputs and Environment settings").returncode, 0)
+        self.env.update(TARGET="product", DEPLOY_ENVIRONMENT="staging", MIGRATION_PLAN="export.json")
+        self.assertNotEqual(self.run_step("Check inputs and Environment settings").returncode, 0)
 
 
 if __name__ == "__main__":
