@@ -523,6 +523,15 @@ jobs:
           mapfile -t scripts < <(git grep -lz '^#!.*sh$' -- ':!deploy/phala-cloud-pre-launch.sh' | xargs -0 awk 'FNR == 1 { if (/^#!.*sh$/) print FILENAME; nextfile }')
           tar -cf - .shellcheckrc "${scripts[@]}" |
             docker run --rm -i "$SHELLCHECK_IMAGE" sh -c 'mkdir /src && cd /src && tar -x && shellcheck "$@"' sh "${scripts[@]}"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - name: Test Base KMS deployment support
+        run: |
+          npm ci --prefix deploy/tools --ignore-scripts --no-audit --no-fund
+          node --test deploy/tests/onchain-kms.mjs
+          PYTHONDONTWRITEBYTECODE=1 python3 deploy/tests/test_onchain_policy.py
+          PYTHONDONTWRITEBYTECODE=1 python3 deploy/tests/test_base_baseline.py
       - name: Validate deployment scripts
         run: |
           deploy/tests/walg-restore.sh

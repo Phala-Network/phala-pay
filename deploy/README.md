@@ -29,16 +29,36 @@ from the public endpoints, the admin API, Sentry, and the chain.
 
 ### KMS
 
-Every CVM uses Phala Cloud's KMS (`--kms phala`, owner decision): no `DstackApp` contract and no
-on-chain compose-hash approval. Fund safety does not depend on upgrade governance: the service
-holds no key that moves funds and sends no transactions, and a forwarder pays only the treasury
-its address commits to. Credits are what the attested service signs with each account's webhook
-key, and merchants pin their keys from attestation and may cap or verify credits on their own
-node. A malicious upgrade could cause downtime, read service data, or sign false credits within
-what each merchant's own limits accept; the compose hash in the attestation, verified after every
-deploy, makes it detectable.
+The environment directory's `kms` selects `phala` (the existing default) or `base`. The committed
+production, staging and reference-product directories still select `phala`; this release does
+not migrate them. Existing operator repositories without that file keep the Phala workflow.
+
+`phala` uses Phala Cloud's KMS, with no DstackApp or onchain compose approval. `base` releases
+keys only for compose hashes and hardware devices allowed by a Safe-owned DstackApp on Base
+(8453). Commit its address in `dstack-app`, its expected owner in `dstack-owner`, and a full reviewed
+`app-compose.json` baseline (or `provision.json`'s `compose_file`). Every non-render field and exact
+key set must match that baseline before approval and in attestation; `init_script` must be absent
+or `[]`. Production's
+owner is the treasury Safe; staging uses a separate reviewed Safe. Product and template keep
+Phala KMS. Both modes still require attestation verification.
+
+The reviewed KmsAuth and both implementation pins live in `onchain-kms.json`. Key release also
+trusts Phala's KmsAuth governance (OS images, KMS builds and upgrades). The daily Verify contracts
+workflow monitors that real Base contract even before cutover, plus configured Base apps.
+A stolen Cloud API key can still stop/delete a CVM, change sealed values, replay an approved
+compose, or create another instance on an allowed device. Remove approvals older than N-1;
+backup storage still requires a single writer.
+
+An app migration changes all derived keys: webhook, client-secret, database and backup keys.
+Existing backups remain tied to the old app. Use a signed, encrypted logical migration and a
+fresh backup prefix; see [migration preparation](runbooks/onchain-kms-migration.md).
 
 ### OS image
+
+For Base KMS, prepare OS changes separately with the documented token flow; never use an
+unprepared reboot during compose commit. KmsAuth must allow the OS image. OS fields/measurements
+must be reviewed along with any changed compose hash and the committed `os-image-hash`.
+Deploy refuses an implicit Base OS change; see the [upgrade runbook](runbooks/onchain-kms-upgrade.md).
 
 The approved OS image is `dstack-0.6.1`, non-dev, with verified image hash
 `ec43cb8c5e04b6bb6c53b33b16076a01d83d01f7f4b703f2f78a0d947d6247e6`.
@@ -217,6 +237,13 @@ immediately.
 
 ### Deploy
 
+For `kms: base`, dispatch `prepare`, review and execute the Base Safe batches, then dispatch
+`commit` with `transaction_hash`. Prepare renders and preflights without pausing service. Commit
+re-prepares from the same reviewed inputs, checks owner/hash/device and both proxy pins before
+pausing, then commits, waits, verifies attestation and resumes. Rollback uses a retained N-1
+release/configuration and `already-registered`. See the [upgrade runbook](runbooks/onchain-kms-upgrade.md)
+for initial provisioning through the same workflow, private token handling and device approvals.
+
 [Deploy](../.github/workflows/deploy.yml) is the source of truth for what a deployment checks and
 does. It is a reusable workflow, which a repository calls at a release, with the same `version`:
 
@@ -378,6 +405,11 @@ drill ([RESTORE.md](RESTORE.md)); then [onboard](#operator-onboarding) accounts 
 `charges_enabled` (Phala's instance adds its own [onboarding policy](phala.md#onboarding-policy)).
 
 ### Sealing the secrets
+
+With Base KMS, sealed values can change without a Safe approval when the allowed names stay
+the same. Changing the allowed name set changes the app-compose hash and needs approval first.
+Never put values in `provision.json`, batch artifacts, GitHub inputs or logs. Initial provision
+sends names only; the owner seals values after receipt/attestation verification.
 
 The CVM's encrypted env holds the rendered compose's sealed names, its `${NAME:-}` references.
 On initial deployment, the Phala Cloud CLI makes the env file's names the CVM's `allowed_envs`.
@@ -572,6 +604,11 @@ check is required before the existing audited admin lift. Other chains and `/hea
 See [configuration](../docs/configuration.md#the-configuration-file) and [the RPC runbook](RPC.md).
 
 ### Custom domain
+
+A new Base app has a new app id and instance id. Review its pinned node gateway before preparing
+its first compose. Keep that gateway fixed across prepare/sign/commit, then point the custom
+CNAME and `_dstack-app-address` TXT record at the verified new instance. Recheck ingress evidence
+and any CAA account restriction after the new certificate is issued.
 
 The API has one public origin, `public_origin` (`https://$DOMAIN`, where `$DOMAIN` is
 dstack-ingress's `DOMAIN` in the environment overlay), a stable name the owner controls, not
@@ -817,6 +854,13 @@ above one triggers its capacity alert and affected-chain quote pause. See the
 [confirmation budget and retry caveat](RPC.md#worst-case-pilot-budget).
 
 ## Attestation, ingress, and egress
+
+For Base KMS, pass the reviewed environment directory as the seventh argument to
+`verify-attestation.sh`. It binds the replayed app id to `dstack-app`, requires `kms_enabled` and
+`key_provider: kms`, and compares the app-compose pin and replayed key-provider event with
+`KmsAuth.kmsInfo().caPubkey`. The KmsAuth implementation must match `onchain-kms.json` before
+that read. `verify-onchain-app.sh APP SAFE HASH DEVICE` independently checks the owner, compose,
+device, `allowAnyDevice=false`, and both reviewed proxy implementation slots.
 
 **HUMAN-ONLY, verifier**, before onboarding any account. Deploy already verifies the attested
 compose; to re-check a CVM with the deployed release's verified kit in `kit/`, the run's rendered

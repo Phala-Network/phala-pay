@@ -1,5 +1,14 @@
 # Backup and restore
 
+For a Base KMS app, approve the **restore-check** compose hash and allow its device before
+creating the drill instance. Render once with the known `RESTORE_URL` (`https://<app>-8081.<gateway>`),
+fixed by app and node, so provisioning does not require a second hash. Use the committed
+`dstack-app` and `dstack-owner`, then run both onchain and attestation verification with that
+environment directory. A replacement app cannot decrypt the old app's physical backups. Keep
+the old app and prefix for old restores; a logical migration starts a fresh prefix. See the
+[Base upgrade runbook](runbooks/onchain-kms-upgrade.md) and
+[device drift runbook](runbooks/device-drift.md).
+
 Trigger: PostgreSQL loss or corruption, a failed database volume, or a restore drill. Targets: RPO
 at most one minute, RTO at most one hour (architecture §14). While the database is unavailable
 the API and processing stop for every route.

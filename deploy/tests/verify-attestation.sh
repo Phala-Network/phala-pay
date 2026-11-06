@@ -53,6 +53,11 @@ refused() {
 }
 result "$hash"
 verify
+# Older operator repositories have no kms file. The optional environment argument must
+# preserve their Phala KMS behavior when the new reusable workflow passes it.
+mkdir "$tmp/legacy-environment"
+"$tmp/kit/deploy/verify-attestation.sh" "$tmp/attestation.json" "$tmp/info.json" app \
+    "$tmp/expected.yml" service "$hash" "$tmp/legacy-environment" >"$tmp/out" 2>"$tmp/err"
 result "$(printf '0%.0s' {1..64})"
 refused 'a different verified OS hash, even with the approved hash in guest info'
 result "$hash"

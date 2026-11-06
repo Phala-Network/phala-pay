@@ -14,6 +14,13 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Added
+
+- Optional Base onchain KMS deployment: Safe prepare/sign/commit batches, owner/device/compose
+  and proxy verification, provider-bound attestation, keyless governance monitoring and operator
+  runbooks. Existing Phala KMS deployments and reference-product/template behavior are unchanged;
+  production and staging have not switched. Migration to a new app requires new keys and backups.
+
 ## [0.13.6] - 2026-11-03
 
 ### Added

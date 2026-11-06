@@ -1768,6 +1768,11 @@ browser.
 
 ### 5.3 Pin your account's webhook keys
 
+A migration to another app or KMS changes these keys even when the service URL stays the same.
+Verify the new app id, compose hash, OS and KMS provider before replacing `PHALA_PAY_PINS`, then
+restart receivers that load pins at startup. Account/mode keys remain scoped as below. Keep the
+old pins available only for an explicitly coordinated rollback to the old app.
+
 The service signs your webhooks with your account's own ed25519 key for each mode (design D11),
 derived inside its confidential VM at `settlement/{acct}/{live|test}/v{n}`; no other account's
 events are signed with it. You hold only its public key, so nothing you store can forge a credit,
@@ -2041,6 +2046,12 @@ You manage your receivers with your secret key, per mode, as Stripe's
   events it missed (`created[gte]`) and resend each; your receiver deduplicates by `webhook-id`.
 
 ### 5.12 After a service restore
+
+An operator's KMS migration is a logical move to a new app, with new webhook keys (§5.3), backup
+keys and client-secret keys. Existing quote client secrets stop working; fetch a fresh fixed
+address secret when opening a deposit page. CREATE2 deposit addresses remain unchanged. Follow
+the operator's coordinated pause and pin switch; do not infer credit from an address payment
+without a verified delivery. Restoring the same app's physical backup retains its derived keys.
 
 If the service's database is lost it is restored from backup, which loses at most the last minute
 before the loss (the **restore point**). The service then starts frozen: every request with an API
