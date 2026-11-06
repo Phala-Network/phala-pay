@@ -13,7 +13,8 @@ load_environment() {
     [[ $(cat "$env_dir/kms") == base ]] || fail "onchain command requires kms base"
     safe=$(cat "$env_dir/dstack-owner")
     [[ "$safe" =~ ^0x[0-9a-fA-F]{40}$ ]] || fail "dstack-owner must be an expected Base Safe address"
-    app=$(cat "$env_dir/dstack-app")
+    app=""
+    [[ ! -f "$env_dir/dstack-app" ]] || app=$(cat "$env_dir/dstack-app")
 }
 check_response() {
     kms check-hash "$request" "$output" >/dev/null
