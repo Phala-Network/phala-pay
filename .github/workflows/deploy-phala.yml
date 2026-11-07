@@ -45,16 +45,22 @@ on:
         description: "Pinned node gateway host for an initial Base provision"
         type: string
         default: ""
+      source_info_artifact:
+        description: "Export run's deployment artifact ID (rollback from export only)"
+        type: string
+        default: ""
 
 permissions:
   contents: read
   attestations: read
+  # The release's Deploy reads a prior run's artifact for rollback from export.
+  actions: read
 
 jobs:
   deploy:
-    uses: Phala-Network/phala-pay/.github/workflows/deploy.yml@df9d14383a8a41f4b5ebad41bbe550fedafe8697 # v0.13.7
+    uses: Phala-Network/phala-pay/.github/workflows/deploy.yml@86381665fe9e295ed376bb328593fd928f85d2c6 # v0.13.8
     with:
-      version: v0.13.7
+      version: v0.13.8
       environment: ${{ inputs.environment }}
       target: ${{ inputs.target }}
       mode: ${{ inputs.mode }}
@@ -62,6 +68,7 @@ jobs:
       migration_plan: ${{ inputs.migration_plan }}
       transaction_hash: ${{ inputs.transaction_hash }}
       gateway_domain: ${{ inputs.gateway_domain }}
+      source_info_artifact: ${{ inputs.source_info_artifact }}
       environment_dir: ${{ inputs.environment_dir || format('deploy/environments/phala-network/{0}/{1}', inputs.environment, inputs.target) }}
     # The called job's Environment secret (PHALA_CLOUD_API_KEY) resolves only when the caller
     # inherits secrets (actions/runner#4453); this repository holds no other secret.
