@@ -14,6 +14,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+## [0.13.8] - 2026-11-07
+
 ### Fixed
 
 - Serve cached public dstack guest Info through `/v1/attestation/info` in the service,
@@ -2691,7 +2693,8 @@ happens only from two-provider finalized data.
   events were held for up to an hour at a time. A notice's outcome now neither cools nor clears
   the endpoint.
 
-[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.13.7...HEAD
+[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.13.8...HEAD
+[0.13.8]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.8
 [0.13.7]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.7
 [0.13.6]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.6
 [0.13.5]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.5
