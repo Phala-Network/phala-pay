@@ -18,7 +18,7 @@ a secret are marked **HUMAN-ONLY**. Backup and restore: [RESTORE.md](RESTORE.md)
 | Where | What | Deployed by |
 |---|---|---|
 | topup CVM, one per Environment (`staging`, `production`) | [compose.yaml](compose.yaml) with its environment directory ([Attested settings](#attested-settings)). The service variant ([compose.service.yaml](compose.service.yaml)) runs `keys` (derives the database passwords and the backup key), `postgres` (PostgreSQL 18 + WAL-G), `migrate`, `topup`, `smokescreen` (the [webhook egress](#webhook-egress) proxy), `dstack-ingress` (the only public port, 443: TLS for the [custom domain](#custom-domain)), `heartbeat`, and `backup`; the [restore-check variant](RESTORE.md#the-restore-check-variant) ([compose.restore-check.yaml](compose.restore-check.yaml)) runs `keys`, `postgres`, `migrate`, a read-only `topup` published on 8081, and `restore-check` | Deploy, target `topup` |
-| Staging reference-product CVM (optional; Phala's demo, [phala.md](phala.md#staging-reference-product)) | [product/compose.yaml](product/compose.yaml) with its environment directory: `product` (on 8089, private) and `dstack-ingress` (the only public port, 443: TLS for its [custom domain](#custom-domain)) | Deploy, target `product` |
+| Staging reference-product CVM (optional; Phala's demo, [phala.md](phala.md#staging-reference-product)) | [product/compose.yaml](product/compose.yaml) with its environment directory: `product` (on 8089, private), `guest-info` (Info-only, on an internal network), and `dstack-ingress` (the only public port, 443: TLS for its [custom domain](#custom-domain)) | Deploy, target `product` |
 | Object storage (S3-compatible; Phala's instance: Cloudflare R2) | encrypted WAL-G base backups and WAL under `WALG_S3_PREFIX` | owner |
 | The operator's Sentry project (optional; Phala's: `phala-network/crypto-topup-service`) | errors, alerts and Crons monitors; Phala's pilot uses manual external health checks | the service itself |
 | EVM chains of the routes (the committed routes: Sepolia and Base Sepolia) | the permissionless forwarder factory, at one deterministic address on every chain; forwarders; each account's own treasury | factory: any deployer ([CONTRACTS.md](CONTRACTS.md)); treasuries: each merchant, through the API |
@@ -873,7 +873,11 @@ or private keys. Calls share a process cache (60 seconds; failures five seconds)
 API's existing global and peer admission limits. Anonymous successes have
 `Cache-Control: public, max-age=60`; failures and credential-bearing requests use `no-store`.
 Restore-check serves the same route on its published 8081 port; the reference product serves
-it through its own ingress using the local guest socket. This replaces the disabled public
+it through its own ingress by calling a private `guest-info` service. This service reuses the
+pinned topup image (`topup guest-info serve`), holds the socket and answers only `GET /Info`.
+It has no credentials or published ports, drops all capabilities, uses a read-only filesystem,
+and shares an internal network only with the product. The product never mounts the socket;
+a read-only socket bind would still permit every guest RPC. This replaces the disabled public
 guest-agent gateway port. **Info is untrusted transport**, never an identity/pin source: the
 pinned dstack verifier binds `vm_config` and measurements to the quote and fails closed on a
 wrong configuration. Ignore its claimed ids/OS hash when choosing expected values.
@@ -887,9 +891,14 @@ record); Deploy downloads it from the caller repository with `actions: read`, ch
 identity, then verifies against the current export quote before changing anything. Forward the
 new optional input when adopting this release's workflow. Never substitute another CVM's Info.
 
-Unsealed provision (including initial Base commit) records **acceptance pending**: there is no
-service endpoint before sealing and DNS. Seal, configure DNS, then run `upgrade` for verified
-acceptance. During migration-import, the import job publishes `import-info.json` beside
+Before sealing, unsealed provision (including initial Base commit) verifies the hardware quote,
+TCB, RTMR3 event-log replay and reviewed app/compose identity, plus the measured OS claim when
+present. It runs the pinned verifier's TDX quote/event-log stage without `vm_config` and labels
+this **partial: quote + event log + compose/app, OS/vm_config not verified**. The full compose,
+port/env and KMS-provider policies still apply. A failed partial check blocks the sealing step.
+This records **acceptance pending**: no service endpoint exists before sealing and DNS.
+Seal, configure DNS, then run `upgrade` for full OS/vm_config verification and acceptance.
+Partial verification is confined to this pre-seal branch and can never satisfy acceptance. During migration-import, the import job publishes `import-info.json` beside
 `recipient.json` in its migration prefix before the API can start; use it with the Cloud quote
 for T-1 verification. Export also publishes `export-info.json`. These files have the same
 untrusted-transport rule. For a legacy CVM needing a pre-upgrade read outside Deploy, an operator

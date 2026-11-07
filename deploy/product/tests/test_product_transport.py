@@ -567,16 +567,18 @@ def test_guest_info_cache_and_public_fields() -> None:
         "env": {"SECRET": "hidden"},
         "private_key": "hidden",
     }
-    response = httpx.Response(200, json=value, request=httpx.Request("POST", "http://dstack/Info"))
-    with patch("httpx.Client.post", return_value=response) as post:
+    response = httpx.Response(
+        200, json=value, request=httpx.Request("GET", "http://guest-info:8082/Info")
+    )
+    with patch("httpx.Client.get", return_value=response) as post:
         info = GuestInfo()
         for _ in range(2):
             assert info.get() == {"app_id": "app", "vm_config": "{}", "tcb_info": "{}"}
-        post.assert_called_once_with("http://dstack/Info", json={})
+        post.assert_called_once_with("http://guest-info:8082/Info")
 
 
 def test_guest_info_failures_are_cached() -> None:
-    with patch("httpx.Client.post", side_effect=httpx.ConnectError("private details")) as post:
+    with patch("httpx.Client.get", side_effect=httpx.ConnectError("private details")) as post:
         info = GuestInfo()
         assert info.get() is None
         assert info.get() is None

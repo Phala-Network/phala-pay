@@ -298,6 +298,8 @@ set -euo pipefail
 request=$(cat)
 jq -c '["verify-quote", .quote]' <<<"$request" >>"$STUB_LOG"
 quote=$(jq -er .quote <<<"$request")
+if [[ "${1:-}" == --partial ]]; then echo '["partial-mode"]' >>"$STUB_LOG"
+else echo '["full-mode"]' >>"$STUB_LOG"; fi
 cat "$STUB_RESULTS/$quote.json"
 ''')
         verifier.chmod(0o755)
@@ -332,11 +334,14 @@ cat "$STUB_RESULTS/$quote.json"
         app_text = json.dumps(app)
         digest = hashlib.sha256(app_text.encode()).hexdigest()
         (self.tmp / f"{name}-app.json").write_text(app_text)
+        os_hash = (Path(self.env["ENVIRONMENT_DIR"]) / "os-image-hash").read_text().strip()
         attestation = {"compose_file": app_text, "app_certificates": [{"position_in_chain": 0, "quote": name}],
-                       "tcb_info": {"event_log": [{"event": "compose-hash", "event_payload": digest}]}}
+                       "tcb_info": {"event_log": [{"imr":3,"event": "compose-hash", "event_payload": digest},
+                                                   {"imr":3,"event":"app-id","event_payload":"app-1"},
+                                                   {"imr":3,"event":"os-image-hash","event_payload":os_hash}]}}
         (self.tmp / f"{name}-attestation.json").write_text(json.dumps(attestation))
         os_hash = (Path(self.env["ENVIRONMENT_DIR"]) / "os-image-hash").read_text().strip()
-        verified = {"is_valid": True, "details": {"tcb_status": "UpToDate", "app_info": {
+        verified = {"is_valid": True, "details": {"quote_verified": True, "tee_variant":"dstack-tdx", "tcb_status": "UpToDate", "app_info": {
             "app_id": "app-1", "compose_hash": digest, "os_image_hash": os_hash}}}
         (self.tmp / f"{name}.json").write_text(json.dumps(verified))
         self.env[f"STUB_{name.upper()}_HASH"] = digest
@@ -412,15 +417,37 @@ echo 'certificate evidence verified'
         self.assertEqual(result.returncode, 42, result.stdout + result.stderr)
         self.assert_no_mutation()
 
-    def test_unsealed_provision_records_pending_acceptance(self):
+    def test_unsealed_provision_partially_verifies_before_sealing(self):
         self.prepare_rollback()
-        self.env.update(MODE="provision", STUB_INFO_STATUS="42")
-        (self.work / "cvm.json").write_text(json.dumps({"compose_hash": self.env["STUB_SOURCE_HASH"]}))
+        self.env.update(MODE="provision", STUB_INFO_STATUS="42",
+                        STUB_SOURCE_ATTESTATION=self.env["STUB_TARGET_ATTESTATION"])
+        partial = json.loads((self.tmp / "target.json").read_text())
+        partial["is_valid"] = False
+        partial["details"]["app_info"] = None
+        (self.tmp / "target.json").write_text(json.dumps(partial))
+        (self.work / "cvm.json").write_text(json.dumps({"compose_hash": self.env["STUB_TARGET_HASH"]}))
         result = self.run_step("Read back and verify the attested compose")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue((self.work / "acceptance-pending.txt").exists())
         self.assertFalse((self.work / "verification.txt").exists())
-        self.assertFalse(any(call[0] in ("verify-quote", "info") for call in self.calls()))
+        self.assertIn("partial: quote + event log + compose/app, OS/vm_config not verified",
+                      (self.work / "partial-verification.txt").read_text())
+        self.assertIn(["partial-mode"], self.calls())
+        self.assertFalse(any(call[0] == "info" for call in self.calls()))
+
+    def test_partial_only_result_cannot_pass_upgrade_acceptance(self):
+        self.prepare_rollback()
+        self.env["STUB_SOURCE_ATTESTATION"] = self.env["STUB_TARGET_ATTESTATION"]
+        (self.work / "cvm.json").write_text(json.dumps({"compose_hash": self.env["STUB_TARGET_HASH"]}))
+        partial = json.loads((self.tmp / "target.json").read_text())
+        partial["is_valid"] = False
+        partial["details"]["app_info"] = None
+        (self.tmp / "target.json").write_text(json.dumps(partial))
+        result = self.run_step("Read back and verify the attested compose")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(["full-mode"], self.calls())
+        self.assertNotIn(["partial-mode"], self.calls())
+        self.assertFalse((self.work / "acceptance-pending.txt").exists())
 
     def test_rollback_downloads_info_and_checks_cvm_identity(self):
         import zipfile

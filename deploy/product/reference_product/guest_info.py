@@ -1,4 +1,4 @@
-"""Public v0 guest Info over the local socket; transport is never an attestation verdict."""
+"""Public guest Info through the private Info-only service, never an attestation verdict."""
 
 import threading
 import time
@@ -39,9 +39,8 @@ class GuestInfo:
             if time.monotonic() < self._until:
                 return self._value
             try:
-                transport = httpx.HTTPTransport(uds="/var/run/dstack.sock")
-                with httpx.Client(transport=transport, timeout=10) as client:
-                    response = client.post("http://dstack/Info", json={})
+                with httpx.Client(timeout=15, trust_env=False) as client:
+                    response = client.get("http://guest-info:8082/Info")
                     response.raise_for_status()
                     value = response.json()
                 if not isinstance(value, dict) or not isinstance(value.get("vm_config"), str):

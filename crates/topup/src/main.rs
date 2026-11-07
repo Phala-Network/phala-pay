@@ -1,5 +1,6 @@
 //! Command-line entry point for the Phala Pay service.
 
+mod guest_info;
 mod route;
 
 use std::collections::HashMap;
@@ -73,7 +74,10 @@ enum TopupCommand {
     /// `GET /v1/attestation` returns it to that account.
     Attest(AttestArgs),
     /// Print public guest Info from the local dstack socket (no database or secrets required).
-    GuestInfo,
+    GuestInfo {
+        #[command(subcommand)]
+        command: Option<GuestInfoCommand>,
+    },
     /// Derive the backup key and database credentials from dstack into a shared tmpfs.
     Keys(KeysArgs),
     Heartbeat(HeartbeatArgs),
@@ -89,6 +93,15 @@ enum TopupCommand {
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum GuestInfoCommand {
+    /// Serve only GET /Info on a private network; no other guest RPC can be forwarded.
+    Serve {
+        #[arg(long, default_value = "0.0.0.0:8082")]
+        bind: std::net::SocketAddr,
     },
 }
 
@@ -441,7 +454,10 @@ async fn main() -> ExitCode {
         } => return show_route(&file, template),
         TopupCommand::Reconcile(args) => reconcile(&args).await,
         TopupCommand::Rpc { command } => rpc_command(command).await,
-        TopupCommand::GuestInfo => {
+        TopupCommand::GuestInfo {
+            command: Some(GuestInfoCommand::Serve { bind }),
+        } => guest_info::serve(bind).await,
+        TopupCommand::GuestInfo { command: None } => {
             async {
                 println!(
                     "{}",

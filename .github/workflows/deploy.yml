@@ -184,7 +184,7 @@ jobs:
                 { echo "::error::the reference product deploys to staging only"; status=1; }
               preflight=$kit/deploy/product/preflight.sh variant=product cvm_id_variable=STAGING_PRODUCT_CVM_ID
               cvm_name=phala-pay-staging-product instance_type=tdx.small
-              images=phala-pay-reference-product compose_name=docker-compose.product.yml ;;
+              images="phala-pay-reference-product phala-pay" compose_name=docker-compose.product.yml ;;
             *) echo "::error::unknown target $TARGET"; exit 1 ;;
           esac
           existing=${!cvm_id_variable}
@@ -677,6 +677,9 @@ jobs:
           deployed=$(jq -er '.compose_hash | ascii_downcase | ltrimstr("0x")' "$WORK/cvm.json")
           "$KIT/deploy/phala-cvm.sh" attestation "$CVM_ID" "$deployed" >"$WORK/attestation.json"
           if [[ "$MODE" == provision || "${INITIAL_BASE:-false}" == true ]]; then
+            "$KIT/deploy/verify-attestation.sh" --partial "$WORK/attestation.json" - "$APP_ID" \
+              "$COMPOSE" "$VARIANT" "$(cat "$ENVIRONMENT_DIR/os-image-hash")" "$ENVIRONMENT_DIR" \
+              2>&1 | tee "$WORK/partial-verification.txt" >>"$GITHUB_STEP_SUMMARY"
             echo "Acceptance pending: seal the CVM, configure DNS, then run upgrade readback. Migration-import: verify import-info.json and recipient evidence from the migration prefix before export." | tee "$WORK/acceptance-pending.txt" >>"$GITHUB_STEP_SUMMARY"
             exit 0
           fi
@@ -811,7 +814,7 @@ jobs:
             echo
             echo "**Acceptance:** once sealed and the DNS records resolve, dispatch Deploy with mode"
             echo "\`upgrade\`. It requires the CVM running, \`/healthz\`, the attested compose, and the"
-            echo "certificate evidence; until it passes, nothing about this CVM is verified."
+            echo "certificate evidence; full OS/vm_config verification and service acceptance remain pending until it passes."
           } >>"$GITHUB_STEP_SUMMARY"
 
       - name: Clear maintenance after a failed upgrade
@@ -854,6 +857,7 @@ jobs:
             ${{ runner.temp }}/deploy/attestation.json
             ${{ runner.temp }}/deploy/info.json
             ${{ runner.temp }}/deploy/acceptance-pending.txt
+            ${{ runner.temp }}/deploy/partial-verification.txt
             ${{ runner.temp }}/deploy/pre-export-attestation.json
             ${{ runner.temp }}/deploy/pre-export-verification.txt
             ${{ runner.temp }}/deploy/source-artifact.json

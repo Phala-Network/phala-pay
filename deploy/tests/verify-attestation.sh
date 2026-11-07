@@ -71,6 +71,10 @@ jq 'del(.details.app_info.os_image_hash)' "$VERIFIED_RESULT" >"$tmp/missing.json
 cp "$tmp/missing.json" "$VERIFIED_RESULT"
 refused 'a missing verified OS hash'
 result "$hash"
+jq '.is_valid = false | .details.quote_verified = true | .details.tee_variant = "dstack-tdx" | .details.app_info = null' "$VERIFIED_RESULT" >"$tmp/partial-only.json"
+cp "$tmp/partial-only.json" "$VERIFIED_RESULT"
+refused 'a partial-only verifier result at full acceptance'
+result "$hash"
 jq '.is_valid = false' "$VERIFIED_RESULT" >"$tmp/invalid.json"
 cp "$tmp/invalid.json" "$VERIFIED_RESULT"
 refused 'an invalid verifier result'

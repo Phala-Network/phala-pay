@@ -600,6 +600,9 @@ jobs:
           TOPUP="$PWD/target/debug/topup" deploy/tests/check-route-modes.sh
           TOPUP="$PWD/target/debug/topup" deploy/tests/kit.sh
           TOPUP="$PWD/target/debug/topup" deploy/tests/deploy.sh
+      - name: Verify real guest Info and reject tampered evidence
+        timeout-minutes: 20
+        run: TOPUP="$PWD/target/debug/topup" deploy/tests/guest-info-real.sh
       - name: Check runbook commands against the CLI and OpenAPI
         run: make runbook-check
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1

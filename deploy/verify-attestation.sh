@@ -23,8 +23,10 @@ set -eu
 # vm_config fails closed. No field in Info is used as a verified identity or OS pin. The app-compose's binding to
 # EXPECTED_COMPOSE and the pre-launch script is deploy/attested-compose.sh's, which deploy.sh uses
 # too.
+partial=false
+if [ "${1:-}" = --partial ]; then partial=true; shift; fi
 if [ "$#" -ne 6 ] && [ "$#" -ne 7 ]; then
-    echo "usage: verify-attestation.sh ATTESTATION_JSON INFO_JSON APP_ID EXPECTED_COMPOSE service|restore-check|template|product EXPECTED_OS_IMAGE_HASH [ENVIRONMENT_DIR]" >&2
+    echo "usage: verify-attestation.sh [--partial] ATTESTATION_JSON INFO_JSON|- APP_ID EXPECTED_COMPOSE service|restore-check|template|product|export|migration-import EXPECTED_OS_IMAGE_HASH [ENVIRONMENT_DIR]" >&2
     exit 64
 fi
 case "$5" in
@@ -65,17 +67,25 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-jq -e --slurpfile info "$info" '{
-    attestation: null,
-    quote: [.app_certificates[] | select(.position_in_chain == 0) | .quote][0],
-    event_log: (.tcb_info.event_log | tojson),
-    vm_config: $info[0].vm_config
-} | select((.quote | type) == "string" and (.vm_config | type) == "string" and .vm_config != "")' \
-    "$attestation" >"$tmp/request.json" || {
-    echo "the attestation has no app certificate quote, or the guest agent info no vm_config" >&2
-    exit 1
-}
-"$root/deploy/dstack-verifier.sh" <"$tmp/request.json" >"$tmp/result.json"
+if [ "$partial" = true ]; then
+    [ "$info" = - ] || { echo "partial verification takes '-' instead of Info" >&2; exit 64; }
+    jq -e '{attestation:null, quote:[.app_certificates[] | select(.position_in_chain == 0) | .quote][0],
+        event_log:(.tcb_info.event_log | tojson)} | select((.quote | type) == "string")' \
+        "$attestation" >"$tmp/request.json"
+    "$root/deploy/dstack-verifier.sh" --partial <"$tmp/request.json" >"$tmp/result.json"
+else
+    jq -e --slurpfile info "$info" '{
+        attestation: null,
+        quote: [.app_certificates[] | select(.position_in_chain == 0) | .quote][0],
+        event_log: (.tcb_info.event_log | tojson),
+        vm_config: $info[0].vm_config
+    } | select((.quote | type) == "string" and (.vm_config | type) == "string" and .vm_config != "")' \
+        "$attestation" >"$tmp/request.json" || {
+        echo "the attestation has no app certificate quote, or the guest agent info no vm_config" >&2
+        exit 1
+    }
+    "$root/deploy/dstack-verifier.sh" <"$tmp/request.json" >"$tmp/result.json"
+fi
 
 compose_hash=$("$root/deploy/attested-compose.sh" "$attestation" "$expected_compose" "$tmp")
 if [ "$kms" = base ]; then
@@ -86,21 +96,36 @@ if [ "$kms" = base ]; then
         'include "compose-policy"; base_app_violations(.; $baseline[0])[]' "$tmp/app-compose.json")
     [ -z "$baseline_violations" ] || { printf '%s\n' "$baseline_violations" >&2; exit 1; }
 fi
-jq -e --arg app_id "$app_id" --arg compose_hash "$compose_hash" --arg os_hash "$expected_os_hash" '
-    .is_valid == true
-    and .details.tcb_status == "UpToDate"
-    and .details.app_info.app_id == $app_id
-    and .details.app_info.compose_hash == $compose_hash
-    and .details.app_info.os_image_hash == $os_hash
-' "$tmp/result.json" >/dev/null || {
-    echo "the verified attestation does not match: expected TCB UpToDate, app id $app_id, compose hash $compose_hash, OS image hash $expected_os_hash" >&2
-    jq '.details | {tcb_status, advisory_ids, app_id: .app_info.app_id, compose_hash: .app_info.compose_hash, os_image_hash: .app_info.os_image_hash}' \
-        "$tmp/result.json" >&2
-    exit 1
-}
-jq -r '"dstack verifier: quote and TCB \(.details.tcb_status), RTMR3 event log, OS image \(.details.app_info.os_image_hash)",
-    "attested app id: \(.details.app_info.app_id)",
-    "attested compose hash: 0x\(.details.app_info.compose_hash)"' "$tmp/result.json"
+if [ "$partial" = true ]; then
+    # The pinned verifier's quote_verified covers RTMR3 and event payloads on dstack TDX.
+    # Do not convert partial results into full-verification results or trust unverified Info.
+    jq -e --arg app "$app_id" --arg compose "$compose_hash" --arg os "$expected_os_hash" \
+        --slurpfile att "$attestation" '
+        def payload($name): [$att[0].tcb_info.event_log[] | select(.imr == 3 and .event == $name) | .event_payload];
+        .details.quote_verified == true and .details.tcb_status == "UpToDate"
+        and .details.tee_variant == "dstack-tdx"
+        and payload("app-id") == [$app] and payload("compose-hash") == [$compose]
+        and (payload("os-image-hash") == [] or payload("os-image-hash") == [$os])
+    ' "$tmp/result.json" >/dev/null || {
+        echo "partial verification does not match the reviewed app, compose, or measured OS claim" >&2; exit 1;
+    }
+else
+    jq -e --arg app_id "$app_id" --arg compose_hash "$compose_hash" --arg os_hash "$expected_os_hash" '
+        .is_valid == true
+        and .details.tcb_status == "UpToDate"
+        and .details.app_info.app_id == $app_id
+        and .details.app_info.compose_hash == $compose_hash
+        and .details.app_info.os_image_hash == $os_hash
+    ' "$tmp/result.json" >/dev/null || {
+        echo "the verified attestation does not match: expected TCB UpToDate, app id $app_id, compose hash $compose_hash, OS image hash $expected_os_hash" >&2
+        jq '.details | {tcb_status, advisory_ids, app_id: .app_info.app_id, compose_hash: .app_info.compose_hash, os_image_hash: .app_info.os_image_hash}' \
+            "$tmp/result.json" >&2
+        exit 1
+    }
+    jq -r '"dstack verifier: quote and TCB \(.details.tcb_status), RTMR3 event log, OS image \(.details.app_info.os_image_hash)",
+        "attested app id: \(.details.app_info.app_id)",
+        "attested compose hash: 0x\(.details.app_info.compose_hash)"' "$tmp/result.json"
+fi
 
 # This event log has already been replayed against the quote by the official verifier.
 if [ "$kms" = base ]; then
@@ -118,4 +143,8 @@ if [ -n "$violations" ]; then
     printf '%s\n' "$violations" | sed 's/^/  /' >&2
     exit 1
 fi
-echo "attested compose, allowed_envs, port_policy, and the $variant policy passed"
+if [ "$partial" = true ]; then
+    echo "partial: quote + event log + compose/app, OS/vm_config not verified"
+else
+    echo "attested compose, allowed_envs, port_policy, and the $variant policy passed"
+fi
