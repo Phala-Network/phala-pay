@@ -129,7 +129,7 @@ mkdir -p "$EVIDENCE"
    deploy/phala envs update "$NEW_CVM_ID" -e .env.ENV
    ```
 
-   The import now publishes `recipient.json` and waits; API, migrations and backup stay gated.
+   The import now publishes `import-info.json` and `recipient.json` and waits; API, migrations and backup stay gated.
    Default manifest wait is **172800 seconds (48h)** from import invocation; allow enough margin
    for the window. Do not run ordinary service acceptance against the old origin yet.
 6. **T-1: verify recipient and render export.** Fetch only public metadata using locally loaded
@@ -138,6 +138,12 @@ mkdir -p "$EVIDENCE"
    ```sh
    aws --endpoint-url "$AWS_ENDPOINT" s3 cp \
      "${MIGRATION_OBJECT%/}/recipient.json" "$EVIDENCE/recipient.json"
+   aws --endpoint-url "$AWS_ENDPOINT" s3 cp \
+     "${MIGRATION_OBJECT%/}/import-info.json" "$EVIDENCE/import-info.json"
+   deploy/phala-cvm.sh attestation "$NEW_CVM_ID" "$IMPORT_HASH" >"$EVIDENCE/import-attestation.json"
+   NEW_OS_HASH=$(cat "$NEW_ENV/os-image-hash")
+   deploy/verify-attestation.sh "$EVIDENCE/import-attestation.json" "$EVIDENCE/import-info.json" \
+     "$NEW_APP_ID" "$EVIDENCE/import.yml" migration-import "$NEW_OS_HASH" "$NEW_ENV"
    verify_key_evidence import "$EVIDENCE/recipient.json" "$NEW_APP_ID" \
      "$IMPORT_HASH" "$(cat "$NEW_ENV/os-image-hash")"
    jq -n --arg recipient "$(jq -er .public_key "$EVIDENCE/recipient.json")" \
@@ -286,7 +292,9 @@ keep both apps' routes paused. Restore the **old Phala KMS CVM** through the
 2. Revert TXT to the old verified instance id and CNAME to `OLD_GATEWAY` before the workflow's
    service health/TLS checks. The old exporter has no ingress until service is restored.
 3. Dispatch Deploy with `mode: upgrade`, `variant: service`, and
-   `migration_plan: OLD_ENV/migration-export.json` (the **export** plan). Deploy verifies the
+   `migration_plan: OLD_ENV/migration-export.json` (the **export** plan) and
+   `source_info_artifact: EXPORT_DEPLOY_ARTIFACT_ID` (the export run's deployment artifact ID).
+   Forward this optional input and grant `actions: read` when adopting the release. Deploy verifies the
    current fenced export attestation before skipping maintenance pause/resume, then restores
    service with the normal target attestation, health and TLS checks. Record the source-export
    verification and target acceptance artifacts. Database route pauses remain; there is
@@ -311,8 +319,7 @@ rollback_hash=$(jq -er .compose_hash "$EVIDENCE/rollback.json")
 test "${rollback_hash#0x}" = "${OLD_COMPOSE_HASH#0x}"
 deploy/phala-cvm.sh wait --compose-hash "$rollback_hash" "$OLD_CVM_ID" >"$EVIDENCE/old-cvm.json"
 deploy/phala-cvm.sh attestation "$OLD_CVM_ID" "$rollback_hash" >"$EVIDENCE/old-attestation.json"
-guest=$(deploy/phala-cvm.sh url "$EVIDENCE/old-cvm.json" 8090)
-curl -fsS "$guest/prpc/Info" >"$EVIDENCE/old-info.json"
+curl -fsS "https://$DOMAIN/v1/attestation/info" >"$EVIDENCE/old-info.json"
 deploy/verify-attestation.sh "$EVIDENCE/old-attestation.json" "$EVIDENCE/old-info.json" \
   "$OLD_APP_ID" "$EVIDENCE/old-service.yml" service "$OLD_OS_HASH"
 ```

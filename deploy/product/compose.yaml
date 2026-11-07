@@ -11,6 +11,7 @@ services:
         target: /etc/product/config.json
     volumes:
       - ledger:/data
+      - /var/run/dstack.sock:/var/run/dstack.sock:ro
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     healthcheck:

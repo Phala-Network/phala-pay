@@ -67,6 +67,10 @@ on:
         description: "Reviewed migration JSON path: export/import, or the current export plan for a service rollback (Phala upgrade only)"
         type: string
         default: ""
+      source_info_artifact:
+        description: "Export deployment artifact ID for rollback from export; contains this CVM's verified guest Info"
+        type: string
+        default: ""
       gateway_domain:
         description: "Pinned node gateway host for initial Base provisioning (gateway.<base-domain>)"
         type: string
@@ -90,10 +94,11 @@ on:
         description: "The Phala Cloud API key of vars.PHALA_WORKSPACE: inherited from the Environment (secrets: inherit), or passed from a repository secret by a caller in another organisation"
         required: false
 
-# attestations: read for `gh attestation verify`; the caller's workflow grants both.
+# The caller grants contents/attestations read for releases, actions read for rollback evidence.
 permissions:
   contents: read
   attestations: read
+  actions: read
 
 # `bash -eo pipefail` for every step, so a failing command in a pipeline fails the step.
 defaults:
@@ -118,6 +123,7 @@ jobs:
       MODE: ${{ inputs.mode }}
       REQUESTED_VARIANT: ${{ inputs.variant }}
       MIGRATION_PLAN: ${{ inputs.migration_plan }}
+      SOURCE_INFO_ARTIFACT: ${{ inputs.source_info_artifact }}
       TRANSACTION_HASH: ${{ inputs.transaction_hash }}
       INITIAL_GATEWAY_DOMAIN: ${{ inputs.gateway_domain }}
       ENVIRONMENT_DIR: ${{ inputs.environment_dir }}
@@ -215,6 +221,11 @@ jobs:
                 { echo "::error::mode upgrade needs the Environment variable $cvm_id_variable"; status=1; } ;;
             *) echo "::error::unknown mode $MODE"; status=1 ;;
           esac
+          [[ -z "${SOURCE_INFO_ARTIFACT:-}" || "$SOURCE_INFO_ARTIFACT" =~ ^[0-9]+$ ]] ||
+            { echo "::error::source_info_artifact must be an artifact ID"; status=1; }
+          if [[ "$variant" == service && -n "${MIGRATION_PLAN:-}" && -z "${SOURCE_INFO_ARTIFACT:-}" ]]; then
+            echo "::error::export rollback requires source_info_artifact from the export run"; status=1
+          fi
           exit "$status"
 
       - name: Prepare private working files
@@ -438,6 +449,43 @@ jobs:
           [[ $(jq -er .os.name "$WORK/cvm-before.json") == "$DSTACK_OS_IMAGE" ]] ||
             { echo "::error::Base OS change needs a separately prepared operation; see onchain-kms-upgrade.md"; exit 1; }
 
+      - name: Download the export guest Info for rollback
+        if: inputs.mode == 'upgrade' && inputs.variant == 'service' && inputs.migration_plan != ''
+        timeout-minutes: 10
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "${SOURCE_INFO_ARTIFACT:-}" =~ ^[0-9]+$ ]] ||
+            { echo "::error::export rollback requires source_info_artifact"; exit 1; }
+          timeout 60 gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$SOURCE_INFO_ARTIFACT" >"$WORK/source-artifact.json"
+          jq -e --arg prefix "$DEPLOY_ENVIRONMENT-$TARGET-deploy-" \
+            '.expired == false and (.name | startswith($prefix))' "$WORK/source-artifact.json" >/dev/null
+          timeout 120 gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$SOURCE_INFO_ARTIFACT/zip" >"$WORK/source-artifact.zip"
+          unzip -p "$WORK/source-artifact.zip" info.json >"$WORK/rollback-export-info.json"
+          unzip -p "$WORK/source-artifact.zip" cvm.json >"$WORK/source-cvm.json"
+          jq -e --slurpfile current "$WORK/cvm-before.json" '
+            .vm_uuid != null and .vm_uuid == $current[0].vm_uuid
+            and .app_id == $current[0].app_id and .os.name == $current[0].os.name
+          ' "$WORK/source-cvm.json" >/dev/null
+          rm "$WORK/source-artifact.zip"
+
+      - name: Capture verified service Info before export
+        if: inputs.variant == 'export' && inputs.mode != 'prepare'
+        timeout-minutes: 20
+        env:
+          PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
+        run: |
+          [[ $(jq -er .os.name "$WORK/cvm-before.json") == "$DSTACK_OS_IMAGE" ]] ||
+            { echo "::error::Export cannot change the OS image"; exit 1; }
+          current=$(jq -er '.compose_hash | ascii_downcase | ltrimstr("0x")' "$WORK/cvm-before.json")
+          app_id=$(jq -er .app_id "$WORK/cvm-before.json")
+          "$KIT/deploy/phala-cvm.sh" attestation "$EXISTING_CVM_ID" "$current" >"$WORK/pre-export-attestation.json"
+          curl -fsS --max-time 30 --retry 5 --retry-all-errors \
+            "$PUBLIC_URL/v1/attestation/info" >"$WORK/info.json"
+          "$KIT/deploy/verify-attestation.sh" "$WORK/pre-export-attestation.json" "$WORK/info.json" \
+            "$app_id" "$WORK/service-domain.yml" service "$(cat "$ENVIRONMENT_DIR/os-image-hash")" \
+            "$ENVIRONMENT_DIR" >"$WORK/pre-export-verification.txt"
+
       - name: Pause new mutations before upgrading
         id: maintenance
         if: (inputs.mode == 'upgrade' || inputs.mode == 'commit') && inputs.target == 'topup' && env.INITIAL_BASE != 'true'
@@ -455,8 +503,8 @@ jobs:
             current=$(jq -er '.compose_hash | ascii_downcase | ltrimstr("0x")' "$WORK/cvm-before.json")
             app_id=$(jq -er .app_id "$WORK/cvm-before.json")
             "$KIT/deploy/phala-cvm.sh" attestation "$EXISTING_CVM_ID" "$current" >"$WORK/rollback-export-attestation.json"
-            curl -fsS --max-time 30 --retry 5 --retry-all-errors \
-              "$("$KIT/deploy/phala-cvm.sh" url "$WORK/cvm-before.json" 8090)/prpc/Info" >"$WORK/rollback-export-info.json"
+            test -s "$WORK/rollback-export-info.json" ||
+              { echo "::error::download the export run's source_info_artifact before rollback"; exit 1; }
             "$KIT/deploy/verify-attestation.sh" "$WORK/rollback-export-attestation.json" \
               "$WORK/rollback-export-info.json" "$app_id" "$WORK/rollback-export.yml" export \
               "$(cat "$ENVIRONMENT_DIR/os-image-hash")" "$ENVIRONMENT_DIR" 2>&1 | tee "$WORK/rollback-export-verification.txt"
@@ -628,9 +676,16 @@ jobs:
         run: |
           deployed=$(jq -er '.compose_hash | ascii_downcase | ltrimstr("0x")' "$WORK/cvm.json")
           "$KIT/deploy/phala-cvm.sh" attestation "$CVM_ID" "$deployed" >"$WORK/attestation.json"
-          # The guest agent's public info (port 8090, public tcbinfo) carries the vm_config.
-          curl -fsS --max-time 30 --retry 5 --retry-all-errors \
-            "$("$KIT/deploy/phala-cvm.sh" url "$WORK/cvm.json" 8090)/prpc/Info" >"$WORK/info.json"
+          if [[ "$MODE" == provision || "${INITIAL_BASE:-false}" == true ]]; then
+            echo "Acceptance pending: seal the CVM, configure DNS, then run upgrade readback. Migration-import: verify import-info.json and recipient evidence from the migration prefix before export." | tee "$WORK/acceptance-pending.txt" >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # Export has no ingress: reuse this run's verified pre-upgrade service Info.
+          # vm_config must still verify against the new quote; OS changes were refused.
+          if [[ "$VARIANT" != export ]]; then
+            curl -fsS --max-time 30 --retry 5 --retry-all-errors \
+              "$PUBLIC_URL/v1/attestation/info" >"$WORK/info.json"
+          fi
           # Apply the reviewed OS pin on provision and upgrade, including existing CVMs.
           expected_os_hash=$(cat "$ENVIRONMENT_DIR/os-image-hash")
           "$KIT/deploy/verify-attestation.sh" "$WORK/attestation.json" "$WORK/info.json" "$APP_ID" \
@@ -798,6 +853,11 @@ jobs:
             ${{ runner.temp }}/deploy/cvm.json
             ${{ runner.temp }}/deploy/attestation.json
             ${{ runner.temp }}/deploy/info.json
+            ${{ runner.temp }}/deploy/acceptance-pending.txt
+            ${{ runner.temp }}/deploy/pre-export-attestation.json
+            ${{ runner.temp }}/deploy/pre-export-verification.txt
+            ${{ runner.temp }}/deploy/source-artifact.json
+            ${{ runner.temp }}/deploy/source-cvm.json
             ${{ runner.temp }}/deploy/verification.txt
             ${{ runner.temp }}/deploy/rollback-export.yml
             ${{ runner.temp }}/deploy/rollback-export-attestation.json

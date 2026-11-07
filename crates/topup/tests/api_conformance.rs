@@ -752,7 +752,7 @@ async fn shared_error_and_cache_contracts_match_http_responses() -> Result<()> {
                     ensure!(unavailable["content"]["application/json"]["schema"]["$ref"] == "#/components/schemas/ErrorResponse");
                     ensure!(unavailable["headers"]["Retry-After"]["required"] == false);
                     ensure!(unavailable["headers"]["Retry-After"]["schema"]["minimum"] == 1);
-                    if document == &harness.docs.merchant {
+                    if document == &harness.docs.merchant && operation["operationId"] != "get_guest_info" {
                         ensure!(operation["responses"]["403"]["content"]["application/json"]["schema"]["$ref"] == "#/components/schemas/ErrorResponse");
                         ensure!(operation["responses"]["429"]["headers"]["Retry-After"]["required"] == true);
                     }

@@ -13,7 +13,13 @@ export FIXTURE_PORT_POLICY='{"ports":[{"port":443,"pp":true}],"restrict_mode":fa
 export VERIFIED_RESULT="$tmp/result.json" FIXTURE_DIR="$tmp"
 cat >"$tmp/kit/deploy/dstack-verifier.sh" <<'SH'
 #!/bin/sh
-cat >/dev/null
+request=$(cat)
+if [ -n "${EXPECTED_VM_CONFIG:-}" ]; then
+    printf '%s' "$request" | jq -e --arg expected "$EXPECTED_VM_CONFIG" '.vm_config == $expected' >/dev/null || {
+        echo 'fixture verifier: vm_config does not match quote measurements' >&2
+        exit 1
+    }
+fi
 cat "$VERIFIED_RESULT"
 SH
 cat >"$tmp/kit/deploy/attested-compose.sh" <<'SH'
@@ -74,6 +80,19 @@ if "$tmp/kit/deploy/verify-attestation.sh" "$tmp/attestation.json" "$tmp/info.js
     echo 'verify-attestation: a malformed approved pin was accepted' >&2; exit 1
 fi
 grep -qF 'EXPECTED_OS_IMAGE_HASH must be 64' "$tmp/err"
+# The wrapper must forward Info's exact vm_config to the verifier, and must stop on its
+# cryptographic rejection. Info's claimed OS hash cannot override the verifier's result.
+result "$hash"
+export EXPECTED_VM_CONFIG
+EXPECTED_VM_CONFIG=$(jq -er .vm_config "$tmp/info.json")
+verify
+jq '.vm_config |= (fromjson | .cpu_count = 999 | tojson)' "$tmp/info.json" >"$tmp/tampered-info.json"
+cp "$tmp/info.json" "$tmp/original-info.json"
+cp "$tmp/tampered-info.json" "$tmp/info.json"
+if verify; then echo 'verify-attestation: tampered Info was accepted' >&2; exit 1; fi
+grep -qF 'vm_config does not match quote measurements' "$tmp/err"
+cp "$tmp/original-info.json" "$tmp/info.json"
+unset EXPECTED_VM_CONFIG
 echo 'attestation OS pin tests passed (matching, mismatch, missing, invalid result and malformed pin)'
 
 result "$hash"

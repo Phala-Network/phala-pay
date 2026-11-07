@@ -587,6 +587,22 @@ impl Transfer {
         Ok(())
     }
 
+    async fn publish_guest_info(
+        &self,
+        attestor: &DstackAttestor,
+        name: &str,
+    ) -> anyhow::Result<()> {
+        let info = attestor.guest_info().await?;
+        self.store
+            .put(
+                &self.prefix.clone().join(name),
+                serde_json::to_vec_pretty(&info)?.into(),
+            )
+            .await
+            .context("failed to publish public guest Info")?;
+        Ok(())
+    }
+
     async fn upload(&self, path: &Path, name: &str) -> anyhow::Result<()> {
         let mut writer = BufWriter::new(self.store.clone(), self.prefix.clone().join(name))
             .with_max_concurrency(2);
@@ -661,6 +677,8 @@ impl Transfer {
                 Sha256::digest(MANIFEST_DOMAIN).into(),
             )
             .await?;
+            self.publish_guest_info(attestor, "export-info.json")
+                .await?;
             encrypt(&dump, &encrypted, &config.recipient)?;
             let manifest = Manifest {
                 version: 1,
@@ -727,6 +745,8 @@ impl Transfer {
         }
         let nonce = rand::random::<[u8; 32]>();
         let recipient = recipient_evidence(identity, attestor, &nonce).await?;
+        self.publish_guest_info(attestor, "import-info.json")
+            .await?;
         self.publish_recipient(&recipient).await?;
         private_file(&directory.join("recipient.json"))?
             .write_all(&serde_json::to_vec(&recipient)?)?;
@@ -1135,6 +1155,14 @@ mod tests {
             let (exported, imported) = tokio::join!(exporter, importer);
             exported?;
             imported?;
+            for name in ["import-info.json", "export-info.json"] {
+                let public_info: serde_json::Value = serde_json::from_slice(
+                    &transfer.store.get(&transfer.prefix.clone().join(name)).await?.bytes().await?
+                )?;
+                assert_eq!(public_info, attestor.guest_info().await?);
+                assert!(public_info.get("env").is_none());
+                assert!(public_info.get("private_key").is_none());
+            }
             let restore = std::process::Command::new("docker")
                 .args([
                     "exec",

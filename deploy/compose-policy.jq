@@ -319,7 +319,9 @@ def product_violations:
                 and $config.public_url == "https://\($ingress.DOMAIN)";
               "dstack-ingress must serve the host of the product's public_url with tls-alpn-01, forwarding to product:8089"),
         check([.services | to_entries[] | select(.value.volumes[]?.source == "/var/run/dstack.sock") | .key]
-                == ["dstack-ingress"]; "only dstack-ingress may mount the dstack socket")
+                == ["dstack-ingress", "product"]; "only dstack-ingress and product may mount the dstack socket"),
+        check([.services.product.volumes[] | select(.source == "/var/run/dstack.sock") | .read_only] == [true];
+              "the product dstack socket mount must be read-only")
       ] + ingress_violations(false);
 
 # One-time migration variants. Keep the split postgres/crypto trust boundary explicit.

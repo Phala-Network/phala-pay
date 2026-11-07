@@ -88,7 +88,7 @@ pub(super) fn merchant(openapi: &OpenApi) -> Value {
     let mut document = finish(openapi, "Phala Pay API", &merchant_description());
     // Every merchant request counts toward the account's rate limit.
     for_each_operation(&mut document, |_, operation| {
-        if is_transaction_submission(operation) {
+        if is_transaction_submission(operation) || operation["operationId"] == "get_guest_info" {
             return;
         }
         let responses = &mut operation["responses"];
@@ -208,6 +208,7 @@ fn finish(openapi: &OpenApi, title: &str, description: &str) -> Value {
 
 fn response_headers(document: &mut Value) {
     for_each_operation(document, |_, operation| {
+        let public_info = operation["operationId"] == "get_guest_info";
         for (status, response) in operation["responses"].as_object_mut().into_iter().flatten() {
             let headers = &mut response["headers"];
             headers["Cache-Control"] = json!({
@@ -215,6 +216,13 @@ fn response_headers(document: &mut Value) {
                 "required": true,
                 "schema": {"type": "string", "enum": ["no-store"]},
             });
+            if public_info && status == "200" {
+                headers["Cache-Control"] = json!({
+                    "description": "Public guest metadata cached for up to 60 seconds; authenticated requests use no-store",
+                    "required": true,
+                    "schema": {"type": "string"},
+                });
+            }
             headers["Request-Id"] = json!({
                 "description": "The request's id, `req_…` (https://docs.stripe.com/api/request_ids)",
                 "schema": {"type": "string"},

@@ -336,6 +336,9 @@ validate_script() {
             *) positionals=$((positionals + 1)) ;;
         esac
     done
+    if [[ "$name" == verify-attestation.sh && "$positionals" == 7 ]]; then
+        return "$fail"  # Optional reviewed environment directory for Base KMS.
+    fi
     if (( positionals != script_positionals[$name] )); then
         echo "$2: deploy/$name takes ${script_positionals[$name]} arguments, not $positionals" >&2
         fail=1

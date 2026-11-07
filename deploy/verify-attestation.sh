@@ -17,8 +17,10 @@ set -eu
 # exactly the service's PROXY-on 443 policy, inert because restore-check publishes only 8081.
 #
 # ATTESTATION_JSON is `phala cvms attestation --json` (the app certificate's quote, the event log,
-# and the app-compose). INFO_JSON is the guest agent's public `GET /prpc/Info` on port 8090 (the
-# CVM runs with public tcbinfo): the vm_config the quote does not carry. The app-compose's binding to
+# and the app-compose). INFO_JSON is the guest's public Info via GET /v1/attestation/info
+# (or import-info.json in the migration prefix). Its vm_config is untrusted transport: the
+# official verifier recomputes boot measurements and binds it to the quote. A stale or tampered
+# vm_config fails closed. No field in Info is used as a verified identity or OS pin. The app-compose's binding to
 # EXPECTED_COMPOSE and the pre-launch script is deploy/attested-compose.sh's, which deploy.sh uses
 # too.
 if [ "$#" -ne 6 ] && [ "$#" -ne 7 ]; then

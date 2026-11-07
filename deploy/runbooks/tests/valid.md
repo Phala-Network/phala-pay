@@ -4,6 +4,7 @@ This file must pass `deploy/runbooks/check.sh`. It covers command shapes that ar
 misclassify; it is not an operator runbook.
 
 ```sh
+deploy/verify-attestation.sh attestation.json info.json "$APP_ID" compose.yml service "$OS_HASH" "$ENV_DIR"
 cargo run --release --locked -p topup --example inspect_sdn -- /path/to/SDN.XML
 cargo test --locked -p topup --test refunds refund_flow -- --nocapture
 docker compose -f deploy/docker-compose.staging.yml exec -T topup topup restore-check

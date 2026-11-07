@@ -328,7 +328,7 @@ describe("normative resource wire contract", () => {
   it("covers every merchant OpenAPI operation without including attestation/setup", () => {
     const expected = Object.values(api.paths)
       .flatMap((methods) => Object.values(methods).map((operation) => operation.operationId))
-      .filter((operation) => operation !== "get_attestation");
+      .filter((operation) => operation !== "get_attestation" && operation !== "get_guest_info");
     expect(new Set(cases.map((item) => item.operation))).toEqual(new Set(expected));
   });
   const iterators: {

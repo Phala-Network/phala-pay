@@ -93,7 +93,7 @@ echo '{"paused_scopes":["mutations"]}'
         bin_dir.mkdir()
         curl = bin_dir / "curl"
         curl.write_text('''#!/usr/bin/env bash
-if [[ "${*: -1}" == */prpc/Info ]]; then
+if [[ "${*: -1}" == */v1/attestation/info ]]; then
     jq -nc '["info"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
     [[ "${STUB_INFO_STATUS:-0}" == 0 ]] || exit "$STUB_INFO_STATUS"
     echo '{"vm_config":"fixture-vm-config"}'
@@ -318,6 +318,7 @@ cat "$STUB_RESULTS/$quote.json"
                                     env=self.env, capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             (self.tmp / f"{name}.yml").write_text(result.stdout)
+        (self.work / "rollback-export-info.json").write_text('{"vm_config":"fixture-vm-config"}')
         self.write_attestation("source", self.tmp / "source.yml")
         self.write_attestation("target", self.tmp / "target.yml")
         shutil.copy2(self.tmp / "target.yml", self.env["COMPOSE"])
@@ -384,6 +385,61 @@ echo 'certificate evidence verified'
         for step in ("Resume mutations after health checks", "Clear maintenance after a failed upgrade"):
             block = workflow.split(f"      - name: {step}\n", 1)[1].split("        env:", 1)[0]
             self.assertIn("steps.maintenance.outputs.enabled == 'true'", block)
+
+    def test_export_captures_service_info_and_reuses_it_after_fencing(self):
+        self.prepare_rollback()
+        self.env["VARIANT"] = "export"
+        # Before the export upgrade the CVM must still serve the verified service compose.
+        self.write_attestation("source", self.tmp / "target.yml")
+        shutil.copy2(self.tmp / "target.yml", self.work / "service-domain.yml")
+        result = self.run_step("Capture verified service Info before export")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(len([call for call in self.calls() if call[0] == "info"]), 1)
+        # The export quote has the export compose; there is no ingress left to fetch Info.
+        self.write_attestation("target", self.tmp / "source.yml")
+        shutil.copy2(self.tmp / "source.yml", self.env["COMPOSE"])
+        (self.work / "cvm.json").write_text(json.dumps({"compose_hash": self.env["STUB_TARGET_HASH"]}))
+        (self.tmp / "compose-committed").touch()
+        self.env["STUB_INFO_STATUS"] = "42"
+        result = self.run_step("Read back and verify the attested compose")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(len([call for call in self.calls() if call[0] == "info"]), 1)
+
+    def test_pre_export_info_failure_stops_before_mutation(self):
+        self.prepare_rollback()
+        self.env.update(VARIANT="export", STUB_INFO_STATUS="42")
+        result = self.run_step("Capture verified service Info before export")
+        self.assertEqual(result.returncode, 42, result.stdout + result.stderr)
+        self.assert_no_mutation()
+
+    def test_unsealed_provision_records_pending_acceptance(self):
+        self.prepare_rollback()
+        self.env.update(MODE="provision", STUB_INFO_STATUS="42")
+        (self.work / "cvm.json").write_text(json.dumps({"compose_hash": self.env["STUB_SOURCE_HASH"]}))
+        result = self.run_step("Read back and verify the attested compose")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.work / "acceptance-pending.txt").exists())
+        self.assertFalse((self.work / "verification.txt").exists())
+        self.assertFalse(any(call[0] in ("verify-quote", "info") for call in self.calls()))
+
+    def test_rollback_downloads_info_and_checks_cvm_identity(self):
+        import zipfile
+        self.prepare_rollback()
+        self.env.update(SOURCE_INFO_ARTIFACT="123", GITHUB_REPOSITORY="owner/repo")
+        cvm = json.loads((self.work / "cvm-before.json").read_text())
+        cvm["vm_uuid"] = "cvm-1"
+        (self.work / "cvm-before.json").write_text(json.dumps(cvm))
+        archive = self.tmp / "artifact.zip"
+        gh = self.tmp / "bin/gh"
+        gh.write_text("#!/bin/sh\ncase \"$2\" in */zip) cat \"$RUNNER_TEMP/artifact.zip\" ;; *) printf '%s' '{\"expired\":false,\"name\":\"production-topup-deploy-99-1\"}' ;; esac\n")
+        gh.chmod(0o755)
+        for uuid, expected in (("cvm-1", 0), ("other", 1)):
+            cvm["vm_uuid"] = uuid
+            with zipfile.ZipFile(archive, "w") as output:
+                output.writestr("info.json", '{"vm_config":"fixture-vm-config"}')
+                output.writestr("cvm.json", json.dumps(cvm))
+            result = self.run_step("Download the export guest Info for rollback")
+            self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
 
     def test_rollback_rejects_an_unexpected_target_compose_after_deployment(self):
         self.prepare_rollback()
@@ -457,12 +513,13 @@ echo 'certificate evidence verified'
         self.assertIn("Export rollback cannot change the OS", result.stdout)
         self.assertFalse((self.tmp / "cli.jsonl").exists())
         self.write_attestation("source", self.tmp / "source.yml")
-        self.env["STUB_INFO_STATUS"] = "42"
+        (self.work / "rollback-export-info.json").unlink()
         result = self.run_step("Pause new mutations before upgrading")
-        self.assertEqual(result.returncode, 42, result.stdout + result.stderr)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assert_no_mutation()
 
     def test_rollback_input_guards(self):
+        self.env["SOURCE_INFO_ARTIFACT"] = "123"
         self.env.update(REQUESTED_VARIANT="service", TOPUP_CVM_ID="cvm-1", MODE="upgrade",
                         MIGRATION_PLAN="migration/export.json")
         result = self.run_step("Check inputs and Environment settings")

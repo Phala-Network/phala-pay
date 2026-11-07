@@ -14,6 +14,14 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Fixed
+
+- Serve cached public dstack guest Info through `/v1/attestation/info` in the service,
+  restore-check and reference product. Deploy verification and runbooks no longer depend on
+  the disabled guest-agent gateway port; export reuses verified pre-upgrade Info, rollback
+  downloads the export artifact, and migration import/export publish public Info evidence.
+  Unsealed provisioning explicitly leaves acceptance pending until sealing and readback.
+
 ## [0.13.7] - 2026-11-06
 
 ### Added

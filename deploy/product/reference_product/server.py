@@ -60,6 +60,7 @@ from .config import (
 )
 from .demo import DemoConsole
 from .fulfillment import Answer, Fulfillment, PinnedKeys, TransientError, parse_decimal
+from .guest_info import GuestInfo
 from .ledger import ProductLedger
 from .restore_records import export_restore_records
 from .transport import OPERATION_TIMEOUT_SECONDS, DeadlineTransport, operation_deadline
@@ -96,6 +97,7 @@ class ProductServer:
         accounts: AccountApi | None = None,
         demo: DemoConsole | None = None,
     ) -> None:
+        guest_info = GuestInfo()
         self.fulfillment = fulfillment
         self.accounts = accounts
         self.demo = demo
@@ -120,6 +122,20 @@ class ProductServer:
                 else OPERATION_TIMEOUT_SECONDS
             )
             operation_deadline.set(time.monotonic() + timeout)
+            if method == "GET" and urlsplit(target).path == base_path + "/v1/attestation/info":
+                info = guest_info.get()
+                if info is None:
+                    return JSONResponse(
+                        {"code": "unavailable"},
+                        status_code=503,
+                        headers={"Cache-Control": "no-store"},
+                    )
+                cache = (
+                    "no-store"
+                    if "authorization" in headers or "signature" in headers
+                    else "public, max-age=60"
+                )
+                return JSONResponse(info, headers={"Cache-Control": cache})
             if webhook:
                 answer = self.fulfillment.handle(headers, body)
             elif method == "GET" and urlsplit(target).path == base_path + "/healthz":

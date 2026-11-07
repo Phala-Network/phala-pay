@@ -256,8 +256,8 @@ uses: Phala-Network/phala-pay/.github/workflows/deploy.yml@<release commit or ta
 
 Its inputs are `version`, `environment` (the GitHub Environment), `target` (`topup`, or `product`
 for Phala's reference product), `mode` (`provision` or `upgrade`), and `environment_dir` (the
-target's directory in the caller's repository). The caller grants `contents: read` and
-`attestations: read`, and Deploy reads `PHALA_CLOUD_API_KEY` plus
+target's directory in the caller's repository). The caller grants `contents: read`,
+`attestations: read` and `actions: read`, and Deploy reads `PHALA_CLOUD_API_KEY` plus
 `TOPUP_MAINTENANCE_PRIVATE_KEY_PEM` for topup upgrade admission control. A caller in the Phala-Network organisation passes `secrets: inherit`, and the
 key is the Environment's secret (an Environment secret resolves empty in a called workflow without
 it, [actions/runner#4453](https://github.com/actions/runner/issues/4453)); a caller in another
@@ -866,6 +866,37 @@ above one triggers its capacity alert and affected-chain quote pause. See the
 
 ## Attestation, ingress, and egress
 
+`GET /v1/attestation/info` is public, read-only guest metadata from the local dstack v0
+socket SDK: app/instance/device ids, app certificate, `tcb_info` (decoded JSON object),
+`vm_config`, compose/OS hashes and key-provider information. It contains no sealed environment
+or private keys. Calls share a process cache (60 seconds; failures five seconds), under the
+API's existing global and peer admission limits. Anonymous successes have
+`Cache-Control: public, max-age=60`; failures and credential-bearing requests use `no-store`.
+Restore-check serves the same route on its published 8081 port; the reference product serves
+it through its own ingress using the local guest socket. This replaces the disabled public
+guest-agent gateway port. **Info is untrusted transport**, never an identity/pin source: the
+pinned dstack verifier binds `vm_config` and measurements to the quote and fails closed on a
+wrong configuration. Ignore its claimed ids/OS hash when choosing expected values.
+
+Bootstrap from an older service release needs no pre-upgrade Info: ordinary upgrade reads the
+new endpoint after boot. Before export, upgrade to this release and complete acceptance first.
+Export captures and verifies service Info in the same run before removing ingress and reuses
+its `vm_config` against the export quote; OS changes are refused. Export-to-service rollback
+requires `source_info_artifact` (the numeric GitHub artifact ID of that export run's deployment
+record); Deploy downloads it from the caller repository with `actions: read`, checks CVM/app/OS
+identity, then verifies against the current export quote before changing anything. Forward the
+new optional input when adopting this release's workflow. Never substitute another CVM's Info.
+
+Unsealed provision (including initial Base commit) records **acceptance pending**: there is no
+service endpoint before sealing and DNS. Seal, configure DNS, then run `upgrade` for verified
+acceptance. During migration-import, the import job publishes `import-info.json` beside
+`recipient.json` in its migration prefix before the API can start; use it with the Cloud quote
+for T-1 verification. Export also publishes `export-info.json`. These files have the same
+untrusted-transport rule. For a legacy CVM needing a pre-upgrade read outside Deploy, an operator
+with already-authorized guest shell access can run `topup guest-info` from this release's image
+with only `/var/run/dstack.sock` mounted; this command needs no database or sealed secrets.
+No verification step may be bypassed when Info is unavailable.
+
 For Base KMS, pass the reviewed environment directory as the seventh argument to
 `verify-attestation.sh`. It binds the replayed app id to `dstack-app`, requires `kms_enabled` and
 `key_provider: kms`, and compares the app-compose pin and replayed key-provider event with
@@ -881,8 +912,8 @@ exported:
 ```sh
 kit/deploy/phala cvms get "$CVM_ID" --json > cvm.json
 kit/deploy/phala cvms attestation "$CVM_ID" --json > attestation.json
-APP_ID=$(jq -er '.app_id' cvm.json) && GATEWAY_DOMAIN=$(jq -er '.gateway.base_domain' cvm.json)
-curl -fsS "https://${APP_ID#0x}-8090.$GATEWAY_DOMAIN/prpc/Info" > info.json
+APP_ID=$(jq -er '.app_id' cvm.json)
+curl -fsS "https://$DOMAIN/v1/attestation/info" > info.json
 EXPECTED_OS_IMAGE_HASH="$(cat production/topup/os-image-hash)"
 kit/deploy/verify-attestation.sh attestation.json info.json "$APP_ID" docker-compose.ENV.yml service \
   "$EXPECTED_OS_IMAGE_HASH"

@@ -183,6 +183,29 @@ export interface paths {
         readonly patch?: never;
         readonly trace?: never;
     };
+    readonly "/v1/attestation/info": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        /**
+         * Public metadata from the local dstack guest's v0 Info, cached in process for 60 seconds.
+         *     Includes app/instance/device ids, public app certificate, `tcb_info` (SDK-decoded object),
+         *     `compose_hash`, `os_image_hash`, `mr_aggregated`, `key_provider_info`, and `vm_config`.
+         *     No environment values or private keys. This transport is untrusted: verify `vm_config`
+         *     and the measurements against the quote using the official dstack verifier.
+         */
+        readonly get: operations["get_guest_info"];
+        readonly put?: never;
+        readonly post?: never;
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
     readonly "/v1/balance": {
         readonly parameters: {
             readonly query?: never;
@@ -5173,6 +5196,45 @@ export interface operations {
                 };
             };
             /** @description Service Unavailable */
+            readonly 503: {
+                headers: {
+                    /** @description Tenant data and credentials must never be stored, including errors */
+                    readonly "Cache-Control": "no-store";
+                    /** @description The request's id, `req_…` (https://docs.stripe.com/api/request_ids) */
+                    readonly "Request-Id"?: string;
+                    /** @description Optional: minimum seconds to wait before retrying; sent for database admission failures and service_restoring, and may be absent for other unavailable errors */
+                    readonly "Retry-After"?: number;
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    readonly get_guest_info: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Public dstack guest Info (v0 SDK representation) */
+            readonly 200: {
+                headers: {
+                    /** @description Public guest metadata cached for up to 60 seconds; authenticated requests use no-store */
+                    readonly "Cache-Control": string;
+                    /** @description The request's id, `req_…` (https://docs.stripe.com/api/request_ids) */
+                    readonly "Request-Id"?: string;
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": Record<string, never>;
+                };
+            };
+            /** @description `unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds */
             readonly 503: {
                 headers: {
                     /** @description Tenant data and credentials must never be stored, including errors */

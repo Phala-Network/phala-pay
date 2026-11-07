@@ -25,7 +25,7 @@ const responseSchema = (op) =>
   ].schema;
 for (const [path, methods] of Object.entries(api.paths))
   for (const [httpMethod, op] of Object.entries(methods)) {
-    if (path === "/v1/attestation") continue;
+    if (path === "/v1/attestation" || path === "/v1/attestation/info") continue;
     const resource = path.split("/")[2];
     const singleton = ["account", "payment_settings", "config", "balance"].includes(resource);
     const id = path.includes("{id}");
