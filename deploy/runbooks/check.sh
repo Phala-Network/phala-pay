@@ -292,6 +292,7 @@ validate_api() {
 # The arguments of the deploy scripts the documentation runs, by path under deploy/: its flags,
 # `--flag=` for one taking a value, and its number of positional arguments.
 declare -A script_flags=(
+    [verify-attestation.sh]="--partial"
     [render.sh]="--restore-check --template --export --migration-export= --migration-import= --images= --gateway-domain= --origin= --project-name= --no-download"
     [preflight.sh]="--env= --compose= --environment-dir= --workspace= --os-image= --restore-check --migration-import= --offline --unsealed --require-sentry"
     [product/preflight.sh]="--env= --compose= --environment-dir= --workspace= --os-image= --offline --unsealed"
@@ -336,6 +337,9 @@ validate_script() {
             *) positionals=$((positionals + 1)) ;;
         esac
     done
+    if [[ "$name" == verify-attestation.sh && "$positionals" == 7 ]]; then
+        return "$fail"  # Optional reviewed environment directory for Base KMS.
+    fi
     if (( positionals != script_positionals[$name] )); then
         echo "$2: deploy/$name takes ${script_positionals[$name]} arguments, not $positionals" >&2
         fail=1

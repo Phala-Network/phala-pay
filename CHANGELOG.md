@@ -14,6 +14,17 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Fixed
+
+- Serve cached public dstack guest Info through `/v1/attestation/info` in the service,
+  restore-check and reference product. Deploy verification and runbooks no longer depend on
+  the disabled guest-agent gateway port; export reuses verified pre-upgrade Info, rollback
+  downloads the export artifact, and migration import/export publish public Info evidence.
+  A private Info-only process holds the product CVM's guest socket; the product has no socket
+  mount. Unsealed provisioning verifies quote/event log and compose/app before sealing, while
+  full OS/vm_config acceptance remains pending until sealing and readback. Add a public real-quote
+  regression that checks normalized Info and rejects tampered VM configuration and event logs.
+
 ## [0.13.7] - 2026-11-06
 
 ### Added

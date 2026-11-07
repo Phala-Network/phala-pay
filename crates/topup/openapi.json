@@ -7147,6 +7147,81 @@
         ]
       }
     },
+    "/v1/attestation/info": {
+      "get": {
+        "operationId": "get_guest_info",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Public dstack guest Info (v0 SDK representation)",
+            "headers": {
+              "Cache-Control": {
+                "description": "Public guest metadata cached for up to 60 seconds; authenticated requests use no-store",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Request-Id": {
+                "description": "The request's id, `req_…` (https://docs.stripe.com/api/request_ids)",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`unavailable`: temporary service or database unavailability; `service_restoring`: restore reconciliation is in progress. Retry-After, when present, is the minimum delay in seconds",
+            "headers": {
+              "Cache-Control": {
+                "description": "Tenant data and credentials must never be stored, including errors",
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Request-Id": {
+                "description": "The request's id, `req_…` (https://docs.stripe.com/api/request_ids)",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Optional: minimum seconds to wait before retrying; sent for database admission failures and service_restoring, and may be absent for other unavailable errors",
+                "required": false,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {}
+        ],
+        "summary": "Public metadata from the local dstack guest's v0 Info, cached in process for 60 seconds.\nIncludes app/instance/device ids, public app certificate, `tcb_info` (SDK-decoded object),\n`compose_hash`, `os_image_hash`, `mr_aggregated`, `key_provider_info`, and `vm_config`.\nNo environment values or private keys. This transport is untrusted: verify `vm_config`\nand the measurements against the quote using the official dstack verifier.",
+        "tags": [
+          "attestation"
+        ]
+      }
+    },
     "/v1/balance": {
       "get": {
         "operationId": "get_balance",

@@ -62,7 +62,7 @@ use utoipa_axum::routes;
 
 pub use attestation::{
     AttestationError, AttestationEvidence, AttestationFuture, AttestationRequest, Attestor,
-    WebhookKeysFuture,
+    GuestInfoFuture, WebhookKeysFuture,
 };
 pub use auth::VerificationKey;
 pub use client_limit::ClientReadLimiter;
@@ -598,7 +598,9 @@ fn router_from_routes(
     merchant: OpenApiRouter<AppState>,
     admin: OpenApiRouter<AppState>,
 ) -> (Router, ApiDocs) {
-    let (merchant_router, merchant_doc) = merchant.split_for_parts();
+    let (merchant_router, merchant_doc) = merchant
+        .routes(routes!(attestation::get_guest_info))
+        .split_for_parts();
     let (admin_router, admin_doc) = admin.split_for_parts();
     let docs = ApiDocs {
         merchant: openapi::merchant(&merchant_doc),
@@ -765,6 +767,82 @@ mod tests {
     use tower::ServiceExt as _;
 
     use super::{AppState, VerificationKey};
+
+    /// Public Info works while the DB is unreachable, including restore-check, and concurrent
+    /// requests share one guest call. Unknown upstream fields cannot expose secrets.
+    #[tokio::test]
+    async fn guest_info_is_public_cached_and_available_during_restore() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = calls.clone();
+        let info = serde_json::json!({
+            "app_id": "app", "instance_id": "instance", "app_cert": "public certificate",
+            "app_name": "test", "device_id": "device", "key_provider_info": "public provider",
+            "compose_hash": "compose", "os_image_hash": "os", "mr_aggregated": "mr",
+            "vm_config": "{\"cpu_count\":2}", "env": {"SECRET": "must not escape"},
+            "private_key": "must not escape",
+            "tcb_info": {"mrtd":"", "rtmr0":"", "rtmr1":"", "rtmr2":"", "rtmr3":"",
+                "compose_hash":"compose", "device_id":"device", "event_log":[], "app_compose":"{}"}
+        });
+        let guest = axum::Router::new().route(
+            "/Info",
+            axum::routing::post(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+                let info = info.clone();
+                async move { axum::Json(info) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move { axum::serve(listener, guest).await.unwrap() });
+        let mut state = offline_state();
+        state.attestor = Arc::new(topup_adapters::attestation::DstackAttestor::with_endpoint(
+            endpoint,
+        ));
+        let (router, docs) = super::router(state.clone());
+        assert_eq!(
+            docs.merchant["paths"]["/v1/attestation/info"]["get"]["security"],
+            serde_json::json!([{}])
+        );
+        let restore = super::read_only_router(state, None);
+        for router in [router.clone(), router, restore] {
+            let response = router
+                .oneshot(
+                    Request::get("/v1/attestation/info")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()["cache-control"], "public, max-age=60");
+            let bytes = to_bytes(response.into_body(), 65536).await.unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(value["vm_config"], "{\"cpu_count\":2}");
+            assert_eq!(value["tcb_info"]["app_compose"], "{}");
+            assert_eq!(value.as_object().unwrap().len(), 11);
+            assert!(value.get("env").is_none());
+            assert!(value.get("private_key").is_none());
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        task.abort();
+        let _ = task.await;
+    }
+
+    #[tokio::test]
+    async fn unavailable_guest_info_is_not_cacheable() {
+        let response = super::router(offline_state())
+            .0
+            .oneshot(
+                Request::get("/v1/attestation/info")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+    }
 
     /// Occupying every unauthenticated permit cannot shed health checks, and trickled bodies
     /// expire even though the sender never signals EOF.

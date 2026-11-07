@@ -1,6 +1,7 @@
 //! dstack attestation primitives.
 
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use dstack_sdk::dstack_client::DstackClient;
 use sha2::{Digest, Sha256};
@@ -95,6 +96,13 @@ pub fn report_data(
 pub struct DstackAttestor {
     endpoint: Option<String>,
     timeout: Duration,
+    info_cache: Arc<tokio::sync::Mutex<Option<CachedInfo>>>,
+}
+
+#[derive(Clone, Debug)]
+struct CachedInfo {
+    collected: Instant,
+    value: Result<serde_json::Value, AttestationError>,
 }
 
 impl Default for DstackAttestor {
@@ -106,19 +114,21 @@ impl Default for DstackAttestor {
 impl DstackAttestor {
     /// Uses the dstack socket selected by the SDK and a ten-second call timeout.
     #[must_use]
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             endpoint: None,
             timeout: DEFAULT_TIMEOUT,
+            info_cache: Arc::default(),
         }
     }
 
     /// Uses the dstack socket selected by the SDK and the provided call timeout.
     #[must_use]
-    pub const fn with_timeout(timeout: Duration) -> Self {
+    pub fn with_timeout(timeout: Duration) -> Self {
         Self {
             endpoint: None,
             timeout,
+            info_cache: Arc::default(),
         }
     }
 
@@ -128,6 +138,7 @@ impl DstackAttestor {
         Self {
             endpoint: Some(endpoint.into()),
             timeout: DEFAULT_TIMEOUT,
+            info_cache: Arc::default(),
         }
     }
 
@@ -137,7 +148,37 @@ impl DstackAttestor {
         Self {
             endpoint: Some(endpoint.into()),
             timeout,
+            info_cache: Arc::default(),
         }
+    }
+
+    /// Returns only the guest's public v0 Info metadata, using the same socket as attestation.
+    /// The SDK represents `tcb_info` as an object. This is untrusted transport: callers must
+    /// verify `vm_config` against the quote with the official dstack verifier.
+    /// Successful calls are cached for 60 seconds; failures for five seconds. The mutex also
+    /// coalesces concurrent callers, bounding guest quote work during anonymous traffic.
+    pub async fn guest_info(&self) -> Result<serde_json::Value, AttestationError> {
+        let mut cache = self.info_cache.lock().await;
+        if let Some(cached) = cache.as_ref() {
+            let ttl = if cached.value.is_ok() { 60 } else { 5 };
+            if cached.collected.elapsed() < Duration::from_secs(ttl) {
+                return cached.value.clone();
+            }
+        }
+        let client = DstackClient::new(self.endpoint.as_deref());
+        let value = async {
+            let info = timeout(self.timeout, client.info())
+                .await
+                .map_err(|_| AttestationError::DstackUnavailable)?
+                .map_err(|_| AttestationError::DstackUnavailable)?;
+            serde_json::to_value(info).map_err(|_| AttestationError::DstackUnavailable)
+        }
+        .await;
+        *cache = Some(CachedInfo {
+            collected: Instant::now(),
+            value: value.clone(),
+        });
+        value
     }
 
     /// Derives the webhook keys of `account` in the given mode at `versions`, binds them and the

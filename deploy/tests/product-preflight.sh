@@ -12,7 +12,7 @@ product="$root/deploy/environments/phala-network/staging/product"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
-jq -n '{"phala-pay-reference-product": "ghcr.io/phala-network/phala-pay-reference-product@sha256:\("3" * 64)"}' \
+jq -n '{"phala-pay": "ghcr.io/phala-network/phala-pay@sha256:\("1" * 64)", "phala-pay-reference-product": "ghcr.io/phala-network/phala-pay-reference-product@sha256:\("3" * 64)"}' \
     >"$tmp/images.json"
 # render NAME ENV_DIR
 render() {

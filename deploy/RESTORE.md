@@ -308,7 +308,7 @@ live_isolated() {
    INSTANCE_ID="$(jq -er '[.tcb_info.event_log[] | select(.event == "instance-id")
      | .event_payload | ascii_downcase | select(test("^[0-9a-f]{40}$"))] | select(length == 1)[0]' \
      attestation.json)"
-   curl -fsS "https://$INSTANCE_ID-8090.$(jq -er '.gateway.base_domain' restore-cvm.json)/prpc/Info" \
+   curl -fsS --max-time 30 --retry 20 --retry-delay 10 --retry-max-time 600 --retry-all-errors "https://$INSTANCE_ID-8081.$(jq -er '.gateway.base_domain' restore-cvm.json)/v1/attestation/info" \
      >info.json
    EXPECTED_OS_IMAGE_HASH="$(cat production/topup/os-image-hash)"
    kit/deploy/verify-attestation.sh attestation.json info.json "$APP_ID" restore-check.yml \

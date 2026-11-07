@@ -310,8 +310,8 @@ def restore_check_violations:
 def product_violations:
     (.services["dstack-ingress"].environment | env_map) as $ingress
     | (mounted_config("product"; "/etc/product/config.json") | fromjson? // {}) as $config
-    | [ check((.services | keys) == ["dstack-ingress", "product"];
-              "the product CVM runs exactly product and dstack-ingress"),
+    | [ check((.services | keys) == ["dstack-ingress", "guest-info", "product"];
+              "the product CVM runs exactly product, dstack-ingress, and guest-info"),
         check(only_published("dstack-ingress"; 443; "443"); "only dstack-ingress may publish a port, 443"),
         check($ingress.TIMEOUT_CONNECT == "5s" and $ingress.TIMEOUT_CLIENT == "30s"
                 and $ingress.TIMEOUT_SERVER == "30s" and $ingress.CHALLENGE_TYPE == "tls-alpn-01" and $ingress.TARGET_ENDPOINT == "product:8089"
@@ -319,7 +319,21 @@ def product_violations:
                 and $config.public_url == "https://\($ingress.DOMAIN)";
               "dstack-ingress must serve the host of the product's public_url with tls-alpn-01, forwarding to product:8089"),
         check([.services | to_entries[] | select(.value.volumes[]?.source == "/var/run/dstack.sock") | .key]
-                == ["dstack-ingress"]; "only dstack-ingress may mount the dstack socket")
+                == ["dstack-ingress", "guest-info"]; "only dstack-ingress and guest-info may mount the dstack socket; product must never mount it"),
+        check(.services["guest-info"] as $info
+            | $info.command == ["topup", "guest-info", "serve"] and ($info.entrypoint // null) == null
+            and ($info.environment // {} | length) == 0 and ($info.configs // [] | length) == 0
+            and ($info.secrets // [] | length) == 0 and ($info.ports // [] | length) == 0
+            and $info.read_only == true and $info.cap_drop == ["ALL"] and ($info.cap_add // []) == []
+            and ($info.privileged // false) == false and $info.security_opt == ["no-new-privileges:true"]
+            and $info.mem_limit == "128m" and $info.pids_limit == 32
+            and $info.networks == {guest_info:null} and ($info.network_mode // null) == null
+            and ($info.volumes | length) == 1;
+            "guest-info must run only the Info server without credentials, extra mounts, ports or privileges"),
+        check(.networks.guest_info.internal == true
+            and (.services.product.networks | keys) == ["default", "guest_info"]
+            and ([.services | to_entries[] | select(.value.networks.guest_info != null or (.value.networks | has("guest_info"))) | .key] == ["guest-info", "product"]);
+            "only product and guest-info may share the internal Info network")
       ] + ingress_violations(false);
 
 # One-time migration variants. Keep the split postgres/crypto trust boundary explicit.

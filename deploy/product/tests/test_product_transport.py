@@ -20,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import httpx
 import pytest
@@ -33,6 +33,7 @@ from reference_product import server as transport
 from reference_product.demo import DemoConsole
 from reference_product.demo import Response as DemoResponse
 from reference_product.fulfillment import Answer
+from reference_product.guest_info import GuestInfo
 from reference_product.server import MAX_BODY_BYTES, ProductServer
 from reference_product.transport import DeadlineTransport, operation_deadline
 
@@ -556,3 +557,49 @@ def test_worker_selection_uses_the_dispatchers_raw_path(product: ProductServer) 
         finally:
             release.set()
         assert [future.result(timeout=5).status_code for future in futures] == [200] * 4
+
+
+def test_guest_info_cache_and_public_fields() -> None:
+    value = {
+        "app_id": "app",
+        "vm_config": "{}",
+        "tcb_info": "{}",
+        "env": {"SECRET": "hidden"},
+        "private_key": "hidden",
+    }
+    response = httpx.Response(
+        200, json=value, request=httpx.Request("GET", "http://guest-info:8082/Info")
+    )
+    with patch("httpx.Client.get", return_value=response) as post:
+        info = GuestInfo()
+        for _ in range(2):
+            assert info.get() == {"app_id": "app", "vm_config": "{}", "tcb_info": "{}"}
+        post.assert_called_once_with("http://guest-info:8082/Info")
+
+
+def test_guest_info_failures_are_cached() -> None:
+    with patch("httpx.Client.get", side_effect=httpx.ConnectError("private details")) as post:
+        info = GuestInfo()
+        assert info.get() is None
+        assert info.get() is None
+        assert post.call_count == 1
+
+
+@pytest.mark.parametrize(
+    ("value", "status", "cache"),
+    [
+        ({"vm_config": "{}"}, 200, "public, max-age=60"),
+        (None, 503, "no-store"),
+    ],
+)
+def test_public_guest_info_route(
+    product: ProductServer, value: dict[str, str] | None, status: int, cache: str
+) -> None:
+    with (
+        patch.object(GuestInfo, "get", return_value=value),
+        TestClient(product.app) as client,
+    ):
+        response = client.get("/topup/v1/attestation/info")
+    assert response.status_code == status
+    assert response.headers["cache-control"] == cache
+    assert response.json() == (value if value is not None else {"code": "unavailable"})

@@ -307,6 +307,14 @@ for setting in ACCEPT_PROXY_PROTOCOL SEND_PROXY_PROTOCOL; do
     policy "product-$setting" product "$tmp/product.json" ".services[\"dstack-ingress\"].environment.$setting = \"true\"" \
         "dstack-ingress must set ACCEPT_PROXY_PROTOCOL and SEND_PROXY_PROTOCOL to false or omit them"
 done
+policy product-socket product "$tmp/product.json" '.services.product.volumes += [{type:"bind",source:"/var/run/dstack.sock",target:"/var/run/dstack.sock",read_only:true}]' \
+    "product must never mount it"
+policy info-credentials product "$tmp/product.json" '.services["guest-info"].environment = {AWS_SECRET_ACCESS_KEY:"example"}' \
+    "without credentials"
+policy info-published product "$tmp/product.json" '.services["guest-info"].ports = [{target:8082,published:"8082"}]' \
+    "only dstack-ingress may publish"
+policy info-external-network product "$tmp/product.json" '.networks.guest_info.internal = false' \
+    "internal Info network"
 policy product-readonly-config product "$tmp/product.json" '.services.product.read_only = true' \
     "inline config consumers must use a writable root filesystem for Compose injection"
 [[ "$("$compose" -f "$tmp/product.yml" config --variables | awk 'NR > 1 { print $1 }')" == PRODUCT_API_KEY ]]

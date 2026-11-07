@@ -605,7 +605,7 @@ export ATTESTED_APP_ID="$(jq -er '.app_id | ltrimstr("0x") | ascii_downcase' cvm
 export COMPOSE_HASH="$(jq -j '.compose_file' attestation.json | sha256sum | cut -d' ' -f1)"
 export INSTANCE_ID="$("$KIT_DIR/deploy/phala-cvm.sh" instance-id attestation.json)"
 export GATEWAY_DOMAIN="$(jq -er '.gateway.base_domain' cvm.json)"
-curl -fsS "https://${INSTANCE_ID}-8090.$GATEWAY_DOMAIN/prpc/Info" > info.json
+curl -fsS "https://pay-api.phala.com/v1/attestation/info" > info.json
 EXPECTED_OS_IMAGE_HASH="$(cat "$ENV_DIR/os-image-hash")"
 "$KIT_DIR/deploy/verify-attestation.sh" attestation.json info.json "$APP_ID" "$UPGRADE_COMPOSE" service "$EXPECTED_OS_IMAGE_HASH"
 "$KIT_DIR/deploy/verify-ingress-evidence.sh" pay-api.phala.com "$APP_ID"
@@ -1014,7 +1014,7 @@ restore_drill() {
   "$KIT_DIR/deploy/phala" cvms get "$RESTORE_CVM_ID" --json > restore-cvm.json || return 1
   RESTORE_GATEWAY_DOMAIN="$(jq -er '.gateway.base_domain' restore-cvm.json)" || return 1
   export RESTORE_GATEWAY_DOMAIN
-  curl -fsS "https://${RESTORE_INSTANCE_ID}-8090.$RESTORE_GATEWAY_DOMAIN/prpc/Info" \
+  curl -fsS --max-time 30 --retry 20 --retry-delay 10 --retry-max-time 600 --retry-all-errors "https://${RESTORE_INSTANCE_ID}-8081.$RESTORE_GATEWAY_DOMAIN/v1/attestation/info" \
     > restore-info.json || return 1
   EXPECTED_OS_IMAGE_HASH="$(cat "$ENV_DIR/os-image-hash")" || return 1
   "$KIT_DIR/deploy/verify-attestation.sh" restore-attestation.json restore-info.json "$APP_ID" \
@@ -1070,7 +1070,7 @@ restore_drill() {
     > restore-attestation-final.json || return 1
   RESTORE_INSTANCE_ID="$("$KIT_DIR/deploy/phala-cvm.sh" instance-id restore-attestation-final.json)" || return 1
   export RESTORE_INSTANCE_ID
-  curl -fsS "https://${RESTORE_INSTANCE_ID}-8090.$RESTORE_GATEWAY_DOMAIN/prpc/Info" \
+  curl -fsS --max-time 30 --retry 20 --retry-delay 10 --retry-max-time 600 --retry-all-errors "https://${RESTORE_INSTANCE_ID}-8081.$RESTORE_GATEWAY_DOMAIN/v1/attestation/info" \
     > restore-info-final.json || return 1
   "$KIT_DIR/deploy/verify-attestation.sh" restore-attestation-final.json restore-info-final.json "$APP_ID" \
     restore-check.yml restore-check "$EXPECTED_OS_IMAGE_HASH" || return 1

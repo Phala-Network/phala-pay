@@ -11,6 +11,7 @@ services:
         target: /etc/product/config.json
     volumes:
       - ledger:/data
+    networks: [default, guest_info]
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     healthcheck:
@@ -20,6 +21,20 @@ services:
       retries: 3
       start_period: 30s
     stop_grace_period: 45s
+    restart: unless-stopped
+
+  # This process alone holds the guest socket. The product can call only GET /Info.
+  guest-info:
+    image: phala-pay
+    command: [topup, guest-info, serve]
+    networks: [guest_info]
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
+    pids_limit: 32
     restart: unless-stopped
 
   # The single public ingress, as in topup's compose (deploy/README.md, "Custom domain").
@@ -41,6 +56,10 @@ services:
       product:
         condition: service_started
     restart: unless-stopped
+
+networks:
+  guest_info:
+    internal: true
 
 volumes:
   ledger:

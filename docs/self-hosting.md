@@ -219,6 +219,7 @@ comes from a release.
    permissions:
      contents: read
      attestations: read
+     actions: read
    jobs:
      deploy:
        uses: Phala-Network/phala-pay/.github/workflows/deploy.yml@<the release's commit SHA> # v0.13.7
