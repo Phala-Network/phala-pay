@@ -120,7 +120,8 @@ printf 'private-test-token\\n' >&2
         cases = [(BASELINE, True), ({**BASELINE, 'init_script': []}, True),
                  ({**BASELINE, 'init_script': ['command']}, False)]
         cases += [({**BASELINE, 'manifest_version': version}, True) for version in [2, 3, '2']]
-        cases += [({**BASELINE, 'manifest_version': version}, False) for version in [None, True, 4, '03']]
+        cases += [({**BASELINE, 'manifest_version': version}, False)
+                  for version in [[3], ['3'], [2, 3], None, True, 4, '03']]
         for value, passes in cases:
             result = subprocess.run(['jq', '-e', '-L', str(self.deploy), 'include "compose-policy"; '
                 'base_app_violations(.; .) | length == 0'], input=json.dumps(value),

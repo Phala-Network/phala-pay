@@ -11,6 +11,16 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class KmsPolicyTests(unittest.TestCase):
+    def test_port_policy_rejects_array_variants_instead_of_matching_subarrays(self):
+        for variant in [['service'], ['service', 'restore-check'], []]:
+            with self.subTest(variant=variant):
+                result = subprocess.run(['jq', '-n', '-L', str(ROOT / 'deploy'),
+                    '--argjson', 'variant', json.dumps(variant),
+                    'include "compose-policy"; port_policy($variant)'],
+                    capture_output=True, text=True, check=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('unknown variant', result.stderr)
+
     def violations(self, kind, app, identity='3059'):
         result = subprocess.run(['jq', '-c', '-L', str(ROOT / 'deploy'), '--arg', 'kind', kind,
                                  '--arg', 'identity', identity,
