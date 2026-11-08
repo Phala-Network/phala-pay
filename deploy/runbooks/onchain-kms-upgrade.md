@@ -33,10 +33,22 @@ those pins. No private signing key belongs in GitHub or these files.
 Commit a complete `provision.json` request in the new environment directory. It holds the full
 initial `compose_file` (including explicit backend defaults, allowed env **names**, KMS provider
 pin, port policy and pre-launch script), `kms: "BASE"`, CVM name, instance type, OS image and a
-pinned `node_id` (or `teepod_id`). Set `prefer_dev: false`. It must contain no secret values or
+pinned physical node name in `node` (for example `"prod5"`, from `phala nodes ls --json`).
+Catalog numeric ids (`node_id` and `teepod_id`) are no longer accepted for initial provision.
+Set `prefer_dev: false`. It must contain no secret values or
 `encrypted_env`. Set `init_script` to `[]` or omit it; include the supported secure flags and
 exact allowed env-name set. Any backend-injected init command, extra key or changed flag causes
 refusal before a batch is produced. Backend defaults must be reviewed in the baseline. Resolve the selected node's gateway before preparing.
+
+The baseline describes the **stored/attested** compose. Pin `manifest_version` to the string
+`"3"` for the current backend; the current OpenAPI permits strings and integers, whereas the
+pinned SDK's compose parser still expects a number. The raw API path sends the reviewed type
+unchanged. Include both `gateway_enabled: true` and `tproxy_enabled: true` in that baseline.
+For the creation payload only, `provision-prepare` omits `tproxy_enabled`, following the pinned
+SDK's [gateway compatibility handling](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.1.22/js/src/actions/cvms/provision_cvm.ts#L280).
+Cloud rejects the deprecated alias on create and restores it in the final compose. Local hashing
+still includes it: this explicit request projection does not relax any returned hash or baseline
+check. Do not strip it from stored compose or upgrade requests. No other normalization is accepted.
 
 With `TOPUP_CVM_ID` unset, dispatch Deploy `prepare` with `gateway_domain` set to that node's
 `gateway.<base-domain>`. The workflow renders the compose and sets its reviewed pre-launch and
@@ -133,11 +145,27 @@ and [SDK commit](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.1.22/j
 `PATCH /cvms/{id}` with `X-Prepare-Only: true`, then `POST /cvms/{id}/commit-update` with
 `token`, `compose_hash`, `transaction_hash`. Initial provision uses `POST /cvms/provision`, then
 `POST /cvms` with receipt-derived app/contract and Safe deployer addresses. These are in the
-[published OpenAPI](https://github.com/Phala-Network/phala-docs/blob/main/openapi.json), operationIds
+[reviewed OpenAPI](https://github.com/Phala-Network/phala-docs/blob/c098ff18da4cb66a4691afa0979e210313a1b6c6/openapi.json), operationIds
 `update_cvm_endpoint_api_v1_cvms__cvm_id__patch`,
 `commit_cvm_update_api_v1_cvms__cvm_id__commit_update_post`,
-`handle_provision_cvm_api_v1_cvms_provision_post`, and
-`handle_create_cvm_from_povision_api_v1_cvms_post`. There is no documented `/compose_file/commit`.
+and `handle_create_cvm_api_v1_cvms_post`. The current create endpoint documents a same-path
+token flow and explicitly retains the legacy `POST /cvms/provision` → `POST /cvms` pair during
+its deprecation window; this kit uses that existing pair. Its prepare response now includes an
+optional token, which the legacy `app_id` + `compose_hash` commit does not use.
+There is no documented `/compose_file/commit`.
+
+At phala-docs commit `c098ff18da4cb66a4691afa0979e210313a1b6c6`, that create operation states:
+
+> The legacy pair (POST /cvms/provision then POST /cvms with app_id + compose_hash) keeps working during the deprecation window.
+
+Upstream gives **no deprecation end date** in that OpenAPI description. Continued support for
+this pair is an **open production-cutover risk**. Before production cutover, verify that it
+still works; follow up with a reviewed migration to `handle_create_cvm_api_v1_cvms_post`'s
+same-path prepare/token-commit flow. That migration is outside this schema-fix change.
+
+The initial `POST /cvms` payload still matches `CreateTappRequest`: receipt-derived `app_id`,
+`compose_hash`, `contract_address`, Safe `deployer_address`, reviewed `env_keys` and optional
+`kms_id`. Live commit acceptance remains a staging gate after Safe batch #1; prepare creates no CVM.
 
 ## OS changes and governance alerts
 

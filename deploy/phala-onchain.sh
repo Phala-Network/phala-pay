@@ -39,9 +39,10 @@ case "$command" in
         [[ $# == 3 ]] || fail "usage: phala-cvm.sh provision-prepare REQUEST_JSON OUT ENVIRONMENT_DIR"
         request=$1 output=$2 env_dir=$3
         load_environment
-        jq -e '.kms == "BASE" and (.node_id // .teepod_id | type == "number") and
+        jq -e '.kms == "BASE" and (.node | type == "string" and length > 0) and
+            (has("node_id") | not) and (has("teepod_id") | not) and
             (.compose_file | type == "object") and (has("encrypted_env") | not)' "$request" >/dev/null ||
-            fail "provision requires full compose_file, kms BASE, a pinned node and no encrypted_env"
+            fail "provision requires full compose_file, kms BASE, a pinned physical node name (node), no node_id/teepod_id and no encrypted_env"
         load_app_compose_baseline "$env_dir" "$output.baseline.json"
         jq '.compose_file' "$request" >"$output.request.json"
         check_baseline "$output.request.json" "$output.baseline.json"
@@ -49,11 +50,13 @@ case "$command" in
         violations=$(jq -r -L "$root" --arg identity "$identity" 'include "compose-policy";
             kms_violations("base"; .; $identity)[]' "$output.request.json")
         [[ -z "$violations" ]] || fail "$violations"
-        # Published OpenAPI: handle_provision_cvm_api_v1_cvms_provision_post.
+        # Current OpenAPI handle_create_cvm_api_v1_cvms_post still supports this legacy pair.
         # Construct from the reviewed baseline, carrying only the two reviewed render fields.
+        # SDK provisionCvm handleGatewayCompatibility omits the deprecated tproxy alias
+        # on create. Cloud stores it as true; keep it in the baseline/local hash checks.
         jq --slurpfile baseline "$output.baseline.json" '.compose_file as $render |
             .compose_file = ($baseline[0] | .docker_compose_file = $render.docker_compose_file |
-                .pre_launch_script = $render.pre_launch_script)' "$request" >"$output.provision-request.json"
+                .pre_launch_script = $render.pre_launch_script | del(.tproxy_enabled))' "$request" >"$output.provision-request.json"
         phala api /cvms/provision -X POST --input "$output.provision-request.json" >"$output"
         request=$output.request.json
         check_response
@@ -72,7 +75,7 @@ case "$command" in
         [[ -z "$app" || "${app,,}" == "${deployed,,}" ]] || fail "receipt app differs from committed dstack-app"
         "$root/verify-onchain-app.sh" "$deployed" "$safe" "$hash" "$device" >"$output.onchain.json"
         # Pinned CLI src/commands/deploy/index.ts hI: commitCvmProvision after deployAppAuth.
-        # OpenAPI: handle_create_cvm_from_povision_api_v1_cvms_post (CreateTappRequest).
+        # OpenAPI: handle_create_cvm_api_v1_cvms_post accepts legacy CreateTappRequest.
         jq --arg app "${deployed#0x}" --arg contract "$deployed" --arg safe "$safe" \
             --slurpfile request "$request" '{app_id: $app, compose_hash, kms_id,
                 contract_address: $contract, deployer_address: $safe,

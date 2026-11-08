@@ -17,7 +17,7 @@ def check(ok; message): if ok then empty else message end;
 # service's app-compose, so restore-check inherits its PROXY-on policy for 443. Nothing listens
 # on 443 there; only plain HTTP on 8081 is published. Template and product keep PROXY off.
 def port_policy($variant):
-    if (["service", "restore-check", "template", "product", "export", "migration-import"] | index($variant)) != null then
+    if ($variant | IN("service", "restore-check", "template", "product", "export", "migration-import")) then
         {ports: [{port: 443, pp: ($variant == "service" or $variant == "restore-check" or $variant == "export" or $variant == "migration-import")}], restrict_mode: false}
     else error("unknown variant \($variant)") end;
 
@@ -477,7 +477,7 @@ def base_app_violations($app; $baseline):
         $app.public_tcbinfo == true and $app.secure_time == true and
         $app.gateway_enabled == true and $app.tproxy_enabled == true and
         $app.storage_fs == "ext4" and $app.runner == "docker-compose" and
-        ($app.manifest_version == 2 or $app.manifest_version == 3) and
+        ($app.manifest_version | IN(2, 3, "2", "3")) and
         $app.features == ["kms", "tproxy-net"];
         "Base app-compose flags must match the supported secure configuration"),
      check(($app.allowed_envs | type == "array" and all(type == "string") and length == (unique | length));

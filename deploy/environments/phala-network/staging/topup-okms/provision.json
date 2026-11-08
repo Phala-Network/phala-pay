@@ -4,7 +4,7 @@
   "disk_size": 20,
   "image": "dstack-0.6.1",
   "prefer_dev": false,
-  "node_id": 26,
+  "node": "prod5",
   "kms": "BASE",
   "listed": false,
   "compose_file": {
@@ -24,7 +24,7 @@
     "init_script": [],
     "kms_enabled": true,
     "local_key_provider_enabled": false,
-    "manifest_version": 3,
+    "manifest_version": "3",
     "name": "",
     "no_instance_id": false,
     "port_policy": {

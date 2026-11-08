@@ -14,6 +14,13 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Fixed
+
+- Initial Base KMS provisioning follows Phala Cloud's current schema: pin the physical node
+  name, omit the deprecated gateway alias only in the creation payload, and review the stored
+  string manifest version. Full local compose hashing still rejects any unexplained backend
+  normalization before producing a Safe batch. Existing Phala KMS deployment paths are unchanged.
+
 ## [0.13.8] - 2026-11-07
 
 ### Fixed

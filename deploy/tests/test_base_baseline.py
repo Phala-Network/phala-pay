@@ -17,7 +17,7 @@ BASELINE = {
     'key_provider_id': '3059', 'local_key_provider_enabled': False, 'no_instance_id': False,
     'public_logs': False, 'public_sysinfo': False, 'public_tcbinfo': True, 'secure_time': True,
     'gateway_enabled': True, 'tproxy_enabled': True, 'storage_fs': 'ext4', 'runner': 'docker-compose',
-    'manifest_version': 3, 'features': ['kms', 'tproxy-net'],
+    'manifest_version': '3', 'features': ['kms', 'tproxy-net'],
     'port_policy': {'ports': [{'port': 443, 'pp': True}], 'restrict_mode': False},
 }
 MUTATIONS = {
@@ -71,7 +71,7 @@ esac
                 altered = {**BASELINE, **mutation}
                 self.current.write_text(json.dumps(altered))
                 provision = self.tmp / 'provision.json'
-                provision.write_text(json.dumps({'kms': 'BASE', 'node_id': 26, 'compose_file': altered}))
+                provision.write_text(json.dumps({'kms': 'BASE', 'node': 'prod5', 'compose_file': altered}))
                 for mode in ['provision-prepare', 'compose-prepare']:
                     output = self.tmp / (mode + '.json')
                     args = [provision, output, self.environment] if mode == 'provision-prepare' else [
@@ -117,12 +117,119 @@ printf 'private-test-token\\n' >&2
         self.assertEqual(json.loads(result.stdout), {'status': 'in_progress', 'correlation_id': 'fixture-id'})
 
     def test_policy_accepts_exact_baseline_but_forbids_init_commands_even_in_a_baseline(self):
-        for value, passes in [(BASELINE, True), ({**BASELINE, 'init_script': []}, True),
-                              ({**BASELINE, 'init_script': ['command']}, False)]:
+        cases = [(BASELINE, True), ({**BASELINE, 'init_script': []}, True),
+                 ({**BASELINE, 'init_script': ['command']}, False)]
+        cases += [({**BASELINE, 'manifest_version': version}, True) for version in [2, 3, '2']]
+        cases += [({**BASELINE, 'manifest_version': version}, False)
+                  for version in [[3], ['3'], [2, 3], None, True, 4, '03']]
+        for value, passes in cases:
             result = subprocess.run(['jq', '-e', '-L', str(self.deploy), 'include "compose-policy"; '
                 'base_app_violations(.; .) | length == 0'], input=json.dumps(value),
                 capture_output=True, text=True, check=False)
             self.assertEqual(result.returncode == 0, passes, result.stderr)
+
+    def prepare_fixture(self, **selection):
+        """Run real hashing/calldata against Cloud's create/stored schema boundary."""
+        tools = self.deploy / 'tools'
+        tools.mkdir()
+        shutil.copy2(ROOT / 'deploy/tools/onchain-kms.mjs', tools)
+        (tools / 'node_modules').symlink_to(ROOT / 'deploy/tools/node_modules', target_is_directory=True)
+        bin_dir = self.tmp / 'bin'
+        bin_dir.mkdir()
+        node = bin_dir / 'node'
+        node.write_text('''#!/bin/sh
+case "$2" in
+  identity) printf '3059\\n' ;;
+  deployment) printf '%s\\n' "$FIXTURE_DEPLOYED_APP" ;;
+  *) exec "$FIXTURE_NODE" "$@" ;;
+esac
+''')
+        node.chmod(0o755)
+        self.env.update(PATH=str(bin_dir) + ':' + self.env['PATH'], FIXTURE_NODE=shutil.which('node'),
+                        FIXTURE_DEPLOYED_APP=APP, FIXTURE_CALLS=str(self.tmp / 'calls.json'))
+        phala = self.deploy / 'phala'
+        phala.write_text('''#!/usr/bin/env python3
+import hashlib
+import json
+import os
+from pathlib import Path
+import sys
+assert sys.argv[1] == 'api' and sys.argv[3:6] == ['-X', 'POST', '--input']
+payload = json.loads(Path(sys.argv[6]).read_text())
+Path(os.environ['FIXTURE_CALLS']).write_text(json.dumps({'path': sys.argv[2], 'body': payload}))
+if sys.argv[2] == '/cvms/provision':
+    assert payload['node'] == 'prod5' and 'node_id' not in payload and 'teepod_id' not in payload
+    app = payload['compose_file']
+    assert app['gateway_enabled'] is True and 'tproxy_enabled' not in app
+    # Current Cloud creates a string manifest version and the legacy gateway alias.
+    app.update(manifest_version=str(app['manifest_version']), tproxy_enabled=True)
+    app.update(json.loads(os.environ.get('FIXTURE_NORMALIZATION', '{}')))
+    raw = json.dumps(app, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+    print(json.dumps({'compose_hash': hashlib.sha256(raw.encode()).hexdigest(), 'compose_file': raw,
+        'device_id': 'cd' * 32, 'kms_info': {'chain_id': 8453,
+        'kms_contract_address': '0x2f83172A49584C017F2B256F0FB2Dca14126Ba9C'}}))
+elif sys.argv[2] == '/cvms':
+    print('{}')
+else:
+    raise SystemExit('unexpected Cloud call')
+''')
+        phala.chmod(0o755)
+        self.provision = self.tmp / 'provision.json'
+        self.provision.write_text(json.dumps({'kms': 'BASE', 'compose_file': BASELINE, **selection}))
+        self.prepared = self.tmp / 'prepare.json'
+
+    def test_initial_provision_projects_only_gateway_alias_and_keeps_exact_hash_and_factory_batch(self):
+        self.prepare_fixture(node='prod5')
+        result = self.run_script(self.deploy / 'phala-cvm.sh', 'provision-prepare',
+                                 self.provision, self.prepared, self.environment)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        wire = json.loads((self.tmp / 'calls.json').read_text())['body']
+        self.assertEqual(wire['compose_file'], {k: v for k, v in BASELINE.items() if k != 'tproxy_enabled'})
+        self.assertEqual(json.loads(Path(str(self.prepared) + '.request.json').read_text()), BASELINE)
+        batch = json.loads(Path(str(self.prepared) + '.batch.json').read_text())
+        self.assertEqual(batch['chainId'], '8453')
+        self.assertEqual(batch['transactions'][0]['to'], '0x2f83172A49584C017F2B256F0FB2Dca14126Ba9C')
+        self.assertTrue(batch['transactions'][0]['data'].startswith('0x8618169d'))
+        self.assertTrue(batch['transactions'][0]['data'].endswith(
+            'cd' * 32 + json.loads(self.prepared.read_text())['compose_hash']))
+
+    def test_initial_provision_refuses_legacy_missing_empty_or_non_string_node_selection(self):
+        self.prepare_fixture()
+        for selection in [{}, {'node_id': 26}, {'teepod_id': 26}, {'node': ''}, {'node': 26},
+                          {'node': 'prod5', 'node_id': None}, {'node': 'prod5', 'teepod_id': 26}]:
+            with self.subTest(selection=selection):
+                self.provision.write_text(json.dumps({'kms': 'BASE', 'compose_file': BASELINE, **selection}))
+                result = self.run_script(self.deploy / 'phala-cvm.sh', 'provision-prepare',
+                                         self.provision, self.prepared, self.environment)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('pinned physical node name', result.stderr)
+                self.assertFalse((self.tmp / 'calls.json').exists())
+
+    def test_initial_provision_refuses_all_unreviewed_backend_normalization_before_batch(self):
+        self.prepare_fixture(node='prod5')
+        for mutation in [*MUTATIONS.values(), {'tproxy_enabled': False}, {'manifest_version': 3}]:
+            with self.subTest(mutation=mutation):
+                self.env['FIXTURE_NORMALIZATION'] = json.dumps(mutation)
+                result = self.run_script(self.deploy / 'phala-cvm.sh', 'provision-prepare',
+                                         self.provision, self.prepared, self.environment)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('compose hash differs', result.stderr)
+                self.assertFalse(Path(str(self.prepared) + '.batch.json').exists())
+
+    def test_initial_commit_retains_current_create_tapp_request_shape(self):
+        self.prepare_fixture(node='prod5')
+        result = self.run_script(self.deploy / 'phala-cvm.sh', 'provision-prepare',
+                                 self.provision, self.prepared, self.environment)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        verify = self.deploy / 'verify-onchain-app.sh'
+        verify.write_text('#!/bin/sh\nexit 0\n')
+        verify.chmod(0o755)
+        result = self.run_script(self.deploy / 'phala-cvm.sh', 'provision-commit',
+                                 '0x' + 'ab' * 32, self.prepared, self.environment)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads((self.tmp / 'calls.json').read_text()), {'path': '/cvms', 'body': {
+            'app_id': APP[2:], 'compose_hash': json.loads(self.prepared.read_text())['compose_hash'],
+            'contract_address': APP, 'deployer_address': SAFE, 'env_keys': BASELINE['allowed_envs']}})
 
     def test_each_injected_field_is_rejected_after_quote_replay_at_attestation(self):
         scripts = {
