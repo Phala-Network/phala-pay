@@ -21,7 +21,7 @@ Read-only Cloud metadata on November 6, 2026 (PST) confirmed:
 |---|---|
 | Old staging CVM UUID | `1b4460dd-8f32-4851-a1f9-2852c213e4b0` |
 | Old app id | `95174fcad739ae76c7510dc1b2bc00a32e25c644` |
-| Pinned node | `26` (`prod5`, US-WEST-1) |
+| Pinned physical node name | `prod5` (catalog id `26`, US-WEST-1) |
 | Current device id | `c4691f9c88f44e05cbc45521678e72b99fcd54fa35d302f13e8f9fa9727f33a6` |
 | Gateway | `gateway.dstack-pha-prod5.phala.network` |
 | Resources | `tdx.medium`, 2 vCPU, 4 GiB RAM, 20 GiB disk |
@@ -34,7 +34,7 @@ recorded old device for that check. The read-only `/teepods/available` response 
 `support_onchain_kms: true` for node 26 and Base KMS support for `dstack-0.6.1`. Actual new-app
 boot and a measured standby device remain rehearsal gates. No standby device is guessed here.
 
-`provision.json` is the full reviewed request, pinned to node 26, the same OS/resources,
+`provision.json` is the full reviewed request, pinned with `node: "prod5"`, the same OS/resources,
 `prefer_dev: false`, `kms: BASE`, and non-public listing. Its `compose_file` is also the sole
 app-compose baseline. It contains the v0.13.7 **no-overlay service render** for this gateway and
 the kit's exact pre-launch script; Deploy replaces only those two rendered fields for import.
@@ -43,12 +43,18 @@ runner, features and the **exact current staging sealed-name set**. Base's `key_
 and `key_provider_id` were read using `node deploy/tools/onchain-kms.mjs identity`, which checks
 the pinned KmsAuth implementation before reading its public CA identity.
 
-The old Phala app returns `manifest_version: "3"` as a string. This new baseline deliberately
-uses **numeric `3`**, as required by the pinned SDK schema and `base_app_violations` policy.
-Backend normalization is a staging rehearsal gate: if the new Base app stores or returns `"3"`
-as a string, preparation fails closed **before a Safe batch is produced**. Resolve this with a
-reviewed code or baseline change; never hand-edit the request during the rehearsal or accept an
-unexplained backend field/default. See the [upstream provisioning schema](https://github.com/Phala-Network/phala-docs/blob/361e6c6/openapi.json)
+The baseline pins the stored `manifest_version: "3"` string; the current OpenAPI accepts both
+strings and integers, and the staging prepare response serializes it as a string. The raw API
+call preserves that type instead of using the pinned SDK's older numeric-only compose parser.
+Node selection uses the physical name `node`; `node_id` and `teepod_id` are rejected.
+
+The stored/attested baseline includes both `gateway_enabled: true` and its legacy
+`tproxy_enabled: true` alias. Initial provisioning omits **only** `tproxy_enabled` on the wire,
+matching the pinned SDK's `provisionCvm` compatibility handling: Cloud rejects that alias on
+create but includes it in the final compose. Local hashing still includes the alias, so the
+entire returned hash must match the reviewed stored shape **before a Safe batch is produced**.
+No other field or type normalization is accepted. Never hand-edit the request during rehearsal
+or accept an unexplained backend field/default. See the [upstream provisioning schema](https://github.com/Phala-Network/phala-docs/blob/c098ff18da4cb66a4691afa0979e210313a1b6c6/openapi.json)
 and the [Base provisioning rules](../../../../runbooks/onchain-kms-upgrade.md#initial-provisioning).
 
 To reproduce the baseline's render fields, use verified v0.13.7 `images.json` and kit scripts:

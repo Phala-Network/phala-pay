@@ -477,7 +477,7 @@ def base_app_violations($app; $baseline):
         $app.public_tcbinfo == true and $app.secure_time == true and
         $app.gateway_enabled == true and $app.tproxy_enabled == true and
         $app.storage_fs == "ext4" and $app.runner == "docker-compose" and
-        ($app.manifest_version == 2 or $app.manifest_version == 3) and
+        ([2, 3, "2", "3"] | index($app.manifest_version)) != null and
         $app.features == ["kms", "tproxy-net"];
         "Base app-compose flags must match the supported secure configuration"),
      check(($app.allowed_envs | type == "array" and all(type == "string") and length == (unique | length));

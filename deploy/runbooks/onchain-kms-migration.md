@@ -95,10 +95,15 @@ mkdir -p "$EVIDENCE"
 3. **T-1: review the new environment.** Commit `NEW_ENV/topup.yaml` and `compose.yaml`, retaining
    routes, admin/maintenance public keys, public origin and ingress domain. Change WAL-G's
    `WALG_S3_PREFIX` on both postgres and backup to the new empty prefix. Commit `kms` containing
-   `base`, `dstack-owner`, `os-image-hash`, a complete `provision.json` with a pinned node and
+   `base`, `dstack-owner`, `os-image-hash`, a complete `provision.json` with a pinned physical
+   node name (`node: "prod5"` for the prepared staging environment, never `node_id`/`teepod_id`) and
    reviewed full `compose_file` baseline (optionally `app-compose.json`), following
    [initial provisioning](onchain-kms-upgrade.md#initial-provisioning). Review all backend
-   defaults; never accept unexplained normalization. `dstack-app` is committed after batch #1.
+   defaults, including the stored string `manifest_version: "3"` and both gateway flags.
+   Initial prepare omits the deprecated `tproxy_enabled` alias only in the creation payload;
+   its restored value must still match the baseline's full local hash. Never accept unexplained
+   normalization. `dstack-app` is committed after batch #1. Prepare alone creates no CVM;
+   live `CreateTappRequest`/Safe-deployer acceptance is checked only after batch #1.
    Create and review the import plan (the `object` is a prefix, not an archive filename):
 
    ```sh
