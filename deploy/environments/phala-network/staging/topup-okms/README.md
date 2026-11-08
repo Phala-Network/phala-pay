@@ -75,8 +75,8 @@ and their exact rendered composes before use. No secret values belong in these f
 | File / field | Current value | How it is filled |
 |---|---|---|
 | `migration-import.json` / `source_app_id` | Recorded old app id | Read old CVM metadata; verify old service attestation at T-1 |
-| `migration-import.json` / `export_public_key` | `T1_VERIFIED_EXPORT_PUBLIC_KEY` | Nonce-challenged old admin export-key endpoint, verified by `verify_key_evidence export` |
-| Both plans / `object` | `T1_MIGRATION_OBJECT_PREFIX` | New unique `s3://crypto-topup-test/...` prefix for this attempt |
+| `migration-import.json` / `export_public_key` | Filled November 7, 2026 (PST), verified | Nonce-challenged old admin export-key endpoint, verified by `verify_key_evidence export` |
+| Both plans / `object` | Import: `s3://crypto-topup-test/staging-okms1-migration-20261108` (verified empty); export: `T1_MIGRATION_OBJECT_PREFIX` | New unique `s3://crypto-topup-test/...` prefix for this attempt |
 | `../topup/migration-export.json` / `recipient` | `T1_VERIFIED_IMPORT_RECIPIENT` | New import's public `recipient.json`, verified by `verify_key_evidence import` |
 | `dstack-app` (absent) | Produced after batch #1 | Commit the new address from KmsAuth's verified `AppDeployedViaFactory` receipt |
 

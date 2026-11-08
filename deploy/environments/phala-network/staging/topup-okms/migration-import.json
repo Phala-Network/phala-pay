@@ -1,7 +1,7 @@
 {
   "migration_import": {
     "source_app_id": "95174fcad739ae76c7510dc1b2bc00a32e25c644",
-    "export_public_key": "T1_VERIFIED_EXPORT_PUBLIC_KEY",
-    "object": "T1_MIGRATION_OBJECT_PREFIX"
+    "export_public_key": "6527b7eff1c5f6d985f03280c55758ddafc01cc4c20fe6eda778c51183039b56",
+    "object": "s3://crypto-topup-test/staging-okms1-migration-20261108"
   }
 }
