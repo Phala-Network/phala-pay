@@ -14,6 +14,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+## [0.13.9] - 2026-11-08
+
 ### Fixed
 
 - Initial Base KMS provisioning follows Phala Cloud's current schema: pin the physical node
@@ -2700,7 +2702,8 @@ happens only from two-provider finalized data.
   events were held for up to an hour at a time. A notice's outcome now neither cools nor clears
   the endpoint.
 
-[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.13.8...HEAD
+[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.13.9...HEAD
+[0.13.9]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.9
 [0.13.8]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.8
 [0.13.7]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.7
 [0.13.6]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.6
