@@ -32,8 +32,10 @@ grep -q 'exceeded its deadline' "$tmp/out"
 [[ $(tool_error "$tmp/pull.err") == *call_status=124* ]]
 echo 'silent anonymous pull expires with preserved diagnostics'
 # macOS coreutils exposes gtimeout instead of timeout; exercise that executable lookup.
+# A wrapper, not a symlink: multicall coreutils (uutils, Ubuntu 26.04) dispatch on argv[0].
 mkdir "$tmp/only-gtimeout"
-ln -s "$(command -v timeout)" "$tmp/only-gtimeout/gtimeout"
+printf '#!/bin/sh\nexec %q "$@"\n' "$(command -v timeout)" >"$tmp/only-gtimeout/gtimeout"
+chmod +x "$tmp/only-gtimeout/gtimeout"
 (
     export PATH="$tmp/only-gtimeout"
     stage_start macos-timeout 1
