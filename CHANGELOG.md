@@ -14,6 +14,12 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Fixed
+
+- The daily Base KMS governance monitor no longer fails on other tenants registering apps on
+  the shared KmsAuth (`AppRegistered`); KmsAuth governance and the configured apps' own events
+  are still reported.
+
 ## [0.13.9] - 2026-11-08
 
 ### Fixed

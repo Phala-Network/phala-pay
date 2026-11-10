@@ -178,8 +178,9 @@ special operation requires operator rehearsal; do not fall back to the Phala-onl
 Verify contracts scans the real Base KmsAuth and configured apps every day using a keyless RPC.
 ComposeHashAdded/Removed, DeviceAdded/Removed, AllowAnyDeviceSet, UpgradesDisabled,
 RequireTcbUpToDateSet, owner and implementation events fail the job for review, including expected
-changes. KmsAuth monitoring also includes AppRegistered, GatewayAppIdSet, OS-image, KMS-MR,
-KMS-device, KMS-info and app-implementation events. Each topic is tested against recorded
+changes. KmsAuth monitoring also includes GatewayAppIdSet, OS-image, KMS-MR, KMS-device,
+KMS-info and app-implementation events. It omits AppRegistered: the KmsAuth is shared, so every
+tenant's new app emits it; the configured apps' own events are monitored directly. Each topic is tested against recorded
 bytecode of the pinned deployed implementation; those implementations do not emit the newer
 upstream PolicyChanged event.
 The report includes transaction hashes and raw topics/data. Its 45,000-block window overlaps

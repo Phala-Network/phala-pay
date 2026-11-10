@@ -110,8 +110,9 @@ export async function deployment(c, tx, safe) {
 export const appEvents = ['ComposeHashAdded(bytes32)', 'ComposeHashRemoved(bytes32)',
   'DeviceAdded(bytes32)', 'DeviceRemoved(bytes32)', 'AllowAnyDeviceSet(bool)', 'UpgradesDisabled()',
   'RequireTcbUpToDateSet(bool)', 'OwnershipTransferred(address,address)', 'Upgraded(address)'];
+// Not AppRegistered: the shared KmsAuth emits it for every tenant's app. Our apps are watched directly.
 export const kmsEvents = ['OwnershipTransferred(address,address)', 'Upgraded(address)',
-  'AppRegistered(address)', 'GatewayAppIdSet(string)', 'OsImageHashAdded(bytes32)',
+  'GatewayAppIdSet(string)', 'OsImageHashAdded(bytes32)',
   'OsImageHashRemoved(bytes32)', 'KmsAggregatedMrAdded(bytes32)', 'KmsAggregatedMrRemoved(bytes32)',
   'AppImplementationSet(address)', 'KmsInfoSet(bytes)', 'KmsDeviceAdded(bytes32)', 'KmsDeviceRemoved(bytes32)'];
 export async function monitor(c, apps, from, to) {
