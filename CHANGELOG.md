@@ -16,6 +16,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Fixed
 
+- Migration import/export can boot with Base KMS on dstack: the private tmpfs holder now
+  allows 64 MiB of memory so container initialization does not exceed its former 8 MiB limit.
 - The daily Base KMS governance monitor no longer fails on other tenants registering apps on
   the shared KmsAuth (`AppRegistered`); KmsAuth governance and the configured apps' own events
   are still reported.
