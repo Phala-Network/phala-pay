@@ -14,6 +14,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+## [0.13.10] - 2026-11-10
+
 ### Fixed
 
 - Migration import/export can boot with Base KMS on dstack: the private tmpfs holder now
@@ -2710,7 +2712,8 @@ happens only from two-provider finalized data.
   events were held for up to an hour at a time. A notice's outcome now neither cools nor clears
   the endpoint.
 
-[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.13.9...HEAD
+[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.13.10...HEAD
+[0.13.10]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.10
 [0.13.9]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.9
 [0.13.8]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.8
 [0.13.7]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.7
