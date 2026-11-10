@@ -60,6 +60,8 @@ jq -n '{migration_import: {source_app_id: ("a" * 40), export_public_key: ("b" * 
 for migration_variant in export migration-import; do
     "$compose" -f "$tmp/$migration_variant.yml" config --no-interpolate --format json \
         >"$tmp/$migration_variant.json"
+    jq -e '.services["migration-holder"].mem_limit == "64m"' "$tmp/$migration_variant.json" >/dev/null ||
+        fail "$migration_variant holder must allow 64 MiB for container initialization"
 done
 # Exercise the prepared Base directory with public test pins; committed T-1 placeholders
 # deliberately cannot render. Its source app id remains the reviewed staging value.

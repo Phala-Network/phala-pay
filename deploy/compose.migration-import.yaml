@@ -12,7 +12,8 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    mem_limit: 8m
+    # Container-init and page-cache charges exceed 8 MiB on dstack; keep startup headroom.
+    mem_limit: 64m
     pids_limit: 8
     volumes:
       - migration:/run/migration
