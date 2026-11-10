@@ -14,6 +14,11 @@ destination_start=""
 support() { "$compose" -p "$project-support" -f "$tmp/support.json" "$@"; }
 source_stack() { "$compose" -p "$project-source" -f "$tmp/source.yaml" -f "$tmp/source-tls.json" -f "$tmp/source-sockets.yaml" "$@"; }
 destination_stack() { "$compose" -p "$project-destination" -f "$tmp/destination.yaml" -f "$tmp/destination-tls.json" -f "$tmp/destination-sockets.yaml" "$@"; }
+wait_successfully() {
+    local container
+    container=$("$1" ps --all --quiet "$2")
+    [[ "$(docker wait "$container")" == 0 ]]
+}
 cleanup() {
     if [[ -n "$destination_start" ]] && jobs -pr | rg -qx "$destination_start"; then
         kill -TERM "$destination_start" 2>/dev/null || true
@@ -79,13 +84,13 @@ done
 # Deliberate late write: metadata and pg_dump must still agree on the earlier exported snapshot.
 source_stack exec -T postgres psql -U postgres -d topup -v ON_ERROR_STOP=1 -qc 'INSERT INTO heartbeat DEFAULT VALUES'
 source_stack up -d export
-source_stack wait export
+wait_successfully source_stack export
 if ! wait "$destination_start"; then
     cat "$tmp/destination-start.log" >&2
     exit 1
 fi
 destination_start=""
-destination_stack wait migrate
+wait_successfully destination_stack migrate
 [[ "$(destination_stack exec -T postgres psql -U postgres -d topup -XAtqc 'SELECT count(*) FROM heartbeat')" == 1 ]]
 [[ "$(destination_stack exec -T postgres psql -U postgres -d topup -XAtqc 'SELECT count(*) FROM topup_migration.imported')" == 1 ]]
 [[ "$(destination_stack exec -T postgres psql -U postgres -d topup -XAtqc "SELECT timeline_id = ('x' || left(pg_walfile_name(pg_current_wal_insert_lsn()), 8))::bit(32)::bigint FROM restore_timeline")" == t ]]
@@ -113,7 +118,7 @@ destination_stack exec -T postgres psql -U postgres -d topup -v ON_ERROR_STOP=1 
 support stop s3-tls
 destination_stack down
 destination_stack up -d migrate
-destination_stack wait migrate
+wait_successfully destination_stack migrate
 [[ "$(destination_stack exec -T postgres psql -U postgres -d topup -XAtqc 'SELECT count(*) FROM heartbeat')" == 2 ]]
 [[ "$(destination_stack exec -T postgres psql -U postgres -d topup -XAtqc 'SELECT count(*) FROM topup_migration.imported')" == 1 ]]
 echo 'rendered compose export/import, snapshot consistency, private tmpfs handoffs and reboot gates passed'
