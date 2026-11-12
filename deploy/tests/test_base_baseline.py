@@ -97,6 +97,10 @@ esac
         Path(str(prepared) + '.request.json').write_text(json.dumps(BASELINE))
         phala = self.deploy / 'phala'
         phala.write_text("""#!/bin/sh
+if [ "$1 $2" = "cvms get" ]; then
+    printf '%s\\n' '{"status":"running","in_progress":false}'
+    exit 0
+fi
 printf '%s\\n' '{"status":"in_progress","correlation_id":"fixture-id","token":"private-test-token"}'
 printf 'private-test-token\\n' >&2
 """)

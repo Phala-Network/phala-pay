@@ -153,13 +153,13 @@ case "$command" in
         [[ "${hash#0x}" == "${expected_hash#0x}" ]] || fail "commit hash differs from prepared hash"
         "$root/verify-onchain-app.sh" "$app" "$safe" "$hash" "$device" >"$output.onchain.json"
         if [[ "$tx" != already-registered ]]; then kms receipt "$tx" >/dev/null; fi
+        phala cvms get "$cvm_id" --json >"$output.commit-cvm.json"
+        jq -e '.in_progress == false and (.status == "running" or .status == "stopped")' \
+            "$output.commit-cvm.json" >/dev/null || fail "CVM must be running or stopped with no operation in progress"
         if jq -e '.no_op == true' "$output" >/dev/null; then
-            phala cvms get "$cvm_id" --json >"$output.commit-cvm.json"
             phala api "/cvms/$cvm_id/compose_file" >"$output.commit-compose.json"
             kms check-hash "$output.commit-compose.json" "$output" >/dev/null
             kms check-hash "$request" "$output.commit-cvm.json" >/dev/null
-            jq -e '.in_progress == false and (.status == "running" or .status == "stopped")' \
-                "$output.commit-cvm.json" >/dev/null || fail "unchanged CVM must be running or stopped with no operation in progress"
             if jq -e '.status == "stopped"' "$output.commit-cvm.json" >/dev/null; then
                 phala cvms start "$cvm_id" --json >"$output.start-response.json"
             fi
@@ -184,6 +184,13 @@ case "$command" in
                 (.correlation_id | test("^[A-Za-z0-9_-]{1,100}$")) then .correlation_id else null end)}' \
             "$output.commit-response.json" 2>"$output.commit-parse-error.txt" ||
             fail "Cloud commit-update returned an invalid response"
+        if jq -e '.status == "stopped"' "$output.commit-cvm.json" >/dev/null; then
+            "$root/phala-cvm.sh" wait --unsealed --compose-hash "$hash" "$cvm_id" >"$output.applied-cvm.json"
+            jq -e '.status == "stopped" and .in_progress == false' "$output.applied-cvm.json" >/dev/null ||
+                fail "updated CVM must settle stopped with no operation in progress before start"
+            stage_start onchain-start 60
+            phala cvms start "$cvm_id" --json >"$output.start-response.json"
+        fi
         ;;
     *) fail "unknown onchain command" ;;
 esac

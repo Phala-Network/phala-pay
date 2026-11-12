@@ -481,8 +481,7 @@ echo 'certificate evidence verified'
         self.assertFalse(any(call[0] == "maintenance" for call in self.calls()))
 
     def test_other_upgrades_still_require_a_successful_pause(self):
-        for mode, variant in (("upgrade", "service"), ("upgrade", "export"),
-                              ("commit", "service"), ("commit", "migration-import")):
+        for mode, variant in (("upgrade", "service"), ("upgrade", "export"), ("commit", "service")):
             with self.subTest(mode=mode, variant=variant):
                 (self.tmp / "cli.jsonl").unlink(missing_ok=True)
                 self.env.update(MODE=mode, VARIANT=variant, STUB_PAUSE_STATUS="42")
@@ -492,6 +491,17 @@ echo 'certificate evidence verified'
                 self.assertEqual(result.returncode, 42, result.stdout + result.stderr)
                 self.assertEqual([call[0] for call in self.calls()], ["maintenance"])
                 self.assertFalse((self.tmp / "output").exists())
+
+    def test_import_render_does_not_extract_a_domain_from_an_ingressless_compose(self):
+        render = self.kit / "deploy/render.sh"
+        render.write_text('#!/bin/sh\nprintf "services: {}\\n"\n')
+        render.chmod(0o755)
+        self.env.update(VARIANT="migration-import", MIGRATION_PLAN="migration.json", GATEWAY="gateway.example.invalid")
+        result = self.run_step("Render the environment with the release's kit and images")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("PUBLIC_URL=\n", (self.tmp / "env").read_text())
+        self.assertIn("DOMAIN=\n", (self.tmp / "env").read_text())
+        self.assertIn("no API or ingress", (self.tmp / "summary").read_text())
 
     def test_service_source_cannot_claim_to_be_the_reviewed_export(self):
         self.prepare_rollback()

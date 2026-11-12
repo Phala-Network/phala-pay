@@ -98,9 +98,15 @@ deploy/phala-cvm.sh provision-commit "$TRANSACTION_HASH" prepare.json "$ENVIRONM
    both proxy pins **before pausing**. A transaction receipt check establishes success only;
    separate state reads establish the expected owner, approved hash/device and proxy pins. It
    re-verifies policy after pausing and applies the update with the supported ordinary PATCH,
-   or token commit when preparation produced a token. The remaining path is wait → stored
-   full-compose hash check → attestation/health verification → resume → TLS evidence. Read all evidence
-   before declaring acceptance.
+   or token commit when preparation produced a token. A fresh Cloud read immediately before
+   applying must report `in_progress: false` and `running` or `stopped`. If it reports exactly
+   `stopped`, commit waits up to 900 seconds for the approved apply to settle with the target
+   compose hash and `in_progress: false`, requires the settled state to remain `stopped`, then
+   starts the CVM using
+   `phala cvms start CVM_ID --json` (the supported `POST /cvms/{id}/start` operation), then follows
+   the same verification path. An update alone does not start a stopped CVM. The remaining path
+   is wait → stored full-compose hash check → attestation/health verification → resume → TLS
+   evidence. Read all evidence before declaring acceptance.
 4. Keep N-1 approved. Rollback selects its release/configuration, prepares it, and commits with
    `transaction_hash: already-registered`. State checks still run; no Safe signature is needed
    for an approved hash and device. Never run another writer against the same backup prefix.
@@ -119,7 +125,7 @@ the same operator rule. Do not run another CLI or workflow against that app conc
 An unexpected 2xx prepare response fails with an instruction to stop, inspect the stored compose
 and attestation, and run `commit` to verify: the update may already have happened without a pause.
 
-An unchanged compose (`no_op: true`) still goes through full acceptance. A settled running CVM
+An unchanged service compose (`no_op: true`) still goes through full acceptance. A settled running CVM
 keeps the maintenance pause and needs no start. If a fresh read reports exactly `stopped` with
 `in_progress: false`, the workflow re-verifies the stored full hash and owner/hash/device/proxy
 policy, skips the unreachable maintenance API, and starts only the already-stored approved
@@ -146,8 +152,18 @@ failure before fencing still attempts the normal lease cleanup.
 
 Export keeps the old service's allowed env names (AWS, Sentry and RPC keys) without re-sealing;
 its compose may reference only its declared AWS names. That retained-name exception applies
-only to export. Migration import keeps the service ingress and ordinary acceptance checks.
-The PR 2 render/policy/tooling changes are required before either variant can deploy.
+only to export. Migration import has no API, ingress or public origin. Deploy never pauses,
+resumes, monitors or probes the old service URL for an import deployment, and prints no DNS
+records or service health/TLS acceptance instructions for it. On initial and existing-CVM
+import commits, the stored-hash check (for an existing CVM) precedes `--partial` attestation
+verification: quote, event log, app id, compose hash and the measured OS claim. This is not full
+OS/vm_config acceptance. The step summary and `acceptance-pending.txt` artifact explicitly
+require the operator to fetch and verify `import-info.json` and `recipient.json` from the
+migration prefix, as in [migration runbook step 6](onchain-kms-migration.md#t-7d-to-t-1-prepare-both-applications).
+Complete that check before exporting. A later service commit retains ordinary service
+maintenance, health and TLS checks. An export-to-service rollback skips the unavailable
+maintenance API only after verifying the fenced export with its artifact's Info; target
+service health, fresh Info and TLS checks still apply.
 
 ## Token lifetime and hash format
 
@@ -180,7 +196,12 @@ the [CLI's explicit handling](https://github.com/Phala-Network/phala-cloud/blob/
 confirms that such an update was applied directly. This is why approved hashes must bypass
 prepare PATCH and use ordinary PATCH inside the maintenance window. The pinned
 [start action](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.1.22/js/src/actions/cvms/start_cvm.ts)
-uses `POST /cvms/{id}/start` for stopped CVMs.
+uses `POST /cvms/{id}/start` for stopped CVMs, exposed by the
+[CLI start command](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.1.22/cli/src/commands/cvms/start/index.ts)
+as `phala cvms start CVM_ID --json`. Both changed-compose applies and unchanged approved-compose
+commits use this operation only when a fresh pre-apply read reports exactly `stopped` and no
+operation in progress. Changed applies must also settle stopped on the target hash before the
+start request; another settled state fails closed. Other pre-apply states do not trigger a start.
 Initial provision uses `POST /cvms/provision`, then
 `POST /cvms` with receipt-derived app/contract and Safe deployer addresses. These are in the
 [reviewed current OpenAPI](https://github.com/Phala-Network/phala-docs/blob/e90f9a99bb44f657746fa32c4ed88dff338d8c8c/openapi.json), operationIds
