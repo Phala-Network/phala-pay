@@ -208,7 +208,7 @@ Record every transition in US Pacific time with its workflow run/commit. Target 
 | Transfer | Export runs final WAL switch/base backup to the **old prefix**, holds one read-only snapshot for counts and `pg_dump`, encrypts to the pinned recipient and signs/uploads the manifest last. Import checks signature/source/recipient/prefix/current nonce/ciphertext hash, restores, then `import-verify` compares signed table counts, latest migration and heartbeat and commits the completion marker. A failed gate keeps topup down. New migrations/API/heartbeat/backup can start only after that gate. |
 | DNS switch, routes still paused | Point `_dstack-app-address.DOMAIN` TXT to `<new verified instance_id>:443`; change `DOMAIN` CNAME to the new `GATEWAY` if it differs, DNS only. Use the new attestation's **instance id**, not app id or CVM UUID. Wait for DNS/cache convergence, TLS certificate and `/healthz` 200. The public origin now serves the new app with all routes paused: no new quotes or credits. |
 | Verify imported app | Verify migration-import attestation/OS/Base provider and ingress evidence using the release kit, committed new environment and exact import render. Healthy startup under that attested dependency chain is evidence the signed snapshot checks and completion marker succeeded; there is no admin row-count/marker endpoint, production DB access or guest log surface. Record the public signed manifest from S3 and its snapshot counts. Check admin daily/restore/deposit reads against saved state; do not lift carried-over holds. |
-| **Closeout, before resume** | **Immediately execute pre-signed batch #3**; confirm receipt success and `allowedComposeHashes(importHash)=false`. Set `TOPUP_CVM_ID=NEW_CVM_ID`, select `NEW_ENV`; Deploy `mode: commit`, `variant: service`, empty `migration_plan`, `transaction_hash: already-registered`. It re-prepares the pre-approved no-overlay hash, pauses at the now reachable public origin, commits and verifies health/attestation/ingress. Both revocation and no-overlay deployment must finish in this T0 window; never leave the import path approved until T+7d. |
+| **Closeout, before resume** | **Immediately execute pre-signed batch #3**; confirm receipt success and `allowedComposeHashes(importHash)=false`. Set `TOPUP_CVM_ID=NEW_CVM_ID`, select `NEW_ENV`; Deploy `mode: commit`, `variant: service`, empty `migration_plan`, `transaction_hash: already-registered`. It reproduces the pre-approved no-overlay hash without a prepare PATCH, pauses at the now reachable public origin, re-verifies policy, applies the ordinary Cloud update and verifies the stored full compose hash/health/attestation/ingress. Both revocation and no-overlay deployment must finish in this T0 window; never leave the import path approved until T+7d. |
 | Final acceptance and pins | Verify the **final service** compose hash/app id/OS/Base KMS and ingress evidence. Each merchant verifies its nonce-bound attestation and replaces `PHALA_PAY_PINS` once, against this final deployment ([merchant procedure](../../docs/integration.md#53-pin-your-accounts-webhook-keys)). Duplicate key versions cannot be pinned side by side. Restart the staging reference product; confirm RedPill's rollout completed before resuming. |
 | Resume and stop | Admin-resume `settlement`, then `refunds`, then `quotes` on every route whose pause this migration owns. **First resume of writes is the rollback boundary.** Confirm merchant reads/payment/credit acceptance below, then `deploy/phala cvms stop "$OLD_CVM_ID"`. Keep the old CVM/storage and old prefix **at least 30 days**; never run another writer against either prefix. |
 | Within 7 days | Run the [new-app restore drill](../RESTORE.md) using the pre-approved restore-check hash/device and new backup prefix. Record its results before widening onboarding. |
@@ -390,7 +390,19 @@ PY
 
 ## Acceptance and evidence
 
-Staging must exercise the whole window before scheduling production. Record:
+Staging must exercise the whole window before scheduling production.
+
+Follow the [Base upgrade approval rule](onchain-kms-upgrade.md#upgrades-and-rollback): review a
+prepare artifact before Safe execution, and never execute a Safe approval during a prepare or
+commit run for that app. An already-approved hash yields a read-only preparation summary with
+`already_approved: true` and no compose batch; approve any missing device before commit. Cloud's
+prepare-only header can apply already-approved updates, so only commit sends that update,
+after the pause. If an unchanged CVM is stopped, recovery re-verifies the stored full hash and
+on-chain policy before starting it without a maintenance lease; full acceptance still runs.
+Unexpected 2xx during prepare requires stopping, inspecting stored compose/attestation and
+running commit to verify before continuing the migration.
+
+Record:
 
 - Release/kit checks, environment/plan commits, old/new CVM and app ids, node/device/OS/provider
   evidence, full compose hashes, all three Safe batch files/nonces/signatures/receipts and final

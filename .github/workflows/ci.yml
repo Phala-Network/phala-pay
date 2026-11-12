@@ -550,6 +550,7 @@ jobs:
           node --test deploy/tests/onchain-kms.mjs
           PYTHONDONTWRITEBYTECODE=1 python3 deploy/tests/test_onchain_policy.py
           PYTHONDONTWRITEBYTECODE=1 python3 deploy/tests/test_base_baseline.py
+          PYTHONDONTWRITEBYTECODE=1 python3 deploy/tests/test_onchain_upgrade.py
       - name: Validate deployment scripts
         run: |
           deploy/tests/walg-restore.sh

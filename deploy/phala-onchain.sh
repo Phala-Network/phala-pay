@@ -2,6 +2,7 @@
 # Base KMS half of phala-cvm.sh. Only explicit prepare/commit commands can call Cloud.
 # Never signs a chain transaction. Safe approval stays outside GitHub and this script.
 set -euo pipefail
+umask 077
 root=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=deploy/deadline.sh
 source "$root/deadline.sh"
@@ -112,26 +113,32 @@ case "$command" in
         violations=$(jq -r -L "$root" --arg identity "$identity" 'include "compose-policy";
             kms_violations("base"; .; $identity)[]' "$request")
         [[ -z "$violations" ]] || fail "$violations"
-        # SDK patchCvm sends X-Prepare-Only and extracts 465's commit_token, as CLI 1.1.22.
-        # This token is private working state: no stdout, no uploaded artifacts.
         local_hash=$(kms hash "$request")
+        kms check-hash "$output.current.json" "$output.cvm.json" >/dev/null
         current_hash=$(jq -er '.compose_hash | ascii_downcase | ltrimstr("0x")' "$output.cvm.json")
+        device=$(jq -er '.node_info.device_id | select(test("^(0x)?[0-9a-fA-F]{64}$"))' "$output.cvm.json")
         if [[ "$local_hash" == "$current_hash" ]]; then
-            # Acceptance/retry with identical bytes needs no Cloud mutation or bearer token.
-            jq --arg hash "$local_hash" '{compose_hash: $hash, app_id, no_op: true,
+            kms approval "$app" "$safe" "$local_hash" "$device" >"$output.approval.json"
+            jq --arg hash "$local_hash" --slurpfile state "$output.approval.json" '{compose_hash: $hash, app_id, no_op: true,
+                already_approved: $state[0].already_approved, device_approved: $state[0].device_approved,
                 device_id: .node_info.device_id, kms_info: {chain_id: .kms_info.chain_id,
                 kms_contract_address: (.kms_info.dstack_kms_address // .kms_info.kms_contract_address)}}' \
                 "$output.cvm.json" >"$output"
         else
-            kms cloud-prepare "$cvm_id" "$request" "$output"
+            kms cloud-prepare "$cvm_id" "$request" "$output" "$app" "$safe" "$device"
         fi
         check_response
         returned_app=$(jq -er '.app_id | ascii_downcase | ltrimstr("0x")' "$output")
         [[ "$returned_app" == "$actual" ]] || fail "prepare app differs from CVM"
-        kms batch "$output.batch.json" "$safe" "$app" addComposeHash "$hash"
-        # Always show device approval as a separate batch; a repeat addDevice is idempotent.
-        kms batch "$output.device-batch.json" "$safe" "$app" addDevice "$device"
-        jq '{compose_hash, app_id, device_id, kms_info}' "$output" >"$output.summary.json"
+        rm -f "$output.batch.json" "$output.device-batch.json"
+        if ! jq -e '.already_approved == true' "$output" >/dev/null; then
+            kms batch "$output.batch.json" "$safe" "$app" addComposeHash "$hash"
+        fi
+        if ! jq -e '.device_approved == true' "$output" >/dev/null; then
+            kms batch "$output.device-batch.json" "$safe" "$app" addDevice "$device"
+        fi
+        jq '{compose_hash, app_id, device_id, kms_info, already_approved, device_approved, no_op: (.no_op // false)}' \
+            "$output" >"$output.summary.json"
         ;;
     compose-commit)
         [[ $# == 5 && "$1" =~ ^[A-Za-z0-9_-]+$ ]] ||
@@ -147,16 +154,30 @@ case "$command" in
         "$root/verify-onchain-app.sh" "$app" "$safe" "$hash" "$device" >"$output.onchain.json"
         if [[ "$tx" != already-registered ]]; then kms receipt "$tx" >/dev/null; fi
         if jq -e '.no_op == true' "$output" >/dev/null; then
-            echo "compose already current and onchain policy verified; no commit needed" >&2
+            phala cvms get "$cvm_id" --json >"$output.commit-cvm.json"
+            phala api "/cvms/$cvm_id/compose_file" >"$output.commit-compose.json"
+            kms check-hash "$output.commit-compose.json" "$output" >/dev/null
+            kms check-hash "$request" "$output.commit-cvm.json" >/dev/null
+            jq -e '.in_progress == false and (.status == "running" or .status == "stopped")' \
+                "$output.commit-cvm.json" >/dev/null || fail "unchanged CVM must be running or stopped with no operation in progress"
+            if jq -e '.status == "stopped"' "$output.commit-cvm.json" >/dev/null; then
+                phala cvms start "$cvm_id" --json >"$output.start-response.json"
+            fi
+            echo "compose already current and onchain policy verified; continue with wait and attestation verification" >&2
             exit 0
         fi
-        jq --arg tx "$tx" '{token, compose_hash, transaction_hash: $tx}' "$output" >"$output.commit.json"
-        # Pinned CLI deploy --commit calls commitCvmUpdate (POST commit-update).
-        # OpenAPI: commit_cvm_update_api_v1_cvms__cvm_id__commit_update_post.
-        status=0
-        phala api "/cvms/$cvm_id/commit-update" -X POST --input "$output.commit.json" \
-            >"$output.commit-response.json" 2>"$output.commit-error.txt" || status=$?
-        ((status == 0)) || fail "Cloud commit-update failed (exit $status); prepare again if the token expired"
+        if jq -e '.already_approved == true' "$output" >/dev/null; then
+            kms cloud-update "$cvm_id" "$request" >"$output.commit-response.json"
+        else
+            jq -e '.token | type == "string" and length > 0' "$output" >/dev/null || fail "missing commit token; prepare again"
+            jq --arg tx "$tx" '{token, compose_hash, transaction_hash: $tx}' "$output" >"$output.commit.json"
+            # Pinned CLI deploy --commit calls commitCvmUpdate (POST commit-update).
+            # OpenAPI: commit_cvm_update_api_v1_cvms__cvm_id__commit_update_post.
+            status=0
+            phala api "/cvms/$cvm_id/commit-update" -X POST --input "$output.commit.json" \
+                >"$output.commit-response.json" 2>"$output.commit-error.txt" || status=$?
+            ((status == 0)) || fail "Cloud commit-update failed (exit $status); prepare again if the token expired"
+        fi
         # A token endpoint's response is untrusted; never print arbitrary stdout or stderr.
         jq '{status: (if .status == "in_progress" then .status else "accepted" end),
             correlation_id: (if (.correlation_id | type) == "string" and

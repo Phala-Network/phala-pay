@@ -81,24 +81,52 @@ deploy/phala-cvm.sh provision-commit "$TRANSACTION_HASH" prepare.json "$ENVIRONM
 ## Upgrades and rollback
 
 1. Commit the new release/configuration, keeping the existing app and node. Dispatch `prepare`.
-   Preflight and preparation do not pause admission. Download the batch, device batch and public
+   Preflight and preparation do not pause admission. Download any batches and the public
    summary artifact. Verify the locally computed compose hash and review the exact rendered
    compose. Base requires `kms_enabled`, `key_provider: kms` and the CA identity from
-   `KmsAuth.kmsInfo().caPubkey` in `key_provider_id`.
-2. Import and execute the compose batch on the expected Safe on Base. Execute the device batch
-   if that device is not already approved; `addDevice` is idempotent. Pre-approve one standby
+   `KmsAuth.kmsInfo().caPubkey` in `key_provider_id`. Preparation reads the app's on-chain
+   `allowedComposeHashes` immediately before any Cloud PATCH. If already approved, it skips the
+   PATCH entirely and marks the summary `already_approved: true`; there is no compose batch.
+   A device batch is emitted only when that device is not approved.
+2. Import and execute any compose batch on the expected Safe on Base. Execute any device batch
+   before committing. Pre-approve one standby
    device using its measured PPID hash, while keeping `allowAnyDevice=false`.
 3. Dispatch `commit` with the transaction hash and the same reviewed release/configuration.
-   Commit re-prepares deterministically, verifies the hash is approved, checks device/owner and
+   For an already-approved hash use `transaction_hash: already-registered` or the executed
+   transaction hash. Commit reproduces the render without a prepare PATCH for approved hashes,
+   verifies the hash is approved, checks device/owner and
    both proxy pins **before pausing**. A transaction receipt check establishes success only;
-   separate state reads establish the expected owner, approved hash/device and proxy pins. It then uses the existing pause → commit → wait → verify →
-   resume path. Read the attestation and ingress evidence before declaring acceptance.
+   separate state reads establish the expected owner, approved hash/device and proxy pins. It
+   re-verifies policy after pausing and applies the update with the supported ordinary PATCH,
+   or token commit when preparation produced a token. The remaining path is wait → stored
+   full-compose hash check → attestation/health verification → resume → TLS evidence. Read all evidence
+   before declaring acceptance.
 4. Keep N-1 approved. Rollback selects its release/configuration, prepares it, and commits with
    `transaction_hash: already-registered`. State checks still run; no Safe signature is needed
    for an approved hash and device. Never run another writer against the same backup prefix.
 5. After acceptance, remove hashes older than N-1 with a separately reviewed Safe batch.
    `node deploy/tools/onchain-kms.mjs batch remove.json "$SAFE" "$APP" removeComposeHash "$OLD_HASH"`
    writes that batch offline. Never remove the running hash or the rollback hash.
+
+Execute a Safe approval only after reviewing that prepare run's artifact, and never while a
+prepare or commit run for the same app is in progress. Cloud's `X-Prepare-Only` is a request
+for a multisig token when registration is required, not an unconditional dry run. A concurrent
+approval between our final state read and PATCH can still make Cloud apply the update. The
+[Deploy concurrency group](../../.github/workflows/deploy.yml) is
+`deploy-${{ inputs.environment }}-${{ inputs.target }}` with `cancel-in-progress: false`, so
+workflow runs for each environment/target are serialized; external Safe execution must follow
+the same operator rule. Do not run another CLI or workflow against that app concurrently.
+An unexpected 2xx prepare response fails with an instruction to stop, inspect the stored compose
+and attestation, and run `commit` to verify: the update may already have happened without a pause.
+
+An unchanged compose (`no_op: true`) still goes through full acceptance. A settled running CVM
+keeps the maintenance pause and needs no start. If a fresh read reports exactly `stopped` with
+`in_progress: false`, the workflow re-verifies the stored full hash and owner/hash/device/proxy
+policy, skips the unreachable maintenance API, and starts only the already-stored approved
+compose. The step summary records
+`no maintenance lease: CVM was stopped; started the already-stored approved compose`.
+Wait, attestation, health and TLS checks still run; there is no lease to resume. Error, starting,
+busy or unknown states fail closed. Investigate them before retrying.
 
 A Safe signer is required for every new hash and device. The production Safe is 1/1: arrange
 signer availability before a release, with an operator response target of one hour during an
@@ -125,8 +153,10 @@ The PR 2 render/policy/tooling changes are required before either variant can de
 
 Prepare tokens/cache entries last **14 days**. Preparing again invalidates the previous token.
 The workflow keeps token-bearing JSON private in its temporary directory, never in logs or
-artifacts; commit re-prepares from the reviewed inputs to obtain a fresh token. A delayed signature
-is safe only if the new prepare reproduces the signed hash. If any setting, env name, node or
+artifacts. Commit recomputes the reviewed inputs and checks approval; an approved hash needs
+no new token and uses an ordinary PATCH only after pausing. An unapproved prepare may obtain a
+token for the supported token-commit path. A delayed signature is safe only if the new prepare
+reproduces the signed hash. If any setting, env name, node or
 backend default changes, stop and review a new batch. Sealed env values are excluded from the
 hash; their allowed names are included. Changing allowed names needs a separately reviewed
 prepare operation, followed by sealing; the ordinary upgrade helper preserves the current set.
@@ -142,10 +172,18 @@ The implementation follows the pinned CLI 1.1.22's
 and [commit handling](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.1.22/cli/src/commands/deploy/handler.ts#L1223),
 with [SDK PATCH](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.1.22/js/src/actions/cvms/patch_cvm.ts#L159)
 and [SDK commit](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.1.22/js/src/actions/cvms/commit_cvm_update.ts#L67):
-`PATCH /cvms/{id}` with `X-Prepare-Only: true`, then `POST /cvms/{id}/commit-update` with
-`token`, `compose_hash`, `transaction_hash`. Initial provision uses `POST /cvms/provision`, then
+`PATCH /cvms/{id}` with `X-Prepare-Only: true` can return 465 with a token when registration is
+needed, then `POST /cvms/{id}/commit-update` accepts `token`, `compose_hash`, `transaction_hash`.
+The same SDK PATCH omits `X-Prepare-Only` for ordinary updates. A successful response is an
+initiated update (`requiresOnChainHash: false`), including when prepare-only was requested;
+the [CLI's explicit handling](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.1.22/cli/src/commands/deploy/handler.ts#L958)
+confirms that such an update was applied directly. This is why approved hashes must bypass
+prepare PATCH and use ordinary PATCH inside the maintenance window. The pinned
+[start action](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.1.22/js/src/actions/cvms/start_cvm.ts)
+uses `POST /cvms/{id}/start` for stopped CVMs.
+Initial provision uses `POST /cvms/provision`, then
 `POST /cvms` with receipt-derived app/contract and Safe deployer addresses. These are in the
-[reviewed OpenAPI](https://github.com/Phala-Network/phala-docs/blob/c098ff18da4cb66a4691afa0979e210313a1b6c6/openapi.json), operationIds
+[reviewed current OpenAPI](https://github.com/Phala-Network/phala-docs/blob/e90f9a99bb44f657746fa32c4ed88dff338d8c8c/openapi.json), operationIds
 `update_cvm_endpoint_api_v1_cvms__cvm_id__patch`,
 `commit_cvm_update_api_v1_cvms__cvm_id__commit_update_post`,
 and `handle_create_cvm_api_v1_cvms_post`. The current create endpoint documents a same-path
