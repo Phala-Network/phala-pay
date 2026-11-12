@@ -102,7 +102,8 @@ class OnchainUpgradeTests(unittest.TestCase):
                     return
                 stored = {**fixture.baseline, **payload}
                 cvm = json.loads(fixture.cvm.read_text())
-                cvm.update(compose_hash=compose_hash(stored), in_progress=False)
+                fixture.cvm.with_suffix('.pending.json').write_text(json.dumps({'remaining': 3, 'status': cvm['status']}))
+                cvm.update(compose_hash=compose_hash(stored), status='updating', in_progress=True)
                 fixture.cvm.write_text(json.dumps(cvm))
                 if fixture.tamper_stored:
                     stored['public_logs'] = True
@@ -131,9 +132,26 @@ import os
 from pathlib import Path
 import sys
 args = sys.argv[1:]
-with Path(os.environ['STUB_LOG']).open('a') as stream: stream.write(json.dumps(args) + '\\n')
+def record(args):
+    with Path(os.environ['STUB_LOG']).open('a') as stream: stream.write(json.dumps(args) + '\\n')
+record(args)
 cvm = Path(os.environ['FIXTURE_CVM'])
-if args[:2] == ['cvms', 'get']: print(cvm.read_text())
+if args[:2] == ['cvms', 'get']:
+    pending = cvm.with_suffix('.pending.json')
+    if pending.exists():
+        update = json.loads(pending.read_text())
+        if update['remaining'] > 0:
+            record(['updating', update['remaining']])
+            update['remaining'] -= 1
+            pending.write_text(json.dumps(update))
+        else:
+            state = json.loads(cvm.read_text())
+            state.update(status=os.environ.get('FIXTURE_SETTLED_STATUS', update['status']), in_progress=False,
+                compose_hash=os.environ.get('FIXTURE_SETTLED_HASH', state['compose_hash']))
+            cvm.write_text(json.dumps(state))
+            pending.unlink()
+            record(['settled', state['status'], state['compose_hash']])
+    print(cvm.read_text())
 elif args[:2] == ['cvms', 'start']:
     if os.environ.get('FIXTURE_START_STATUS'): raise SystemExit(int(os.environ['FIXTURE_START_STATUS']))
     state = json.loads(cvm.read_text())
@@ -254,10 +272,43 @@ with Path(os.environ['STUB_LOG']).open('a') as stream: stream.write(json.dumps([
         attested = calls.index(['cvms', 'attestation', 'cvm-1', '--json'])
         self.assertLess(applied, started)
         self.assertLess(started, attested)
-        self.assertEqual(calls[started - 1], ['PATCH'])
+        self.assertEqual(calls[applied + 1:started], [
+            ['cvms', 'get', 'cvm-1', '--json'], ['updating', 3],
+            ['cvms', 'get', 'cvm-1', '--json'], ['updating', 2],
+            ['cvms', 'get', 'cvm-1', '--json'], ['updating', 1],
+            ['cvms', 'get', 'cvm-1', '--json'], ['settled', 'stopped', self.hash]])
         self.assertEqual(calls[started + 1], ['cvms', 'get', 'cvm-1', '--json'])
         self.assertEqual(json.loads(self.cvm.read_text())['compose_hash'], self.hash)
         self.assertFalse(self.lease.exists())
+
+    def test_stopped_changed_commit_rejects_another_settled_state_before_start(self):
+        self.prepare()
+        self.verify_and_pause()
+        for status in ['running', 'error']:
+            with self.subTest(status=status):
+                cvm = json.loads(self.cvm.read_text())
+                cvm.update(status='stopped', in_progress=False, compose_hash=compose_hash(self.baseline))
+                self.cvm.write_text(json.dumps(cvm))
+                self.env['FIXTURE_SETTLED_STATUS'] = status
+                result = self.run_step('Deploy (${{ inputs.mode }}) and wait for the CVM')
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('must settle stopped', result.stderr)
+                self.assertFalse(any(call[:2] == ['cvms', 'start'] for call in self.calls()))
+                self.assertFalse((self.tmp / 'verified').exists())
+
+    def test_stopped_changed_commit_times_out_on_the_wrong_settled_hash_before_start(self):
+        self.prepare()
+        cvm = json.loads(self.cvm.read_text())
+        cvm['status'] = 'stopped'
+        self.cvm.write_text(json.dumps(cvm))
+        self.verify_and_pause()
+        self.env.update(FIXTURE_SETTLED_HASH='cd' * 32, CVM_WAIT_SECONDS='2')
+        result = self.run_step('Deploy (${{ inputs.mode }}) and wait for the CVM')
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('deadline expired', result.stderr)
+        self.assertIn(['settled', 'stopped', 'cd' * 32], self.calls())
+        self.assertFalse(any(call[:2] == ['cvms', 'start'] for call in self.calls()))
+        self.assertFalse((self.tmp / 'verified').exists())
 
     def test_changed_error_or_busy_commit_fails_before_update_or_start(self):
         self.prepare()

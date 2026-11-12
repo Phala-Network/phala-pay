@@ -100,7 +100,9 @@ deploy/phala-cvm.sh provision-commit "$TRANSACTION_HASH" prepare.json "$ENVIRONM
    re-verifies policy after pausing and applies the update with the supported ordinary PATCH,
    or token commit when preparation produced a token. A fresh Cloud read immediately before
    applying must report `in_progress: false` and `running` or `stopped`. If it reports exactly
-   `stopped`, commit starts the CVM after the approved apply succeeds using
+   `stopped`, commit waits up to 900 seconds for the approved apply to settle with the target
+   compose hash and `in_progress: false`, requires the settled state to remain `stopped`, then
+   starts the CVM using
    `phala cvms start CVM_ID --json` (the supported `POST /cvms/{id}/start` operation), then follows
    the same verification path. An update alone does not start a stopped CVM. The remaining path
    is wait → stored full-compose hash check → attestation/health verification → resume → TLS
@@ -198,7 +200,8 @@ uses `POST /cvms/{id}/start` for stopped CVMs, exposed by the
 [CLI start command](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.1.22/cli/src/commands/cvms/start/index.ts)
 as `phala cvms start CVM_ID --json`. Both changed-compose applies and unchanged approved-compose
 commits use this operation only when a fresh pre-apply read reports exactly `stopped` and no
-operation in progress; other accepted states do not trigger a start.
+operation in progress. Changed applies must also settle stopped on the target hash before the
+start request; another settled state fails closed. Other pre-apply states do not trigger a start.
 Initial provision uses `POST /cvms/provision`, then
 `POST /cvms` with receipt-derived app/contract and Safe deployer addresses. These are in the
 [reviewed current OpenAPI](https://github.com/Phala-Network/phala-docs/blob/e90f9a99bb44f657746fa32c4ed88dff338d8c8c/openapi.json), operationIds

@@ -551,7 +551,7 @@ jobs:
       - name: Deploy (${{ inputs.mode }}) and wait for the CVM
         if: inputs.mode != 'prepare'
         # OS-image change: <=15 min convergence + <=10 min health + a fresh lease;
-        # compose: <=5 min submit + <=15 min convergence + <=10 min health.
+        # compose: <=5 min submit + <=15 min stopped apply + <=15 min boot + <=10 min health.
         # These are ceilings, not outage promises; the job still has its 75-minute ceiling.
         timeout-minutes: 60
         env:

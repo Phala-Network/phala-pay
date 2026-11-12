@@ -185,6 +185,10 @@ case "$command" in
             "$output.commit-response.json" 2>"$output.commit-parse-error.txt" ||
             fail "Cloud commit-update returned an invalid response"
         if jq -e '.status == "stopped"' "$output.commit-cvm.json" >/dev/null; then
+            "$root/phala-cvm.sh" wait --unsealed --compose-hash "$hash" "$cvm_id" >"$output.applied-cvm.json"
+            jq -e '.status == "stopped" and .in_progress == false' "$output.applied-cvm.json" >/dev/null ||
+                fail "updated CVM must settle stopped with no operation in progress before start"
+            stage_start onchain-start 60
             phala cvms start "$cvm_id" --json >"$output.start-response.json"
         fi
         ;;

@@ -128,9 +128,11 @@ mkdir -p "$EVIDENCE"
    acceptance**. The summary and `acceptance-pending.txt` artifact keep full OS/vm_config
    acceptance pending until step 6 verifies `import-info.json` and `recipient.json`.
    For an existing import CVM, a fresh settled `stopped` state causes commit to start it through
-   the supported Cloud start operation after applying the approved compose, then wait for the
-   running state and expected hash, read back the stored full hash and verify attestation.
-   Error or busy states fail closed. The import CVM has no API, ingress or origin: Deploy skips
+   the supported Cloud start operation after applying the approved compose and waiting up to
+   900 seconds for it to settle stopped, with no operation in progress and the target hash.
+   Another settled state fails closed before start. Then wait for the running state and expected
+   hash, read back the stored full hash and verify attestation. Pre-apply error or busy states
+   fail closed. The import CVM has no API, ingress or origin: Deploy skips
    domain extraction, maintenance pause/resume, availability monitoring, healthz, public Info,
    DNS records and certificate checks. No request goes to the old service's public URL.
 5. **T-1: seal.** Owner prepares `.env.ENV` with the complete secret set and pulls the pinned
