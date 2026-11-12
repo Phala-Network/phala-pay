@@ -14,6 +14,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+## [0.13.11] - 2026-11-11
+
 ### Fixed
 
 - Base KMS upgrades and rollbacks skip Cloud preparation for compose hashes already approved
@@ -2719,7 +2721,8 @@ happens only from two-provider finalized data.
   events were held for up to an hour at a time. A notice's outcome now neither cools nor clears
   the endpoint.
 
-[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.13.10...HEAD
+[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.13.11...HEAD
+[0.13.11]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.11
 [0.13.10]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.10
 [0.13.9]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.9
 [0.13.8]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.8

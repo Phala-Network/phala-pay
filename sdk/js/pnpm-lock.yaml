@@ -234,7 +234,7 @@ importers:
   ../js-react:
     dependencies:
       '@phala/pay':
-        specifier: 0.13.10
+        specifier: 0.13.11
         version: link:../js
       uqr:
         specifier: ^0.1.3
