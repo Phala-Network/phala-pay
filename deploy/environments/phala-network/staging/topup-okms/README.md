@@ -82,8 +82,8 @@ and their exact rendered composes before use. No secret values belong in these f
 |---|---|---|
 | `migration-import.json` / `source_app_id` | Recorded old app id | Read old CVM metadata; verify old service attestation at T-1 |
 | `migration-import.json` / `export_public_key` | Filled November 7, 2026 (PST), verified | Nonce-challenged old admin export-key endpoint, verified by `verify_key_evidence export` |
-| Both plans / `object` | Import: `s3://crypto-topup-test/staging-okms1-migration-20261108` (verified empty); export: `T1_MIGRATION_OBJECT_PREFIX` | New unique `s3://crypto-topup-test/...` prefix for this attempt |
-| `../topup/migration-export.json` / `recipient` | `T1_VERIFIED_IMPORT_RECIPIENT` | New import's public `recipient.json`, verified by `verify_key_evidence import` |
+| Both plans / `object` | Import: `s3://crypto-topup-test/staging-okms1-migration-20261108` (verified empty); export: same prefix | New unique `s3://crypto-topup-test/...` prefix for this attempt |
+| `../topup/migration-export.json` / `recipient` | Filled November 12, 2026 (PST): `age1tfa5…7cm6la`, verified | New import's public `recipient.json`, verified by `verify_key_evidence import` |
 | `dstack-app` | `0x69428Dad275dF0F82BA35Af7c84694E3320Fb7F3` (batch #1, November 10, 2026 PST) | Commit the new address from KmsAuth's verified `AppDeployedViaFactory` receipt |
 
 Before provisioning, after the old app has been upgraded to v0.13.7 and verified, use the
