@@ -351,6 +351,11 @@ jobs:
           fi
           "$KIT/deploy/render.sh" --images "$WORK/release/images.json" "${render_args[@]}" \
             "$ENVIRONMENT_DIR" >"$COMPOSE"
+          if [[ "$VARIANT" == migration-import ]]; then
+            { echo "DOMAIN="; echo "PUBLIC_URL="; } >>"$GITHUB_ENV"
+            echo "Migration import has no API or ingress; no public URL or DNS is configured." >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           # Export retains the old service URL solely for the pre-fencing maintenance pause.
           # The public URL is the domain dstack-ingress serves.
           domain=$("$("$KIT/deploy/pinned-compose.sh")" -f "$domain_compose" config --no-interpolate --format json |
@@ -430,7 +435,7 @@ jobs:
             echo "Review the artifact's Safe batches, if present, on Base (8453). Already-approved hashes skip Cloud PATCH and need no compose batch."
             echo "Execute approval only after reviewing the prepare artifact, with no prepare or commit run for this app in progress."
             echo 'For an already-approved hash, commit with transaction_hash: already-registered (or the executed transaction hash); approve the device first if its batch is present.'
-            echo "Commit reproduces the render, verifies approval before pausing, and applies it only after the pause."
+            echo "Commit reproduces the render, verifies approval, and applies it after any required service maintenance pause."
             echo '```json'
             cat "$WORK/onchain-prepare.json.summary.json"
             echo '```'
@@ -495,6 +500,11 @@ jobs:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
           TOPUP_MAINTENANCE_PRIVATE_KEY_PEM: ${{ secrets.TOPUP_MAINTENANCE_PRIVATE_KEY_PEM }}
         run: |
+          if [[ "$VARIANT" == migration-import ]]; then
+            echo "enabled=false" >>"$GITHUB_OUTPUT"
+            echo "Migration import has no API or ingress; skip the maintenance lease and public URL availability monitor. Acceptance uses attestation evidence only; see onchain-kms-migration.md step 6." >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           if [[ "$MODE" == commit ]] && jq -e '.no_op == true' "$WORK/onchain-prepare.json" >/dev/null; then
             "$KIT/deploy/phala-cvm.sh" get "$EXISTING_CVM_ID" >"$WORK/no-op-cvm.json"
             "$KIT/deploy/phala" api "/cvms/$EXISTING_CVM_ID/compose_file" >"$WORK/no-op-compose.json"
@@ -556,7 +566,7 @@ jobs:
             fi
           }
           trap stop_monitor EXIT
-          if [[ "$VARIANT" != export && ( "$MODE" == upgrade || ( "$MODE" == commit && "${INITIAL_BASE:-false}" != true ) ) ]]; then
+          if [[ "$VARIANT" != export && "$VARIANT" != migration-import && ( "$MODE" == upgrade || ( "$MODE" == commit && "${INITIAL_BASE:-false}" != true ) ) ]]; then
             # Keep sampling through every reboot, bounded by this step's 60-minute budget.
             python3 "$KIT/deploy/upgrade-monitor.py" "$PUBLIC_URL" "$WORK/unavailability.json" "$WORK/upgrade-monitor.stop" 3600 &
             monitor_pid=$!
@@ -662,7 +672,7 @@ jobs:
             echo "| CVM node | $(jq -r 'if .node_info.id != null then "\(.node_info.id) (\(.node_info.name), \(.node_info.region // "region not reported"))" else "not reported by Phala Cloud" end' "$WORK/cvm.json") |"
             echo
           } >>"$GITHUB_STEP_SUMMARY"
-          if [[ "$VARIANT" != export && ( "$MODE" == upgrade || ( "$MODE" == commit && "${INITIAL_BASE:-false}" != true ) ) ]]; then
+          if [[ "$VARIANT" != export && "$VARIANT" != migration-import && ( "$MODE" == upgrade || ( "$MODE" == commit && "${INITIAL_BASE:-false}" != true ) ) ]]; then
             # Keep sampling through boot and service readiness, before stopping the child process.
             "$KIT/deploy/phala-cvm.sh" healthz "$PUBLIC_URL"
           fi
@@ -702,11 +712,15 @@ jobs:
             node "$KIT/deploy/tools/onchain-kms.mjs" check-hash "$WORK/committed-compose.json" "$WORK/onchain-prepare.json"
           fi
           "$KIT/deploy/phala-cvm.sh" attestation "$CVM_ID" "$deployed" >"$WORK/attestation.json"
-          if [[ "$MODE" == provision || "${INITIAL_BASE:-false}" == true ]]; then
+          if [[ "$MODE" == provision || "${INITIAL_BASE:-false}" == true || "$VARIANT" == migration-import ]]; then
             "$KIT/deploy/verify-attestation.sh" --partial "$WORK/attestation.json" - "$APP_ID" \
               "$COMPOSE" "$VARIANT" "$(cat "$ENVIRONMENT_DIR/os-image-hash")" "$ENVIRONMENT_DIR" \
               2>&1 | tee "$WORK/partial-verification.txt" >>"$GITHUB_STEP_SUMMARY"
-            echo "Acceptance pending: seal the CVM, configure DNS, then run upgrade readback. Migration-import: verify import-info.json and recipient evidence from the migration prefix before export." | tee "$WORK/acceptance-pending.txt" >>"$GITHUB_STEP_SUMMARY"
+            if [[ "$VARIANT" == migration-import ]]; then
+              echo "Migration import: verified quote, event log, app id, compose hash and measured OS claim only. Full OS/vm_config acceptance is pending: verify import-info.json and recipient.json from the migration prefix per deploy/runbooks/onchain-kms-migration.md step 6 before export. No public URL, healthz or certificate evidence applies to this CVM." | tee "$WORK/acceptance-pending.txt" >>"$GITHUB_STEP_SUMMARY"
+            else
+              echo "Acceptance pending: seal the CVM, configure DNS, then run upgrade readback." | tee "$WORK/acceptance-pending.txt" >>"$GITHUB_STEP_SUMMARY"
+            fi
             exit 0
           fi
           # Export has no ingress: reuse this run's verified pre-upgrade service Info.
@@ -723,7 +737,11 @@ jobs:
             echo "| | |"
             echo "|---|---|"
             echo "| Compose hash | \`0x$deployed\` |"
-            echo "| Public URL | $PUBLIC_URL |"
+            if [[ "$VARIANT" == export ]]; then
+              echo "| Public URL | None (export is fenced; pre-upgrade service origin: $PUBLIC_URL) |"
+            else
+              echo "| Public URL | $PUBLIC_URL |"
+            fi
             if [[ "$TARGET" == product ]]; then
               echo "| Webhook URL | $PUBLIC_URL/webhooks |"
             fi
@@ -734,7 +752,7 @@ jobs:
       # domain to this CVM alone; dstack-ingress requests the certificate only once both records
       # resolve. An upgrade keeps the instance id; a new instance (a restore) needs a new TXT value.
       - name: Print the owner's DNS records
-        if: inputs.mode != 'prepare' && inputs.variant != 'export'
+        if: inputs.mode != 'prepare' && inputs.variant != 'export' && inputs.variant != 'migration-import'
         timeout-minutes: 10
         run: |
           instance_id=$("$KIT/deploy/phala-cvm.sh" instance-id "$WORK/attestation.json")
@@ -759,11 +777,11 @@ jobs:
       # until the owner seals the storage credentials, so the first check is the upgrade's.
       - name: Wait for the service
         timeout-minutes: 20
-        if: (inputs.mode == 'upgrade' || inputs.mode == 'commit') && env.INITIAL_BASE != 'true' && inputs.variant != 'export'
+        if: (inputs.mode == 'upgrade' || inputs.mode == 'commit') && env.INITIAL_BASE != 'true' && inputs.variant != 'export' && inputs.variant != 'migration-import'
         run: '"$KIT/deploy/phala-cvm.sh" healthz "$PUBLIC_URL"'
 
       - name: Resume mutations after health checks
-        if: steps.maintenance.outputs.enabled == 'true' && inputs.variant != 'export'
+        if: steps.maintenance.outputs.enabled == 'true' && inputs.variant != 'export' && inputs.variant != 'migration-import'
         env:
           TOPUP_MAINTENANCE_PRIVATE_KEY_PEM: ${{ secrets.TOPUP_MAINTENANCE_PRIVATE_KEY_PEM }}
         run: |
@@ -775,7 +793,7 @@ jobs:
       # at most 10 minutes in all (each check bounds its own requests and TLS handshake).
       - name: Verify the certificate evidence
         timeout-minutes: 10
-        if: (inputs.mode == 'upgrade' || inputs.mode == 'commit') && env.INITIAL_BASE != 'true' && inputs.variant != 'export'
+        if: (inputs.mode == 'upgrade' || inputs.mode == 'commit') && env.INITIAL_BASE != 'true' && inputs.variant != 'export' && inputs.variant != 'migration-import'
         run: |
           # shellcheck disable=SC2016  # expanded by the inner bash
           if ! timeout 600 bash -c 'until "$0" "$1" "$2" >"$3" 2>&1; do cat "$3"; sleep 30; done' \
@@ -791,6 +809,10 @@ jobs:
         timeout-minutes: 10
         if: inputs.mode == 'provision' || (inputs.mode == 'commit' && env.INITIAL_BASE == 'true')
         run: |
+          if [[ "$VARIANT" == migration-import ]]; then
+            echo "Migration import: seal with the complete preflight command in deploy/runbooks/onchain-kms-migration.md step 5, then complete full OS/vm_config and recipient acceptance in step 6. This CVM has no API, ingress or DNS records." >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           compose_json=$("$("$KIT/deploy/pinned-compose.sh")" -f "$COMPOSE" config --no-interpolate --format json)
           names=$(cut -d= -f1 "$ENV_FILE" | awk '{ printf "%s`%s`", (count++ ? ", " : ""), $0 }')
           kit_preflight=kit/${PREFLIGHT#"$KIT/"}
@@ -844,7 +866,7 @@ jobs:
           } >>"$GITHUB_STEP_SUMMARY"
 
       - name: Clear maintenance after a failed upgrade
-        if: failure() && steps.maintenance.outputs.enabled == 'true'
+        if: failure() && steps.maintenance.outputs.enabled == 'true' && inputs.variant != 'migration-import'
         env:
           TOPUP_MAINTENANCE_PRIVATE_KEY_PEM: ${{ secrets.TOPUP_MAINTENANCE_PRIVATE_KEY_PEM }}
         run: |
@@ -853,7 +875,7 @@ jobs:
           fi
 
       - name: Report observed unavailability
-        if: always() && (inputs.mode == 'upgrade' || inputs.mode == 'commit') && inputs.variant != 'export'
+        if: always() && (inputs.mode == 'upgrade' || inputs.mode == 'commit') && inputs.variant != 'export' && inputs.variant != 'migration-import'
         run: |
           if [[ -f "$WORK/unavailability.json" ]]; then
             python3 "$KIT/deploy/upgrade-monitor.py" summary "$WORK/unavailability.json" >>"$GITHUB_STEP_SUMMARY"

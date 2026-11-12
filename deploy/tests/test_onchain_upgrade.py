@@ -54,6 +54,7 @@ class OnchainUpgradeTests(unittest.TestCase):
         self.approved = True
         self.device_approved = True
         self.tamper_stored = False
+        self.update_status = 202
         self.events = []
         self.lease = self.tmp / 'lease'
         fixture = self
@@ -86,14 +87,22 @@ class OnchainUpgradeTests(unittest.TestCase):
 
             def do_PATCH(self):
                 fixture.events.append('PATCH')
-                fixture.assertTrue(fixture.lease.exists(), 'compose applied before pause')
+                with Path(fixture.env['STUB_LOG']).open('a') as stream:
+                    stream.write(json.dumps(['PATCH']) + '\n')
+                fixture.assertEqual(fixture.lease.exists(), fixture.env['VARIANT'] != 'migration-import')
                 fixture.assertIsNone(self.headers.get('X-Prepare-Only'))
                 payload = json.loads(self.rfile.read(int(self.headers['content-length'])))
                 fixture.assertNotIn('encrypted_env', payload)
                 fixture.assertNotIn('allowed_envs', payload)
+                if fixture.update_status != 202:
+                    self.send_response(fixture.update_status)
+                    self.send_header('Content-Type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(b'{"message":"fixture update failed"}')
+                    return
                 stored = {**fixture.baseline, **payload}
                 cvm = json.loads(fixture.cvm.read_text())
-                cvm.update(compose_hash=compose_hash(stored), status='running', in_progress=False)
+                cvm.update(compose_hash=compose_hash(stored), in_progress=False)
                 fixture.cvm.write_text(json.dumps(cvm))
                 if fixture.tamper_stored:
                     stored['public_logs'] = True
@@ -126,6 +135,7 @@ with Path(os.environ['STUB_LOG']).open('a') as stream: stream.write(json.dumps(a
 cvm = Path(os.environ['FIXTURE_CVM'])
 if args[:2] == ['cvms', 'get']: print(cvm.read_text())
 elif args[:2] == ['cvms', 'start']:
+    if os.environ.get('FIXTURE_START_STATUS'): raise SystemExit(int(os.environ['FIXTURE_START_STATUS']))
     state = json.loads(cvm.read_text())
     assert state['status'] == 'stopped' and not state['in_progress']
     state['status'] = 'running'
@@ -139,6 +149,7 @@ else: raise SystemExit('unexpected Cloud call')
         cli.chmod(0o755)
         pause = deploy / 'instance-pause.sh'
         pause.write_text('''#!/bin/sh
+"$FIXTURE_NODE" -e 'require("fs").appendFileSync(process.env.STUB_LOG, JSON.stringify(["maintenance", ...process.argv.slice(1)]) + "\\n")' "$@"
 if [ "$1" = pause ]; then
     touch "$FIXTURE_LEASE"
     printf '{"paused_scopes":["mutations"]}\\n'
@@ -150,15 +161,29 @@ fi
 ''')
         pause.chmod(0o755)
         verifier = deploy / 'verify-attestation.sh'
-        verifier.write_text('#!/bin/sh\ntest -s "$1" && test -s "$2" && touch "$FIXTURE_VERIFIED"\n')
+        verifier.write_text('''#!/bin/sh
+if [ "$1" = --partial ]; then
+    test -s "$2" && test "$3" = - && touch "$FIXTURE_PARTIAL_VERIFIED"
+else
+    test -s "$1" && test -s "$2" && touch "$FIXTURE_VERIFIED"
+fi
+''')
         verifier.chmod(0o755)
         ingress = deploy / 'verify-ingress-evidence.sh'
         ingress.write_text('#!/bin/sh\ntest -f "$FIXTURE_VERIFIED" && printf "fixture certificate evidence\\n"\n')
         ingress.chmod(0o755)
+        monitor = deploy / 'upgrade-monitor.py'
+        monitor.write_text('''import json
+import os
+from pathlib import Path
+import sys
+with Path(os.environ['STUB_LOG']).open('a') as stream: stream.write(json.dumps(['monitor', *sys.argv[1:]]) + '\\n')
+''')
         self.env.update(MODE='commit', VARIANT='service', INITIAL_BASE='false', TRANSACTION_HASH='already-registered',
             CVM_ID='cvm-1', APP_ID=APP, DOMAIN='example.invalid', ENVIRONMENT_DIR=str(self.environment), FIXTURE_NODE=shutil.which('node'),
             FIXTURE_CVM=str(self.cvm), FIXTURE_STORED=str(self.stored), FIXTURE_LEASE=str(self.lease),
             FIXTURE_VERIFIED=str(self.tmp / 'verified'), PHALA_CLOUD_API_KEY='fixture-key',
+            FIXTURE_PARTIAL_VERIFIED=str(self.tmp / 'partial-verified'),
             PHALA_CLOUD_API_PREFIX=f'http://127.0.0.1:{server.server_port}',
             BASE_RPC_URL=f'http://127.0.0.1:{server.server_port}/rpc')
 
@@ -209,6 +234,107 @@ fi
         self.assertTrue((self.tmp / 'verified').exists())
         self.assertFalse(self.lease.exists())
         self.assertTrue((self.work / 'ingress-evidence.txt').exists())
+        self.assertIn(['maintenance', 'pause', self.env['PUBLIC_URL'], '1-1'], self.calls())
+        self.assertTrue(any(call[:2] == ['monitor', self.env['PUBLIC_URL']] for call in self.calls()))
+        self.assertFalse(any(call[:2] == ['cvms', 'start'] for call in self.calls()))
+
+    def test_stopped_changed_commit_applies_then_starts_before_verification(self):
+        self.prepare()
+        cvm = json.loads(self.cvm.read_text())
+        cvm['status'] = 'stopped'
+        self.cvm.write_text(json.dumps(cvm))
+        self.verify_and_pause()
+        self.step('Deploy (${{ inputs.mode }}) and wait for the CVM')
+        self.verify_after_commit()
+        self.step('Resume mutations after health checks')
+        self.step('Verify the certificate evidence')
+        calls = [call for call in self.calls() if call[0] != 'monitor']
+        applied = calls.index(['PATCH'])
+        started = calls.index(['cvms', 'start', 'cvm-1', '--json'])
+        attested = calls.index(['cvms', 'attestation', 'cvm-1', '--json'])
+        self.assertLess(applied, started)
+        self.assertLess(started, attested)
+        self.assertEqual(calls[started - 1], ['PATCH'])
+        self.assertEqual(calls[started + 1], ['cvms', 'get', 'cvm-1', '--json'])
+        self.assertEqual(json.loads(self.cvm.read_text())['compose_hash'], self.hash)
+        self.assertFalse(self.lease.exists())
+
+    def test_changed_error_or_busy_commit_fails_before_update_or_start(self):
+        self.prepare()
+        for status, busy in [('error', False), ('starting', False), ('stopped', True), ('running', True)]:
+            with self.subTest(status=status, busy=busy):
+                cvm = json.loads(self.cvm.read_text())
+                cvm.update(status=status, in_progress=busy)
+                self.cvm.write_text(json.dumps(cvm))
+                result = self.run_step('Deploy (${{ inputs.mode }}) and wait for the CVM')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('no operation in progress', result.stderr)
+                self.assertNotIn('PATCH', self.events)
+                self.assertFalse(any(call[:2] == ['cvms', 'start'] for call in self.calls()))
+
+    def test_failed_changed_update_does_not_start_stopped_cvm(self):
+        self.prepare()
+        cvm = json.loads(self.cvm.read_text())
+        cvm['status'] = 'stopped'
+        self.cvm.write_text(json.dumps(cvm))
+        self.verify_and_pause()
+        self.update_status = 400
+        result = self.run_step('Deploy (${{ inputs.mode }}) and wait for the CVM')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('PATCH', self.events)
+        self.assertFalse(any(call[:2] == ['cvms', 'start'] for call in self.calls()))
+        self.assertEqual(json.loads(self.cvm.read_text())['status'], 'stopped')
+
+    def test_start_failure_fails_commit_before_attestation_or_resume(self):
+        self.prepare()
+        cvm = json.loads(self.cvm.read_text())
+        cvm['status'] = 'stopped'
+        self.cvm.write_text(json.dumps(cvm))
+        self.verify_and_pause()
+        self.env['FIXTURE_START_STATUS'] = '42'
+        result = self.run_step('Deploy (${{ inputs.mode }}) and wait for the CVM')
+        self.assertEqual(result.returncode, 42, result.stdout + result.stderr)
+        self.assertIn('PATCH', self.events)
+        self.assertFalse(any(call[:2] == ['cvms', 'attestation'] for call in self.calls()))
+        self.assertFalse((self.tmp / 'verified').exists())
+        self.assertTrue(self.lease.exists())
+
+    def test_import_commit_never_contacts_public_url_and_leaves_full_acceptance_pending(self):
+        self.env['VARIANT'] = 'migration-import'
+        self.env['STUB_INFO_STATUS'] = '42'
+        self.prepare()
+        cvm = json.loads(self.cvm.read_text())
+        cvm['status'] = 'stopped'
+        self.cvm.write_text(json.dumps(cvm))
+        self.verify_and_pause()
+        self.assertFalse(self.lease.exists())
+        self.step('Deploy (${{ inputs.mode }}) and wait for the CVM')
+        self.step('Read back and verify the attested compose')
+        self.assertTrue((self.tmp / 'partial-verified').exists())
+        self.assertFalse((self.tmp / 'verified').exists())
+        self.assertTrue(any(call[:2] == ['cvms', 'start'] for call in self.calls()))
+        self.assertFalse(any(call[0] in ['maintenance', 'monitor', 'health', 'info'] for call in self.calls()))
+        self.assertFalse((self.work / 'info.json').exists())
+        self.assertFalse((self.work / 'ingress-evidence.txt').exists())
+        pending = (self.work / 'acceptance-pending.txt').read_text()
+        self.assertIn('Full OS/vm_config acceptance is pending', pending)
+        self.assertIn('import-info.json and recipient.json', pending)
+        self.assertIn('step 6', pending)
+        self.assertIn(pending, (self.tmp / 'summary').read_text())
+        self.assertIn('enabled=false', (self.tmp / 'output').read_text())
+
+    def test_import_skips_steps_that_require_an_origin(self):
+        workflow = (ROOT / '.github/workflows/deploy.yml').read_text()
+        for name in ['Print the owner\'s DNS records', 'Wait for the service', 'Resume mutations after health checks',
+                     'Verify the certificate evidence', 'Clear maintenance after a failed upgrade', 'Report observed unavailability']:
+            with self.subTest(step=name):
+                block = workflow.split(f'      - name: {name}\n', 1)[1].split('      - name:', 1)[0]
+                condition = re.search(r'^        if: (.+)$', block, re.MULTILINE)[1]
+                self.assertIn("inputs.variant != 'migration-import'", condition)
+        self.env['VARIANT'] = 'migration-import'
+        self.step("Print the owner's sealing step")
+        self.assertIn('step 5', (self.tmp / 'summary').read_text())
+        self.assertNotIn(self.env['PUBLIC_URL'], (self.tmp / 'summary').read_text())
 
     def test_stopped_unchanged_commit_starts_and_verifies_without_a_lease(self):
         self.unchanged('running')

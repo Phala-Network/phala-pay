@@ -14,6 +14,15 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Fixed
+
+- Base KMS commit starts a settled stopped CVM after successfully applying its approved compose,
+  then waits for the expected hash and verifies the stored compose and attestation. Busy and
+  error states fail closed. Migration-import deployments skip maintenance leases and every
+  public-origin probe, domain/DNS and TLS step because the import CVM has no API or ingress;
+  they verify partial attestation and explicitly leave full OS/vm_config and recipient
+  acceptance pending the migration runbook's public evidence checks, without pausing the old service.
+
 ## [0.13.11] - 2026-11-11
 
 ### Fixed

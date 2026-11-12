@@ -122,11 +122,20 @@ mkdir -p "$EVIDENCE"
    Commit the receipt-derived `dstack-app`, then dispatch `commit` with the same inputs and the
    batch #1 transaction hash. Record `NEW_CVM_ID`, `IMPORT_HASH` and `NEW_DEVICE_ID` from the
    artifact; save its rendered compose as `EVIDENCE/import.yml` and set `TOPUP_CVM_ID` to the new CVM.
-   Verify owner, hash, device, proxy pins, attestation, OS and Base provider as in the upgrade
-   runbook. Initial provisioning is unsealed evidence, **not service acceptance**.
+   Verify owner, hash, device, proxy pins and Base provider as in the upgrade runbook. Import
+   commits use the existing partial attestation verifier for quote, event log, app id, compose
+   hash and measured OS claim. Initial provisioning is unsealed evidence, **not service
+   acceptance**. The summary and `acceptance-pending.txt` artifact keep full OS/vm_config
+   acceptance pending until step 6 verifies `import-info.json` and `recipient.json`.
+   For an existing import CVM, a fresh settled `stopped` state causes commit to start it through
+   the supported Cloud start operation after applying the approved compose, then wait for the
+   running state and expected hash, read back the stored full hash and verify attestation.
+   Error or busy states fail closed. The import CVM has no API, ingress or origin: Deploy skips
+   domain extraction, maintenance pause/resume, availability monitoring, healthz, public Info,
+   DNS records and certificate checks. No request goes to the old service's public URL.
 5. **T-1: seal.** Owner prepares `.env.ENV` with the complete secret set and pulls the pinned
-   image as directed by the provision summary. **The summary's printed preflight command is
-   incomplete for migration-import:** it omits the plan flag. Run this full command instead:
+   image as directed by this runbook. The import summary points here instead of printing the
+   ordinary service sealing and DNS acceptance instructions. Use the full plan-aware command:
 
    ```sh
    deploy/preflight.sh --env .env.ENV --compose "$EVIDENCE/import.yml" \
@@ -138,7 +147,9 @@ mkdir -p "$EVIDENCE"
    Default manifest wait is **172800 seconds (48h)** from import invocation; allow enough margin
    for the window. Do not run ordinary service acceptance against the old origin yet.
 6. **T-1: verify recipient and render export.** Fetch only public metadata using locally loaded
-   AWS credentials; use the new provisioning artifact's hash and committed OS hash:
+   AWS credentials; use the new provisioning artifact's hash and committed OS hash. This is
+   the required full OS/vm_config and recipient acceptance gate after Deploy's partial import
+   verification; complete it before export:
 
    ```sh
    aws --endpoint-url "$AWS_ENDPOINT" s3 cp \
