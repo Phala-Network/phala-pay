@@ -82,17 +82,46 @@ export async function identity(c) {
   requireThat(info[1] && info[1] !== '0x', 'Base KMS has no CA identity');
   return info[1].slice(2).toLowerCase();
 }
-export async function verify(c, app, safe, hash, device) {
+export async function approval(c, app, safe, hash, device) {
   app = address(app); safe = address(safe); hash = hex(hash, 32); device = hex(device, 32);
   await implementation(c, config.kms_auth, config.kms_implementation);
   await implementation(c, app, config.app_implementation);
   const read = (functionName, args = []) => c.readContract({address: app, abi, functionName, args});
   requireThat(address(await read('owner')) === safe, 'DstackApp owner differs from expected Safe');
-  requireThat(await read('allowedComposeHashes', [hash]), 'compose hash is not approved');
   requireThat(await read('allowAnyDevice') === false, 'allowAnyDevice must be false');
-  requireThat(await read('allowedDeviceIds', [device]), 'device is not approved');
-  return {passed: true, chain_id: 8453, app, safe, compose_hash: hash, device_id: device,
+  const deviceApproved = await read('allowedDeviceIds', [device]);
+  const composeApproved = await read('allowedComposeHashes', [hash]);
+  return {already_approved: composeApproved, device_approved: deviceApproved, chain_id: 8453, app, safe,
+    compose_hash: hash, device_id: device,
     app_implementation: config.app_implementation, kms_implementation: config.kms_implementation};
+}
+export async function verify(c, ...args) {
+  const state = await approval(c, ...args);
+  requireThat(state.already_approved, 'compose hash is not approved');
+  requireThat(state.device_approved, 'device is not approved');
+  return {passed: true, ...state};
+}
+function updateRequest(id, request) {
+  return {id, docker_compose_file: request.docker_compose_file, pre_launch_script: request.pre_launch_script,
+    public_logs: request.public_logs, public_sysinfo: request.public_sysinfo};
+}
+export async function prepare(chainClient, cloudClient, id, request, app, safe, device) {
+  const hash = composeHash(request);
+  const payload = {...updateRequest(id, request), prepareOnly: true};
+  const state = await approval(chainClient, app, safe, hash, device);
+  if (state.already_approved) {
+    return {compose_hash: hash, app_id: app, device_id: device, already_approved: true,
+      device_approved: state.device_approved, kms_info: {chain_id: 8453, kms_contract_address: config.kms_auth}};
+  }
+  const result = await patchCvm(cloudClient, payload);
+  requireThat(result.requiresOnChainHash,
+    'prepare-only PATCH was accepted: the update may have been applied without a pause; stop, inspect the stored compose and attestation, and run commit to verify');
+  requireThat(result.commitToken, 'prepare returned no onchain commit token');
+  compareHash(request, result.composeHash);
+  requireThat(address(result.appId) === address(app), 'prepare app differs from CVM');
+  requireThat(hex(result.deviceId, 32) === hex(device, 32), 'prepare device differs from CVM');
+  return {compose_hash: result.composeHash, app_id: result.appId, device_id: result.deviceId,
+    token: result.commitToken, kms_info: result.kmsInfo, already_approved: false, device_approved: state.device_approved};
 }
 export async function deployment(c, tx, safe) {
   tx = hex(tx, 32); safe = address(safe);
@@ -137,22 +166,19 @@ async function main([command, ...args]) {
     case 'check-hash': console.log(compareHash(json(args[0]), json(args[1]).compose_hash)); break;
     case 'batch': writeFileSync(args[0], JSON.stringify(batch(...args.slice(1)), null, 2) + '\n'); break;
     case 'cloud-prepare': {
-      // Pinned CLI deploy/--prepare-only calls patchCvm({prepareOnly:true}):
-      // @phala/cloud src/actions/cvms/patch_cvm.ts, PATCH /cvms/{id}, X-Prepare-Only.
-      // Published OpenAPI operationId: update_cvm_endpoint_api_v1_cvms__cvm_id__patch.
-      const request = json(args[1]);
-      const result = await patchCvm(createClient({timeout: 30000}), {id: args[0], prepareOnly: true,
-        docker_compose_file: request.docker_compose_file, pre_launch_script: request.pre_launch_script,
-        public_logs: request.public_logs, public_sysinfo: request.public_sysinfo});
-      requireThat(result.requiresOnChainHash && result.commitToken, 'prepare returned no onchain commit token');
-      const response = {compose_hash: result.composeHash, app_id: result.appId, device_id: result.deviceId,
-        token: result.commitToken, kms_info: result.kmsInfo};
-      // The bearer token is private working state; never print it or upload it as an artifact.
+      const response = await prepare(await client(), createClient({timeout: 30000}), args[0], json(args[1]), ...args.slice(3));
       writeFileSync(args[2], JSON.stringify(response), {mode: 0o600});
+      break;
+    }
+    case 'cloud-update': {
+      const result = await patchCvm(createClient({timeout: 30000}), updateRequest(args[0], json(args[1])));
+      requireThat(!result.requiresOnChainHash, 'Cloud still requires onchain approval; stop and prepare again');
+      console.log(JSON.stringify({status: 'accepted', correlation_id: result.correlationId}));
       break;
     }
     case 'verify-provider-event': verifyProviderEvent(json(args[0]), args[1]); break;
     case 'identity': console.log(await identity(await client())); break;
+    case 'approval': console.log(JSON.stringify(await approval(await client(), ...args))); break;
     case 'verify': console.log(JSON.stringify(await verify(await client(), ...args))); break;
     case 'receipt': {
       const receipt = await (await client()).getTransactionReceipt({hash: hex(args[0], 32)});

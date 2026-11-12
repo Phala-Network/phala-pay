@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { getComposeHash } from '../tools/node_modules/@phala/cloud/dist/index.mjs';
-import { canonical, composeHash, compareHash, batch, verify, deployment, identity, verifyProviderEvent, config, slot, appEvents, kmsEvents } from '../tools/onchain-kms.mjs';
-import { encodeEventTopics, toEventSelector } from '../tools/node_modules/viem/_esm/index.js';
+import { canonical, composeHash, compareHash, batch, prepare, verify, deployment, identity, verifyProviderEvent, config, slot, appEvents, kmsEvents } from '../tools/onchain-kms.mjs';
+import { encodeEventTopics, toEventSelector, toFunctionSelector } from '../tools/node_modules/viem/_esm/index.js';
 
 const safe = '0x8AB55148944F837040bbB887f8A5005f70FF7700';
 const app = '0x1111111111111111111111111111111111111111';
@@ -91,17 +91,61 @@ test('replayed key-provider event binds Base CA identity and rejects wrong/missi
   }
 });
 
-test('Cloud prepare uses official PATCH token flow without printing the token or sending env values', async () => {
+test('approved hash preparation reads policy without any Cloud write, including when a device needs approval', async () => {
+  for (const deviceApproved of [true, false]) {
+    const base = stub();
+    const reads = [];
+    const state = stub({readContract: args => {
+      reads.push(args.functionName);
+      return args.functionName === 'allowedDeviceIds' ? deviceApproved : base.readContract(args);
+    }});
+    const result = await prepare(state, {patch: () => assert.fail('approved prepare must not write Cloud')},
+      'cvm-test', {docker_compose_file: 'services: {}'}, app, safe, device);
+    assert.equal(result.already_approved, true);
+    assert.equal(result.device_approved, deviceApproved);
+    assert.equal(result.token, undefined);
+    assert.equal(reads.at(-1), 'allowedComposeHashes');
+  }
+});
+
+test('Cloud prepare checks approval immediately before PATCH, handles 465 privately and fails hard on 2xx', async () => {
   const {createServer} = await import('node:http');
   const {mkdtemp, writeFile, readFile, stat, rm} = await import('node:fs/promises');
   const {tmpdir} = await import('node:os');
   const {join} = await import('node:path');
   const {spawn} = await import('node:child_process');
   const calls = [];
+  const request = {docker_compose_file: 'services: {}', pre_launch_script: 'true', public_logs: false, public_sysinfo: false,
+    allowed_envs: ['SENTRY_DSN'], port_policy: {ports: []}};
+  const expectedHash = composeHash(request);
+  let accepted = false;
   const server = createServer(async (request, response) => {
     let body = ''; for await (const chunk of request) body += chunk;
+    if (request.url === '/rpc') {
+      const rpc = JSON.parse(body);
+      let result;
+      if (rpc.method === 'eth_chainId') result = '0x2105';
+      else if (rpc.method === 'eth_getStorageAt') {
+        const impl = rpc.params[0].toLowerCase() === app.toLowerCase() ? config.app_implementation : config.kms_implementation;
+        result = '0x' + '0'.repeat(24) + impl.slice(2).toLowerCase();
+      } else if (rpc.method === 'eth_call') {
+        const selector = rpc.params[0].data.slice(0, 10);
+        calls.push(selector);
+        result = '0x' + (selector === toFunctionSelector('owner()') ? safe.slice(2).toLowerCase().padStart(64, '0') :
+          (selector === toFunctionSelector('allowedDeviceIds(bytes32)') ? '1' : '0').padStart(64, '0'));
+      } else assert.fail(`unexpected RPC ${rpc.method}`);
+      response.writeHead(200, {'content-type': 'application/json'});
+      response.end(JSON.stringify({jsonrpc: '2.0', id: rpc.id, result}));
+      return;
+    }
     calls.push({method: request.method, url: request.url, prepare: request.headers['x-prepare-only'], body: JSON.parse(body)});
-    const fields = {compose_hash: hash, app_id: app.slice(2), device_id: device, commit_token: 'private-test-token',
+    if (accepted) {
+      response.writeHead(202, {'content-type': 'application/json'});
+      response.end(JSON.stringify({correlation_id: 'fixture-id'}));
+      return;
+    }
+    const fields = {compose_hash: expectedHash,
+      app_id: app.slice(2), device_id: device, commit_token: 'private-test-token',
       kms_info: {id: 'kms-test', slug: 'base', url: 'https://kms.example.com', version: '1', chain_id: 8453,
         kms_contract_address: config.kms_auth, gateway_app_id: null}};
     response.writeHead(465, {'content-type': 'application/json'});
@@ -110,21 +154,29 @@ test('Cloud prepare uses official PATCH token flow without printing the token or
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const directory = await mkdtemp(join(tmpdir(), 'onchain-token-test-'));
   try {
-    const request = {docker_compose_file: 'services: {}', pre_launch_script: 'true', public_logs: false, public_sysinfo: false,
-      allowed_envs: ['SENTRY_DSN'], port_policy: {ports: []}};
     await writeFile(join(directory, 'request.json'), JSON.stringify(request));
-    const child = spawn(process.execPath, [new URL('../tools/onchain-kms.mjs', import.meta.url).pathname,
-      'cloud-prepare', 'cvm-test', join(directory, 'request.json'), join(directory, 'result.json')],
-      {env: {...process.env, PHALA_CLOUD_API_KEY: 'fixture-api-key', PHALA_CLOUD_API_PREFIX: `http://127.0.0.1:${server.address().port}`}});
-    let output = ''; child.stdout.on('data', chunk => { output += chunk; }); child.stderr.on('data', chunk => { output += chunk; });
-    const code = await new Promise(resolve => child.on('close', resolve));
-    assert.equal(code, 0, output);
-    assert.equal(output.includes('private-test-token'), false);
+    const run = async () => {
+      const child = spawn(process.execPath, [new URL('../tools/onchain-kms.mjs', import.meta.url).pathname,
+        'cloud-prepare', 'cvm-test', join(directory, 'request.json'), join(directory, 'result.json'), app, safe, device],
+        {env: {...process.env, PHALA_CLOUD_API_KEY: 'fixture-api-key', PHALA_CLOUD_API_PREFIX: `http://127.0.0.1:${server.address().port}`,
+          BASE_RPC_URL: `http://127.0.0.1:${server.address().port}/rpc`}});
+      let output = ''; child.stdout.on('data', chunk => { output += chunk; }); child.stderr.on('data', chunk => { output += chunk; });
+      const code = await new Promise(resolve => child.on('close', resolve));
+      return {code, output};
+    };
+    const first = await run();
+    assert.equal(first.code, 0, first.output);
+    assert.equal(first.output.includes('private-test-token'), false);
     assert.equal(JSON.parse(await readFile(join(directory, 'result.json'), 'utf8')).token, 'private-test-token');
     assert.equal((await stat(join(directory, 'result.json'))).mode & 0o777, 0o600);
-    assert.deepEqual(calls, [{method: 'PATCH', url: '/cvms/cvm-test', prepare: 'true', body: {
+    assert.equal(calls.at(-2), toFunctionSelector('allowedComposeHashes(bytes32)'));
+    assert.deepEqual(calls.at(-1), {method: 'PATCH', url: '/cvms/cvm-test', prepare: 'true', body: {
       docker_compose_file: request.docker_compose_file, pre_launch_script: request.pre_launch_script,
-      public_logs: false, public_sysinfo: false}}]);
+      public_logs: false, public_sysinfo: false}});
+    accepted = true;
+    const second = await run();
+    assert.equal(second.code, 1);
+    assert.match(second.output, /may have been applied without a pause; stop, inspect the stored compose and attestation, and run commit to verify/);
   } finally {
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));

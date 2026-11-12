@@ -14,6 +14,13 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Fixed
+
+- Base KMS upgrades and rollbacks skip Cloud preparation for compose hashes already approved
+  on-chain, preventing an early update before the maintenance pause. Commit applies approved
+  updates after pausing and verifying policy; retries with an unchanged compose start a stopped
+  CVM and still wait for running status and full attestation verification.
+
 ## [0.13.10] - 2026-11-10
 
 ### Fixed

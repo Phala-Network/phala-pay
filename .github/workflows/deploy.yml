@@ -427,8 +427,10 @@ jobs:
           fi
           {
             echo "### Base KMS preparation (no maintenance pause)"
-            echo "Review the artifact's Safe batches: approve the compose and device on Base (8453)."
-            echo "Commit re-prepares the same rendered compose and verifies its approval before pausing."
+            echo "Review the artifact's Safe batches, if present, on Base (8453). Already-approved hashes skip Cloud PATCH and need no compose batch."
+            echo "Execute approval only after reviewing the prepare artifact, with no prepare or commit run for this app in progress."
+            echo 'For an already-approved hash, commit with transaction_hash: already-registered (or the executed transaction hash); approve the device first if its batch is present.'
+            echo "Commit reproduces the render, verifies approval before pausing, and applies it only after the pause."
             echo '```json'
             cat "$WORK/onchain-prepare.json.summary.json"
             echo '```'
@@ -493,6 +495,23 @@ jobs:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
           TOPUP_MAINTENANCE_PRIVATE_KEY_PEM: ${{ secrets.TOPUP_MAINTENANCE_PRIVATE_KEY_PEM }}
         run: |
+          if [[ "$MODE" == commit ]] && jq -e '.no_op == true' "$WORK/onchain-prepare.json" >/dev/null; then
+            "$KIT/deploy/phala-cvm.sh" get "$EXISTING_CVM_ID" >"$WORK/no-op-cvm.json"
+            "$KIT/deploy/phala" api "/cvms/$EXISTING_CVM_ID/compose_file" >"$WORK/no-op-compose.json"
+            node "$KIT/deploy/tools/onchain-kms.mjs" check-hash "$WORK/no-op-compose.json" "$WORK/onchain-prepare.json"
+            node "$KIT/deploy/tools/onchain-kms.mjs" check-hash "$WORK/onchain-prepare.json.request.json" "$WORK/no-op-cvm.json"
+            hash=$(jq -er .compose_hash "$WORK/onchain-prepare.json")
+            device=$(jq -er .device_id "$WORK/onchain-prepare.json")
+            "$KIT/deploy/verify-onchain-app.sh" "$(cat "$ENVIRONMENT_DIR/dstack-app")" \
+              "$(cat "$ENVIRONMENT_DIR/dstack-owner")" "$hash" "$device" >"$WORK/no-op-onchain.json"
+            jq -e '.in_progress == false and (.status == "running" or .status == "stopped")' "$WORK/no-op-cvm.json" >/dev/null ||
+              { echo "::error::Unchanged CVM must be running or stopped with no operation in progress"; exit 1; }
+            if jq -e '.status == "stopped"' "$WORK/no-op-cvm.json" >/dev/null; then
+              cp "$WORK/no-op-cvm.json" "$WORK/stopped-no-op.json"
+              echo "enabled=false" >>"$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
           if [[ "$MODE" == upgrade && "$VARIANT" == service && -n "${MIGRATION_PLAN:-}" ]]; then
             # The exporter has no API or ingress. Prove it is the reviewed, fenced compose
             # before skipping the pause; never send maintenance requests to a switched origin.
@@ -568,6 +587,9 @@ jobs:
             hash=$(jq -er .compose_hash "$WORK/deploy.json")
             "$KIT/deploy/phala-cvm.sh" compose-commit "$EXISTING_CVM_ID" "$hash" "$TRANSACTION_HASH" \
               "$WORK/onchain-prepare.json" "$ENVIRONMENT_DIR"
+            if [[ -f "$WORK/stopped-no-op.json" ]]; then
+              echo "no maintenance lease: CVM was stopped; started the already-stored approved compose" >>"$GITHUB_STEP_SUMMARY"
+            fi
           else
             current_image=$(jq -er '.os.name' "$WORK/cvm-before.json")
             if [[ "$current_image" != "$DSTACK_OS_IMAGE" ]]; then
@@ -675,6 +697,10 @@ jobs:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
         run: |
           deployed=$(jq -er '.compose_hash | ascii_downcase | ltrimstr("0x")' "$WORK/cvm.json")
+          if [[ "$MODE" == commit && "${INITIAL_BASE:-false}" != true ]]; then
+            "$KIT/deploy/phala" api "/cvms/$CVM_ID/compose_file" >"$WORK/committed-compose.json"
+            node "$KIT/deploy/tools/onchain-kms.mjs" check-hash "$WORK/committed-compose.json" "$WORK/onchain-prepare.json"
+          fi
           "$KIT/deploy/phala-cvm.sh" attestation "$CVM_ID" "$deployed" >"$WORK/attestation.json"
           if [[ "$MODE" == provision || "${INITIAL_BASE:-false}" == true ]]; then
             "$KIT/deploy/verify-attestation.sh" --partial "$WORK/attestation.json" - "$APP_ID" \
