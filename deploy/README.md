@@ -899,16 +899,25 @@ record); Deploy downloads it from the caller repository with `actions: read`, ch
 identity, then verifies against the current export quote before changing anything. Forward the
 new optional input when adopting this release's workflow. Never substitute another CVM's Info.
 
-Before sealing, unsealed provision (including initial Base commit) verifies the hardware quote,
+For ordinary service provisioning, the pre-seal check verifies the hardware quote,
 TCB, RTMR3 event-log replay and reviewed app/compose identity, plus the measured OS claim when
 present. It runs the pinned verifier's TDX quote/event-log stage without `vm_config` and labels
 this **partial: quote + event log + compose/app, OS/vm_config not verified**. The full compose,
 port/env and KMS-provider policies still apply. A failed partial check blocks the sealing step.
 This records **acceptance pending**: no service endpoint exists before sealing and DNS.
 Seal, configure DNS, then run `upgrade` for full OS/vm_config verification and acceptance.
-Partial verification is confined to this pre-seal branch and can never satisfy acceptance. During migration-import, the import job publishes `import-info.json` beside
-`recipient.json` in its migration prefix before the API can start; use it with the Cloud quote
-for T-1 verification. Export also publishes `export-info.json`. These files have the same
+Partial verification can never satisfy acceptance. **Migration import has a separate sequence:**
+unsealed `postgres-walg` refuses without S3 credentials, so the initial Base commit may create
+the CVM successfully and then fail its wait. Keep that CVM, seal from the operator machine
+with CLI 1.2.7 and the full plan-aware preflight, then start if stopped. While import waits for
+its manifest, Cloud reports `starting`/`is_online=false` and no attested compose hash. Verify
+`recipient.json`'s own quote with `verify_key_evidence import` before export; retain the public
+`import-info.json` from the same prefix. After import completes and Cloud reports `running`,
+use that Info with the Cloud quote for full `verify-attestation` acceptance, following the
+[migration runbook](runbooks/onchain-kms-migration.md). The import render includes ingress and
+topup gated on `import-verify`; before DNS switch the public origin serves the old service, so
+import deployments skip its maintenance lease and origin probes. Export also publishes
+`export-info.json`. These files have the same
 untrusted-transport rule. For a legacy CVM needing a pre-upgrade read outside Deploy, an operator
 with already-authorized guest shell access can run `topup guest-info` from this release's image
 with only `/var/run/dstack.sock` mounted; this command needs no database or sealed secrets.

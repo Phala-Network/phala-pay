@@ -356,7 +356,7 @@ jobs:
             "$ENVIRONMENT_DIR" >"$COMPOSE"
           if [[ "$VARIANT" == migration-import ]]; then
             { echo "DOMAIN="; echo "PUBLIC_URL="; } >>"$GITHUB_ENV"
-            echo "Migration import has no API or ingress; no public URL or DNS is configured." >>"$GITHUB_STEP_SUMMARY"
+            echo "Migration import includes ingress and topup gated on import-verify. Before DNS switch the origin is the old service; skip its public URL and DNS steps." >>"$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           # Export retains the old service URL solely for the pre-fencing maintenance pause.
@@ -505,7 +505,7 @@ jobs:
         run: |
           if [[ "$VARIANT" == migration-import ]]; then
             echo "enabled=false" >>"$GITHUB_OUTPUT"
-            echo "Migration import has no API or ingress; skip the maintenance lease and public URL availability monitor. Acceptance uses attestation evidence only; see onchain-kms-migration.md step 6." >>"$GITHUB_STEP_SUMMARY"
+            echo "Before DNS switch the origin is the old service; skip its maintenance lease and availability monitor. Verify the recipient quote before export (migration step 6), then full Cloud attestation after import completes (T0)." >>"$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           if [[ "$MODE" == commit ]] && jq -e '.no_op == true' "$WORK/onchain-prepare.json" >/dev/null; then
@@ -657,9 +657,9 @@ jobs:
               echo
             fi
           } >>"$GITHUB_STEP_SUMMARY"
-          # A provision only creates the CVM: unsealed, it boots but does not run, so it is waited for
-          # settled in any status (deploy/phala-cvm.sh, wait); the attestation below shows it booted
-          # the compose. The upgrade after the sealing is the acceptance step.
+          # Provision creates the CVM before these waits. An unsealed migration import cannot boot
+          # without S3 credentials; the current wait may fail after creation. Follow migration
+          # steps 5/6 to seal/start and verify recipient evidence, then full attestation after import.
           if [[ "$VARIANT" == export ]]; then
             expected=$(jq -er '.compose_hash' "$WORK/deploy.json")
             "$KIT/deploy/phala-cvm.sh" wait --unsealed --compose-hash "$expected" "$cvm_id" >"$WORK/cvm.json"
@@ -720,7 +720,7 @@ jobs:
               "$COMPOSE" "$VARIANT" "$(cat "$ENVIRONMENT_DIR/os-image-hash")" "$ENVIRONMENT_DIR" \
               2>&1 | tee "$WORK/partial-verification.txt" >>"$GITHUB_STEP_SUMMARY"
             if [[ "$VARIANT" == migration-import ]]; then
-              echo "Migration import: verified quote, event log, app id, compose hash and measured OS claim only. Full OS/vm_config acceptance is pending: verify import-info.json and recipient.json from the migration prefix per deploy/runbooks/onchain-kms-migration.md step 6 before export. No public URL, healthz or certificate evidence applies to this CVM." | tee "$WORK/acceptance-pending.txt" >>"$GITHUB_STEP_SUMMARY"
+              echo "Migration import: partial quote verification only. Before export, verify recipient.json's own quote (migration step 6). After import completes and Cloud reports running, verify full Cloud attestation with import-info.json (T0). Ingress/topup are gated on import-verify; before DNS switch the origin is the old service." | tee "$WORK/acceptance-pending.txt" >>"$GITHUB_STEP_SUMMARY"
             else
               echo "Acceptance pending: seal the CVM, configure DNS, then run upgrade readback." | tee "$WORK/acceptance-pending.txt" >>"$GITHUB_STEP_SUMMARY"
             fi
@@ -813,7 +813,7 @@ jobs:
         if: inputs.mode == 'provision' || (inputs.mode == 'commit' && env.INITIAL_BASE == 'true')
         run: |
           if [[ "$VARIANT" == migration-import ]]; then
-            echo "Migration import: seal with the complete preflight command in deploy/runbooks/onchain-kms-migration.md step 5, then complete full OS/vm_config and recipient acceptance in step 6. This CVM has no API, ingress or DNS records." >>"$GITHUB_STEP_SUMMARY"
+            echo "Migration import: seal locally with CLI 1.2.7 and the complete preflight command in migration step 5, then start if stopped. Verify the recipient quote in step 6; full Cloud attestation follows import completion at T0. Ingress/topup start after import-verify; before DNS switch the origin is the old service." >>"$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           compose_json=$("$("$KIT/deploy/pinned-compose.sh")" -f "$COMPOSE" config --no-interpolate --format json)

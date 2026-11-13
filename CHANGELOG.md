@@ -31,13 +31,19 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Fixed
 
+- Correct the onchain KMS migration runbooks from the staging rehearsal: freeze release hashes,
+  require the old service on the export release, seal/start before waiting for import, and
+  separate recipient-quote evidence from full post-import attestation. Record Base gateway
+  routing probes, measured timings, merchant re-pinning and Safe cleanup batching. Correct the
+  staging baseline gateway and import summaries; workflow readiness behavior remains unchanged.
 - Base KMS commit waits for an approved update of a stopped CVM to settle stopped on the target
   hash before requesting start, then waits for running and verifies the stored compose and
   attestation. Pre-apply busy/error states and unexpected settled states fail closed.
   Migration-import deployments skip maintenance leases and every
-  public-origin probe, domain/DNS and TLS step because the import CVM has no API or ingress;
-  they verify partial attestation and explicitly leave full OS/vm_config and recipient
-  acceptance pending the migration runbook's public evidence checks, without pausing the old service.
+  public-origin probe, domain/DNS and TLS step because before DNS switch the origin serves the
+  old service. Import includes ingress/topup gated on import-verify. Its current readiness waits
+  can fail before sealing or while waiting for the manifest; the runbook requires recipient
+  quote verification before export and full attestation after import completes.
 
 ## [0.13.11] - 2026-11-11
 

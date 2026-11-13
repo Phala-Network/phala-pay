@@ -512,7 +512,7 @@ echo 'certificate evidence verified'
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("PUBLIC_URL=\n", (self.tmp / "env").read_text())
         self.assertIn("DOMAIN=\n", (self.tmp / "env").read_text())
-        self.assertIn("no API or ingress", (self.tmp / "summary").read_text())
+        self.assertIn("Before DNS switch the origin is the old service", (self.tmp / "summary").read_text())
 
     def test_service_source_cannot_claim_to_be_the_reviewed_export(self):
         self.prepare_rollback()
