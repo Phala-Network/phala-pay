@@ -3,12 +3,21 @@
 The deploy kit pins `phala` **1.2.7**, `@phala/cloud` **0.6.5**, and viem **2.57.1** in
 `deploy/tools/package.json` and its npm lockfile. These were the latest stable CLI/SDK releases
 checked on 2026-11-12 PST. The CLI's
-[`@phala/cloud: ^0.6.4` dependency](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.2.7/cli/package.json)
+[`@phala/cloud: ^0.6.4` dependency](https://registry.npmjs.org/phala/1.2.7)
 admits SDK 0.6.5. Both parents require patched Zod 4.6.7, so the old deployment tooling Zod
 exception is removed. Install with `npm ci --prefix deploy/tools --ignore-scripts`.
 
 ## Changes relevant to deployment
 
+- [`deploy --node`](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.2.7/cli/src/commands/deploy/command.ts#L114-L120)
+  takes the physical node name; `--node-id` is no longer accepted. Rename the GitHub Environment
+  variable `PHALA_NODE_ID` to `PHALA_NODE` and set the reviewed name (`prod5` for production,
+  formerly node id `26`). Remove `PHALA_NODE_ID`: any nonempty value fails workflow validation,
+  even when `PHALA_NODE` is also set. `PHALA_NODE` must start with a letter and contain only
+  letters, digits and hyphens; empty or unset retains automatic placement. Only provision passes
+  the node pin; upgrades keep the CVM's node. A local installed-CLI regression checks that the
+  [provision payload](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.2.7/cli/src/commands/deploy/handler.ts#L925-L927)
+  contains the physical node name.
 - The CLI and SDK now default to API **2026-11-11**, replacing **2026-06-23**. The new CVM
   detail schema requires `resource.memory_in_mb`; string CVM IDs remain supported. See the
   [CLI client](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.2.7/cli/src/lib/client.ts#L12),
@@ -37,15 +46,16 @@ exception is removed. Install with `npm ci --prefix deploy/tools --ignore-script
   reviewed raw `POST /cvms/provision` then `POST /cvms` pair remains explicitly supported;
   [`commitCvmProvision`](https://github.com/Phala-Network/phala-cloud/blob/js-v0.6.5/js/src/actions/cvms/commit_cvm_provision.ts#L208-L240)
   accepts legacy `app_id` + `compose_hash`. See [initial provisioning](onchain-kms-upgrade.md#initial-provisioning).
-- SDK [`patchCvm`](https://github.com/Phala-Network/phala-cloud/blob/js-v0.6.5/js/src/actions/cvms/patch_cvm.ts#L251-L291)
-  now maps a successful `no_change` response without `correlation_id` to `correlationId: ""`.
-  Ordinary updates and prepare-only success still return `requiresOnChainHash: false`.
 - [`logs --serial`](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.2.7/cli/src/commands/logs/index.ts#L104-L144)
   now rejects `--timestamps`, `--since`, and `--until` instead of forwarding them to serial
   channels. `--stdout`/`--stderr` are mutually exclusive container filters, and container logs
   now include stderr by default. The kit's plain serial-log command needs none of those flags.
 
 ## Contracts retained by the kit
+
+SDK [`patchCvm`](https://github.com/Phala-Network/phala-cloud/blob/js-v0.6.5/js/src/actions/cvms/patch_cvm.ts#L251-L291)
+continues to map a successful `no_change` response without `correlation_id` to `correlationId: ""`.
+Ordinary updates and prepare-only success still return `requiresOnChainHash: false`.
 
 The [PATCH action](https://github.com/Phala-Network/phala-cloud/blob/js-v0.6.5/js/src/actions/cvms/patch_cvm.ts#L251-L291)
 sends `X-Prepare-Only: true` only for `prepareOnly`; it never sends that option in the JSON body.
@@ -72,8 +82,15 @@ The Phala KMS compose-update helper still uses the supported
 then [`PATCH /compose_file`](https://github.com/Phala-Network/phala-cloud/blob/js-v0.6.5/js/src/actions/cvms/commit_cvm_compose_file_update.ts#L136-L140)
 pair, carrying the full reviewed compose and omitting env-update fields. OS upgrades retain
 `api /cvms/{id}/os-image -X PATCH -F os_image_name=…` and bounded convergence polling.
-New provisioning still returns before readiness even with `deploy --wait`; the wrapper's
-polling, JSON extraction and error propagation remain covered by the deployment tests.
+[`deploy --wait`](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.2.7/cli/src/commands/deploy/handler.ts#L1192-L1204)
+waits for a new CVM to start, including with `--json`. The workflow omits `--wait` and uses the
+wrapper's bounded readiness polling. JSON extraction and error propagation remain covered by
+the deployment tests.
+
+The workflow/script command audit against the installed 1.2.7 `--help` covers `deploy` (both
+workflow and interactive provisioning arguments), `cvms get --json`, `cvms start --json`,
+`cvms attestation --json`, and `cvms list --search NAME --page-size 100 --json`. No other removed
+flags were found in those invocations.
 
 Authentication still prefers `PHALA_CLOUD_API_KEY` over a stored profile, and
 [`PHALA_CLOUD_DIR`](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.2.7/cli/src/utils/credentials.ts)

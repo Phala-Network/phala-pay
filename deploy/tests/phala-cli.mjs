@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -55,8 +55,11 @@ test('locked CLI and SDK retain the Base encryption key and deployment response 
         response.writeHead(200, {'content-type': 'text/plain'});
         response.end('booted\n');
       } else if (path === '/empty') response.writeHead(202).end();
-      else if (path === '/cvms' && request.method === 'POST') json({compose_hash: 'ab'.repeat(32), token: 'test-create-token'});
-      else json({error: 'unexpected request'}, 500);
+      else if (path === '/cvms' && request.method === 'POST') {
+        if (calls.at(-1).body.token) json({...vm, vm_uuid: id, teepod: null, user_id: null,
+          base_image: null, docker_compose_file: 'services: {}'});
+        else json({app_id: app, compose_hash: 'ab'.repeat(32), token: 'test-create-token'});
+      } else json({error: 'unexpected request'}, 500);
     } catch {
       response.writeHead(500).end();
     }
@@ -127,5 +130,20 @@ test('locked CLI and SDK retain the Base encryption key and deployment response 
     assert.equal(calls.at(-1).body.compose_file.manifest_version, '3');
     assert.equal(calls.at(-1).body.compose_file.gateway_enabled, true);
     assert.equal('tproxy_enabled' in calls.at(-1).body.compose_file, false);
+  });
+  await context.test('deploy accepts the workflow provisioning flags and sends the physical node name', async () => {
+    const compose = join(directory, 'compose.yml');
+    const env = join(directory, 'env');
+    await writeFile(compose, 'services:\n  test:\n    image: busybox\n');
+    await writeFile(env, '');
+    const before = calls.length;
+    const result = await run('deploy', '--json', '--node', 'prod5', '--name', cvm.name,
+      '--compose', compose, '--pre-launch-script', new URL('../phala-cloud-pre-launch.sh', import.meta.url).pathname,
+      '-e', env, '--instance-type', 'tdx.medium', '--fs', 'ext4', '--kms', 'phala', '--image', 'dstack-0.6.1',
+      '--no-dev-os', '--no-public-logs', '--no-public-sysinfo', '--public-tcbinfo', '--secure-time');
+    assert.equal(JSON.parse(result.stdout.slice(result.stdout.indexOf('{'))).vm_uuid, id);
+    const provision = calls.slice(before).find(call => call.path === '/cvms' && call.body?.node);
+    assert.equal(provision.body.node, 'prod5');
+    assert.equal('node_id' in provision.body, false);
   });
 });
