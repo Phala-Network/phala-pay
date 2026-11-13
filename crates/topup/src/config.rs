@@ -75,7 +75,8 @@ struct MaintenanceKeySpec {
 #[derive(Clone, Debug)]
 pub struct Config {
     /// The deployment's name, reported to Sentry (`<environment>-restore` while read-only). Explicit non-production names
-    /// permit staging-only price opt-in; every other name requires Allowed licensing.
+    /// permit noncommercial price opt-in; production accepts only Allowed or opted-in
+    /// PermissionRequired sources.
     pub environment: String,
     /// Required positive concurrency limit for attached-pending refunds in this deployment.
     pub max_attached_pending_refunds: NonZeroU32,
@@ -1018,6 +1019,30 @@ mod tests {
         for file in files {
             Config::load(&file).unwrap_or_else(|error| panic!("{error}"));
         }
+    }
+
+    #[test]
+    fn production_permission_required_sources_need_explicit_acceptance() {
+        let yaml =
+            include_str!("../../../deploy/environments/phala-network/production/topup/topup.yaml");
+        Config::parse(yaml).expect("owner-accepted Kraken check");
+        assert!(
+            Config::parse(&yaml.replace(
+                "allow_unclear_sources: true",
+                "allow_unclear_sources: false"
+            ))
+            .unwrap_err()
+            .contains("explicit source opt-in")
+        );
+        let prohibited = yaml.replace(
+            "source: kraken, symbol: PHAUSD, company: kraken",
+            "source: binance, symbol: PHAUSDT, company: binance",
+        );
+        assert!(
+            Config::parse(&prohibited)
+                .unwrap_err()
+                .contains("production requires Allowed licensing")
+        );
     }
 
     #[test]

@@ -4,7 +4,7 @@ use crate::route::{PricingMode, RouteError};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-/// Legal review outcome; only Allowed is usable in production.
+/// Legal review outcome; production PermissionRequired use requires explicit owner acceptance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum Verdict {
     /// Commercial use reviewed and approved.
@@ -298,7 +298,8 @@ pub struct PriceConfig {
     /// USDT FX peg band.
     #[serde(default = "fx_band")]
     pub max_fx_deviation_bps: Option<Bps>,
-    /// Explicit noncommercial staging/rehearsal opt-in to non-Allowed sources; never legal approval.
+    /// Explicit owner acceptance of PermissionRequired sources, or noncommercial staging opt-in;
+    /// never legal approval. Production still refuses Prohibited and Unclear sources.
     #[serde(default)]
     pub allow_unclear_sources: bool,
     /// Stablecoin source set; every fresh observation of the route asset is inspected for depeg.
@@ -336,15 +337,18 @@ impl PriceConfig {
             ("fx", &self.fx),
         ]
     }
-    /// Production never accepts staging opt-in as legal approval.
+    /// Production accepts PermissionRequired sources only with explicit owner opt-in.
     pub fn validate_licensing(&self, staging: bool) -> Result<(), RouteError> {
         for (_, sources) in self.roles() {
             for source in sources {
                 let verdict = provider(source.company()).map(|p| p.verdict);
-                if verdict != Some(Verdict::Allowed) && !(staging && self.allow_unclear_sources) {
+                if verdict != Some(Verdict::Allowed)
+                    && !(self.allow_unclear_sources
+                        && (staging || verdict == Some(Verdict::PermissionRequired)))
+                {
                     return Err(RouteError::validation(
                         "price",
-                        "production requires Allowed licensing verdict",
+                        "production requires Allowed licensing or opted-in PermissionRequired sources",
                     ));
                 }
             }
@@ -422,7 +426,7 @@ impl PriceConfig {
                     .verdict;
                 if verdict != Verdict::Allowed && !self.allow_unclear_sources {
                     return Err(fail(
-                        "source is not Allowed; staging must explicitly opt in",
+                        "source is not Allowed; explicit source opt-in is required",
                     ));
                 }
                 match source {
@@ -528,10 +532,10 @@ mod tests {
         ];
         assert!(config.validate(1, "pha", true).is_ok());
         assert!(config.validate_licensing(true).is_ok());
-        assert!(
-            config.validate_licensing(false).is_err(),
-            "staging opt-in never grants Kraken permission"
-        );
+        assert!(config.validate_licensing(false).is_ok());
+        config.allow_unclear_sources = false;
+        assert!(config.validate_licensing(false).is_err());
+        config.allow_unclear_sources = true;
         assert_eq!(config.primary[0].company(), "uniswap-v2-onchain");
         assert_eq!(
             provider("uniswap_v2_twap").unwrap().verdict,
@@ -615,7 +619,7 @@ mod tests {
     }
 
     #[test]
-    fn licensing_gate_cannot_be_overridden_in_production() {
+    fn production_licensing_requires_opt_in_and_never_accepts_prohibited_sources() {
         let p = volatile();
         assert!(p.validate_licensing(true).is_ok());
         assert!(p.validate_licensing(false).is_err());
@@ -633,11 +637,14 @@ mod tests {
             assert_eq!(provider(source).unwrap().verdict, verdict);
         }
         for source in [volatile().primary[0].clone(), volatile().check[0].clone()] {
+            let permission_required = source.company() == "kraken";
             let mut p = volatile();
             p.sources = vec![source];
             p.primary.clear();
             p.check.clear();
             p.fx.clear();
+            assert_eq!(p.validate_licensing(false).is_ok(), permission_required);
+            p.allow_unclear_sources = false;
             assert!(p.validate_licensing(false).is_err());
         }
         let error = serde_json::from_value::<Source>(serde_json::json!({

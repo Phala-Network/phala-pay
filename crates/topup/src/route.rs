@@ -131,10 +131,7 @@ mod tests {
             topup_core::price::Source::UniswapV2Twap { .. }
         ));
         assert_eq!(route.pricing.check[0].company(), "kraken");
-        assert!(
-            route.pricing.validate_licensing(false).is_err(),
-            "the staging opt-in never grants Kraken commercial permission"
-        );
+        assert!(route.pricing.validate_licensing(false).is_ok());
         assert_eq!(route.pricing.fx[0].asset(), "usdt");
         assert!(route.merchant.min_deposit_atomic.default.value().is_zero());
         assert_eq!(route.merchant.quote_ttl_seconds.default, 900);

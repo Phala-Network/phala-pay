@@ -65,21 +65,22 @@ refuses() {
     }
 }
 
-# Staging opts into Unclear sources; the actual production target refuses this opt-in.
+# Explicit Kraken opt-in passes production, including with a staging reporting label.
 environment staging
 accepts staging staging
-refuses production staging "production refuses staging-only price licensing opt-in"
+accepts production staging
 
 # A live mainnet route appended after them, in flow style or as JSON, is found: production
-# detects it, staging refuses its live mode and production refuses its licensing opt-in.
+# detects it, staging refuses its live mode and production refuses its Prohibited Binance source
+# even though the configuration carries a staging reporting label.
 environment flow "$(flow "$(route_json mainnet-flow 1 true)")"
 grep -q '^  - {route: ' "$tmp/flow/topup.yaml"
 refuses staging flow "route mainnet-flow: staging serves test mode only"
-refuses production flow "production refuses staging-only price licensing opt-in"
+refuses production flow "production refuses prohibited or unapproved price sources"
 environment json "$(route_json mainnet-json 1 true)"
 grep -q '^  - {"' "$tmp/json/topup.yaml"
 refuses staging json "route mainnet-json: staging serves test mode only"
-refuses production json "production refuses staging-only price licensing opt-in"
+refuses production json "production refuses prohibited or unapproved price sources"
 
 # A chain on neither list, and a local development chain, are refused everywhere.
 environment unknown "$(flow "$(route_json polygon 137 true)")"

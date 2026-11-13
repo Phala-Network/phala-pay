@@ -691,11 +691,12 @@ min(TWAP, current spot) × ETH/USD; independent Kraken order-book mid agreement 
 × ETH/USD, so average lag cannot overvalue a falling market or reject ordinary agreeing spot moves.
 Base additionally gates on the sequencer uptime
 feed with recovery grace. Test tokens explicitly observe configured mainnet endpoint pairs. Licensing
-verdicts are compiled into the attested provider registry: only Allowed can run in production;
+verdicts are compiled into the attested provider registry: production accepts Allowed sources
+and explicitly opted-in PermissionRequired sources;
 Chainlink on-chain consumption is Allowed and is the stablecoin default. Kraken is
 PermissionRequired; Binance/Coinbase/Coin Metrics are Prohibited for commercial use.
 `environment: staging` plus explicit route opt-in permits noncommercial TWAP/Kraken PHA
-rehearsal. PHA is production-ineligible until a second independent Allowed source exists;
+rehearsal. Production PHA explicitly records the owner's acceptance of Kraken's licence risk;
 see the [on-chain source](design/price-failover.md#pha-on-chain-follow-up). Coin Metrics remains disabled.
 See [price failover](design/price-failover.md) and [configuration](configuration.md#price-sources).
 

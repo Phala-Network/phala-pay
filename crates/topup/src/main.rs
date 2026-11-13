@@ -1869,7 +1869,7 @@ fn check_config(file: &Path, secrets: bool, require_sentry: bool) -> ExitCode {
             );
             for route in &config.routes {
                 println!(
-                    "route {} price {:?}; staging opt-in: {}",
+                    "route {} price {:?}; source opt-in: {}",
                     route.route, route.pricing.mode, route.pricing.allow_unclear_sources
                 );
                 if !route.livemode {

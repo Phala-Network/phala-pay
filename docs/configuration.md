@@ -103,7 +103,7 @@ client-supplied forwarding headers are not trusted.
 One YAML file, parsed with unknown fields refused, holds every public setting of a deployment:
 
 ```yaml
-environment: staging                       # the Sentry environment: also gates staging-only price licensing opt-in
+environment: staging                       # the Sentry environment: also selects the price licensing gate
 max_attached_pending_refunds: 1             # required positive deployment cap; production uses 10
 max_refund_attachments_per_day: 1           # required rolling 24-hour deployment cap
 # hints_per_day: 80                       # optional; environment-wide per UTC day
@@ -202,7 +202,7 @@ release's budget; a rollback never clears rolling attachment history.
   Overlapping quotes share rounds; F240 buys about five active hours/day, not an all-day guarantee.
   Candidates still require dual-provider confirmation. Actual calls retain provider quota
   accounting and add `workload="fresh_quote"`; daily usage/limits and the business exhaustion
-  alert expose the cap. The funded allocation lowers production D to 152 while preserving H/Q
+  alert expose the cap. The funded allocation lowers production D to 132 while preserving H/Q
   and refunds; see the [budget arithmetic](../deploy/RPC.md#worst-case-pilot-budget).
   **Rollback to v0.13.5:** use its retained verified configuration without the new discovery key;
   the floor is unchanged and F/check claims survive rollback and restore. The additive
@@ -356,18 +356,25 @@ above). Deviation-triggered updates and all agreement/peg checks remain in effec
 Chainlink public on-chain consumption is Allowed; stablecoin defaults are Chainlink-only and
 production-eligible without `allow_unclear_sources`. Kraken public market data is
 PermissionRequired; Binance, Coinbase and Coin Metrics are Prohibited for commercial use under
-the reviewed terms. Production refuses every non-Allowed source. Explicit non-production
-`staging`, `testnet`, `local`, `sandbox` plus route `allow_unclear_sources: true` permits
-noncommercial rehearsal of the TWAP/Kraken PHA route; this flag grants no permission.
-Coin Metrics remains disabled in every environment. Deploy's production target independently
-refuses a staging opt-in. `DEPLOY_ENVIRONMENT=staging` is required for a testnet rehearsal.
+the reviewed terms. In production, route `allow_unclear_sources: true` records the owner's
+acceptance of a PermissionRequired source's licence risk; it grants no permission and does not
+change the registry verdict. Production always refuses Prohibited, Unclear and unknown sources.
+Explicit non-production `staging`, `testnet`, `local`, `sandbox` plus this flag also permits
+noncommercial rehearsal. Coin Metrics remains disabled in every environment. Deploy's production
+target independently revalidates this gate, including configurations with a staging reporting label.
+`DEPLOY_ENVIRONMENT=staging` is required for a testnet rehearsal.
 
-PHA production is unavailable until two independent sources are implemented and Allowed. The
-follow-up to #331 values PHA at min(Uniswap V2 PHA/WETH TWAP, current spot) × Chainlink ETH/USD.
-Noncommercial rehearsal compares current Uniswap spot × ETH/USD against current Kraken PHA/USD;
+Production's `phala-cloud-ethereum-pha-usd` route uses the owner-accepted Kraken check (2026-11-13).
+It values PHA at min(Uniswap V2 PHA/WETH TWAP, current spot) × Chainlink ETH/USD and
+compares current Uniswap spot × ETH/USD against current Kraken PHA/USD;
 CoinGecko is dropped. See the
 [on-chain plan](design/price-failover.md#pha-on-chain-follow-up). `topup config check` prints ordered
 sources, verdicts, pinned feed metadata and testnet markers; `config show` emits resolved `price`.
+
+The production PHA pilot caps each deposit at 15,000 PHA (about $480 at $0.032/PHA;
+the token cap does not track USD), with a $5 minimum sale, a 50 PHA minimum refund,
+the default 50 bps quote spread and two confirmations. Production and staging lower this
+pool's `min_weth_reserve_usd` to $50,000; the code default remains $100,000.
 
 For PHA, configure `source: uniswap_v2_twap` and `observation_chain_id` for cross-network routes. The fixed pair and tokens
 are pinned in the image. Optional `twap` settings default to `window_s: 1800`,

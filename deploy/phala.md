@@ -155,7 +155,7 @@ Base Sepolia, Ethereum and Base. The mainnets are used for prices only. Sealed c
 `TOPUP_RPC_ANKR_KEY` and `TOPUP_RPC_INFURA_KEY`. Production keeps shared Ankr read and uses
 BlockPI verify on Ethereum and Base, with `TOPUP_RPC_BLOCKPI_ETHEREUM_KEY` and
 `TOPUP_RPC_BLOCKPI_BASE_KEY` from one free account. Production uses
-D=152/H=300/Q=600/factory=150/Safe=10; staging retains D=10/H=20/Q=30/factory=20/Safe=2.
+D=132/H=300/Q=600/factory=150/Safe=10; staging retains D=10/H=20/Q=30/factory=20/Safe=2.
 The [configuration](environments/phala-network/staging/topup/topup.yaml) uses strict HTTPS
 key templates. Run compose-path preflight with the complete sealed env before an authorized
 upgrade, including restore-check. The typed self-test checks actual receipt, transaction,
@@ -165,7 +165,8 @@ Staging PHA samples every 300 seconds with `max_sample_age_s: 900` (three interv
 `max_sample_jump_bps: 1100` (500 × sqrt(300/60), rounded). Defaults for 60-second sampling
 remain 180 seconds and 500 bps. The widened age applies only to test routes. The 1,800-second
 window plus 900-second age fits the 2,880-second Ethereum BLOCKHASH bound, leaving a 16-block
-margin within its 256-block reach. PHA remains production-ineligible.
+margin within its 256-block reach. Production PHA uses explicit owner acceptance of Kraken's
+PermissionRequired licence risk and a 15,000 PHA deposit cap; see [configuration](../docs/configuration.md#price-sources).
 
 ## Staging reset (HUMAN-ONLY)
 
