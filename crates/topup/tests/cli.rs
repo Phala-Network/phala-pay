@@ -241,6 +241,28 @@ fn config_commands_validate_without_secrets_and_check_them_on_request() {
 const ACCOUNT: &str = "acct_0123456789abcdef0123456789abcdef";
 
 #[test]
+fn config_check_reports_the_configured_twap_sampler_interval() {
+    let config = ConfigFile::new("https://topup.example");
+    std::fs::write(
+        config.path(),
+        format!(
+            "twap_sample_interval_s: 120\n{}",
+            include_str!("../../../deploy/environments/phala-network/staging/topup/topup.yaml")
+        ),
+    )
+    .unwrap();
+    let checked = topup(&["config", "check", config.path()]);
+    assert!(checked.status.success(), "{}", output_text(&checked));
+    let output = output_text(&checked);
+    assert!(output.contains("sample_interval_s=120"));
+    assert!(!output.contains("sample_interval_s=300"));
+    let shown = topup(&["config", "show", config.path()]);
+    assert!(shown.status.success());
+    let resolved: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(resolved["twap_sample_interval_s"], 120);
+}
+
+#[test]
 fn attest_requires_a_hex_nonce_and_an_account() {
     let missing = topup(&["attest", "--account", ACCOUNT]);
     assert!(!missing.status.success());

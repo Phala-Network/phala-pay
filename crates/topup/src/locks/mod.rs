@@ -173,11 +173,7 @@ impl ConfiguredQuoteProvider {
         routes: &crate::routes::RouteSet,
         cancellation: tokio_util::sync::CancellationToken,
     ) {
-        let mut tick = tokio::time::interval(Duration::from_secs(if routes.staging() {
-            topup_adapters::pricing::uniswap_v2::SAMPLE_INTERVAL_S
-        } else {
-            60
-        }));
+        let mut tick = tokio::time::interval(Duration::from_secs(routes.twap_sample_interval_s()));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {

@@ -1384,6 +1384,11 @@ with its own verified kit, image digests, configuration commit and deployment re
 it from a version number or from the current caller pin. Never delete the CVM or its app: the
 backups are encrypted with the app's derived key.
 
+Before rolling back to a release that predates `twap_sample_interval_s`, remove that key from any
+environment that explicitly sets it: the older strict parser rejects it. Use the target's retained
+verified configuration and review its hard-coded sampler cadence and RPC budget. Current
+`topup config show` omits the key only when it equals the environment default.
+
 - **Before enabling merchant charges (§§2–9):** leave every account without live charges or paused, fix
   the cause, and repeat the failed section. A configuration fix is a reviewed PR to `$ENV_DIR`
   followed by `dispatch_deploy upgrade`. To abandon the launch, stop the CVM

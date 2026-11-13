@@ -171,6 +171,22 @@ release's budget; a rollback never clears rolling attachment history.
   with that release's verified configuration and operating allocation, never the newer
   production file or `config show` output. Keep the release's compose-update path and the
   [PROXY rollback requirements](../deploy/README.md#custom-domain).
+- **`twap_sample_interval_s`** optionally sets the background TWAP sampler interval and minimum
+  persisted observation spacing in seconds. It accepts integers from 60 to 300, defaults to 300
+  only when `environment: staging` and 60 otherwise. `topup config show` omits the key when
+  it equals that environment's default, preserving compatibility with older strict parsers.
+  It must be strictly less than `max_sample_age_s` on every enabled Uniswap V2 TWAP source;
+  validation rejects an interval that cannot maintain fresh history. The sampler starts
+  immediately, skips missed ticks and remains independent of `quote_snapshots_per_day`.
+  A failure increments `price_source_refusals_total` with its stable adapter error `code` and
+  actual role/source/company, and emits the existing `price-outage` alert with that code as
+  `check` (for example, `twap_liquidity`, `outage`, `divergent` or `timeout`). Alert grouping
+  keeps the existing route/asset/check dimensions and repeat throttle. No raw provider error
+  becomes a label. Review the [sampler RPC allowance](../deploy/RPC.md#remaining-variable-allowances)
+  and route freshness/jump limits before changing cadence. Older releases reject this key;
+  an environment that explicitly sets it must remove it before rolling back to a release
+  predating this setting. Use the target's retained verified configuration, including when
+  a nondefault key came from `config show`; the target resumes its hard-coded sampler cadence.
 - **`discovery`** optionally sets fast-discovery activity windows. `quote_window_hours` accepts
   integers 1–8,760 (default 24), and `deposit_window_days` accepts 1–365 (default 7). Either field
   may be omitted. `quote_window_hours × 3600` must cover `merchant.quote_ttl_seconds.max`
@@ -230,7 +246,7 @@ release's budget; a rollback never clears rolling attachment history.
   `max_log_blocks` is positive and measured per endpoint. Every configured sealed key must be
   present in the candidate sealed environment and in the topup/restore-check compose mapping.
   `topup config check --secrets` checks them without printing their values.
-  Cadences and other work bounds remain code constants; H/Q use the fields above. No in-process
+  Other cadences and work bounds remain code constants; H/Q and TWAP sampling use the fields above. No in-process
   endpoint selection or
   failover exists. The single Alloy retry layer retries HTTP 429/503 and JSON-RPC throughput
   errors; Infura HTTP 402 stops verify until the next UTC midnight.

@@ -27,6 +27,10 @@ impl TwapStore {
             interval_s: SAMPLE_INTERVAL_S,
         }
     }
+    /// Use the same validated interval as the service's background sampler.
+    pub fn with_interval(pool: PgPool, interval_s: u64) -> Self {
+        Self { pool, interval_s }
+    }
 }
 fn storage_error(_: sqlx::Error) -> PriceError {
     tracing::error!("TWAP observation persistence failed");

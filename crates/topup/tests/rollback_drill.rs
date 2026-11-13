@@ -707,23 +707,30 @@ async fn published_image_round_trip() -> Result<()> {
     }.await;
     if let Err(error) = &result {
         eprintln!("rollback drill failed: {error:#}");
-        for entry in std::fs::read_dir(directory.path())? {
-            let path = entry?.path();
-            if path.extension().is_some_and(|extension| extension == "log") {
-                let log = std::fs::read_to_string(&path)?;
-                let lines: Vec<_> = log.lines().collect();
-                eprintln!(
-                    "--- {} ---\n{}",
-                    path.display(),
-                    lines[lines.len().saturating_sub(80)..].join("\n")
-                );
+        let diagnostics: Result<()> = async {
+            for entry in std::fs::read_dir(directory.path())? {
+                let path = entry?.path();
+                if path.extension().is_some_and(|extension| extension == "log") {
+                    let log = std::fs::read_to_string(&path)?;
+                    let lines: Vec<_> = log.lines().collect();
+                    eprintln!(
+                        "--- {} ---\n{}",
+                        path.display(),
+                        lines[lines.len().saturating_sub(80)..].join("\n")
+                    );
+                }
             }
+            let deposits: Vec<(String, String, Option<String>)> =
+                sqlx::query_as("SELECT tx_hash,state,reason FROM deposits ORDER BY created_at")
+                    .fetch_all(&database.app_pool)
+                    .await?;
+            eprintln!("deposit outcomes: {deposits:?}");
+            Ok(())
         }
-        let deposits: Vec<(String, String, Option<String>)> =
-            sqlx::query_as("SELECT tx_hash,state,reason FROM deposits ORDER BY created_at")
-                .fetch_all(&database.app_pool)
-                .await?;
-        eprintln!("deposit outcomes: {deposits:?}");
+        .await;
+        if let Err(error) = diagnostics {
+            eprintln!("rollback diagnostics failed: {error:#}");
+        }
     }
     let cleanup = database.cleanup().await;
     result.and(cleanup)

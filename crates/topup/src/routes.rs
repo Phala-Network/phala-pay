@@ -20,6 +20,7 @@ pub struct RouteSet {
     environment: String,
     hints_per_day: i32,
     quote_snapshots_per_day: i32,
+    twap_sample_interval_s: Option<u64>,
     discovery: crate::scanner::ScanConfig,
     quota_alerts: crate::observability::quota::QuotaAlerts,
     rpc: BTreeMap<u64, crate::chain_rpc::ChainRpc>,
@@ -34,6 +35,7 @@ impl Default for RouteSet {
             environment: String::new(),
             hints_per_day: crate::hints::HINTS_PER_DAY,
             quote_snapshots_per_day: crate::db::daily_budgets::QUOTE_SNAPSHOTS_PER_DAY,
+            twap_sample_interval_s: None,
             discovery: crate::scanner::ScanConfig::default(),
             quota_alerts: crate::observability::quota::QuotaAlerts::default(),
             rpc: BTreeMap::new(),
@@ -119,7 +121,7 @@ impl RouteSet {
         index(routes, |_| Vec::new()).map(drop)
     }
 
-    /// Attach the attested environment for staging-only sampler cadence.
+    /// Attach the attested environment for default sampler cadence.
     pub fn with_environment(mut self, environment: String) -> Self {
         self.environment = environment;
         self
@@ -139,7 +141,18 @@ impl RouteSet {
     pub fn quote_snapshots_per_day(&self) -> i32 {
         self.quote_snapshots_per_day
     }
-    /// Staging alone uses five-minute PHA sampling; default routes retain one-minute sampling.
+    /// Attach the validated background sampling and persisted observation cadence.
+    pub fn with_twap_sample_interval_s(mut self, interval_s: u64) -> Result<Self, String> {
+        crate::config::validate_twap_sample_interval_s(interval_s, &self.routes)?;
+        self.twap_sample_interval_s = Some(interval_s);
+        Ok(self)
+    }
+    /// Background TWAP interval, defaulting to five minutes in staging and one elsewhere.
+    pub fn twap_sample_interval_s(&self) -> u64 {
+        self.twap_sample_interval_s
+            .unwrap_or_else(|| crate::config::default_twap_sample_interval_s(&self.environment))
+    }
+    /// Whether this is the staging environment.
     pub fn staging(&self) -> bool {
         self.environment == "staging"
     }
