@@ -1,16 +1,19 @@
 # Base onchain KMS: prepare, sign, commit
 
 This flow is opt-in. Existing `kms: phala` deployments use `provision` / `upgrade` as before.
-Production and staging are still Phala KMS in the committed directories. Never switch an
-existing CVM's KMS in place: a new Base app has new derived keys.
+The original production/staging `topup` directories retain Phala KMS; the separate staging
+`topup-okms` directory records the completed Base rehearsal. Never switch an existing CVM's
+KMS in place: a new Base app has new derived keys.
 
 ## Release adoption
 
-`deploy-phala.yml` remains pinned to v0.13.6, whose reusable workflow has no Base inputs. The
-release-adoption PR must repin both its workflow SHA and `version` to the release containing
-this change, extend its mode choices to `[provision, upgrade, prepare, commit]`, add optional
-string dispatch inputs `transaction_hash` and `gateway_domain`, and forward both in `with`.
-Do that together; passing new inputs to the old pinned workflow fails GitHub validation.
+Repin both the caller's reusable workflow SHA and `version` together. Its modes must include
+`[provision, upgrade, prepare, commit]`, with optional string inputs `transaction_hash` and
+`gateway_domain` forwarded in `with` (as the current `deploy-phala.yml` does). Every release
+changes image digests and therefore compose hashes. **Prepare on the exact release/configuration
+that commit will use, then freeze releases through acceptance** (through closeout for migration).
+Never sign preparation from an older release; repeat prepare/review/approval after a release
+change. Passing new inputs to an older workflow that lacks them fails GitHub validation.
 
 ## Reviewed inputs
 
@@ -52,7 +55,10 @@ still includes it: this explicit request projection does not relax any returned 
 check. Do not strip it from stored compose or upgrade requests. No other normalization is accepted.
 
 With `TOPUP_CVM_ID` unset, dispatch Deploy `prepare` with `gateway_domain` set to that node's
-`gateway.<base-domain>`. The workflow renders the compose and sets its reviewed pre-launch and
+`gateway.dstack-base-<node>.phala.network` (for example `gateway.dstack-base-prod5.phala.network`),
+not its Phala KMS `gateway.dstack-pha-<node>` endpoint. Use the same Base gateway in
+`provision.json`'s render and all later preparation/commit inputs. The workflow renders the
+compose and sets its reviewed pre-launch and
 port policy in the request, runs preflight, and calls `provision-prepare`. It recomputes the hash
 locally and refuses any backend mutation. If it refuses, stop and investigate the backend mutation against the reviewed baseline and
 supported schema. Never copy an unexplained stored field into the baseline or approve its hash.
@@ -66,11 +72,24 @@ Execute it outside GitHub. Record the DstackApp address from the KmsAuth-emitted
 
 Dispatch `commit` with the executed transaction hash and the same gateway input. The workflow
 recomputes the request, matches the receipt's factory and Safe, verifies owner/compose/device and
-both implementations, then calls `POST /cvms`. It waits unsealed and verifies the attestation,
-including Base provider and committed app id. Set `TOPUP_CVM_ID` from the deployment record.
-Seal the runtime values from the owner's machine, configure DNS from the verified instance id,
-and run the ordinary Base upgrade acceptance flow below. Backend acceptance of a Safe deployer,
-initial full-compose normalization and target-node Base availability require staging rehearsal.
+both implementations, then calls `POST /cvms`. Set `TOPUP_CVM_ID` from the created CVM's
+deployment record, even if the subsequent wait fails. **An unsealed migration import cannot
+boot:** `postgres-walg` requires S3 credentials, so this commit cannot establish unsealed
+attestation/acceptance. The current workflow may fail after successful creation; keep that CVM
+and let the run finish. Follow [migration steps 5 and 6](onchain-kms-migration.md#t-7d-to-t-1-prepare-both-applications):
+seal locally, start if stopped, and verify the recipient's own quote. Cloud reports `starting`
+and no attested compose while import waits for the manifest. Run full `verify-attestation`
+only after import completes and Cloud reports `running`, before revocation/closeout. Do not
+retry initial provisioning merely because its wait failed.
+
+For ordinary service provisioning, pre-seal partial quote verification remains distinct from
+acceptance: seal runtime values locally, configure DNS from the verified instance id, then
+complete the ordinary Base upgrade acceptance flow. CLI **1.2.7** supports Base
+`phala envs update CVM_ID -e .env.ENV`; 1.1.22 lost `kms_info.k256_pubkey` and could not seal.
+Environment updates leave stopped CVMs stopped; wait for sealing to settle, then use
+`phala cvms start CVM_ID --json`. Backend Safe-deployer acceptance, initial normalization and
+node Base availability were exercised in the [staging rehearsal](../environments/phala-network/staging/topup-okms/README.md);
+verify them again for the production target.
 
 The shared debugging entry points are:
 
@@ -81,7 +100,8 @@ deploy/phala-cvm.sh provision-commit "$TRANSACTION_HASH" prepare.json "$ENVIRONM
 
 ## Upgrades and rollback
 
-1. Commit the new release/configuration, keeping the existing app and node. Dispatch `prepare`.
+1. Commit the new release/configuration, keeping the existing app and node. Dispatch `prepare`
+   on that exact release; changing release images invalidates prior preparation.
    Preflight and preparation do not pause admission. Download any batches and the public
    summary artifact. Verify the locally computed compose hash and review the exact rendered
    compose. Base requires `kms_enabled`, `key_provider: kms` and the CA identity from
@@ -153,15 +173,20 @@ failure before fencing still attempts the normal lease cleanup.
 
 Export keeps the old service's allowed env names (AWS, Sentry and RPC keys) without re-sealing;
 its compose may reference only its declared AWS names. That retained-name exception applies
-only to export. Migration import has no API, ingress or public origin. Deploy never pauses,
-resumes, monitors or probes the old service URL for an import deployment, and prints no DNS
-records or service health/TLS acceptance instructions for it. On initial and existing-CVM
-import commits, the stored-hash check (for an existing CVM) precedes `--partial` attestation
-verification: quote, event log, app id, compose hash and the measured OS claim. This is not full
-OS/vm_config acceptance. The step summary and `acceptance-pending.txt` artifact explicitly
-require the operator to fetch and verify `import-info.json` and `recipient.json` from the
-migration prefix, as in [migration runbook step 6](onchain-kms-migration.md#t-7d-to-t-1-prepare-both-applications).
-Complete that check before exporting. A later service commit retains ordinary service
+only to export. Migration import **includes `dstack-ingress` and `topup`**, gated on
+`import-verify`; both start after successful import. Before DNS switch, the configured public
+origin serves the **old service**. Deploy therefore skips the `PUBLIC_URL` maintenance lease,
+availability monitor, origin probes, DNS output and TLS checks for import deployments.
+This isolation prevents an import upgrade from pausing the old writer during T-1.
+
+The current commit workflow still waits for running/Cloud attestation, which cannot accept a
+sealed import waiting for its manifest (`starting`, `is_online=false`, no attested compose hash).
+Its `--partial` branch/`acceptance-pending.txt` can be reached only if those waits succeed;
+they do not replace the migration runbook's two evidence stages. Before export, verify
+`recipient.json`'s own quote with `verify_key_evidence import` and retain `import-info.json`.
+After import completes, verify full Cloud attestation with that Info, the exact import render
+and committed Base environment, as in the [T0 procedure](onchain-kms-migration.md#t0-fence-transfer-verify-and-close-out).
+A later service commit retains ordinary service
 maintenance, health and TLS checks. An export-to-service rollback skips the unavailable
 maintenance API only after verifying the fenced export with its artifact's Info; target
 service health, fresh Info and TLS checks still apply.

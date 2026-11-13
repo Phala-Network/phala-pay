@@ -18,10 +18,15 @@ and [restore procedure](../RESTORE.md) first.
   [migration tooling (#629)](https://github.com/Phala-Network/phala-pay/pull/629) and
   [export-to-service rollback (#632)](https://github.com/Phala-Network/phala-pay/pull/632). Download and
   [verify its kit and images.json](../../docs/self-hosting.md#verify-a-release).
+- **Freeze the release from prepare through closeout.** Every release changes image digests
+  and therefore compose hashes, even if the environment files do not change. Prepare all
+  import, service and restore-check approvals with the exact release that commit will use;
+  never sign an older release's preparation. A release change requires fresh preparation,
+  review and approvals, plus repeating step 1 for the old service before export.
 - Adopt that release in the caller: repin workflow SHA and `version` together, expose modes
   `provision`, `upgrade`, `prepare`, `commit`, and forward `transaction_hash`, `gateway_domain`,
-  `variant`, `migration_plan` using the exact caller diff in #628. The committed
-  `deploy-phala.yml` at v0.13.6 cannot perform this migration. Use the reusable workflow's existing
+  `variant`, `migration_plan` using the exact caller diff in #628. A caller still pinned to
+  v0.13.6 cannot perform this migration. Use the reusable workflow's existing
   `environment_dir` input to select the reviewed old or new directory for each run below.
 - Reserve the chosen Base-capable node, verify its device/quote and gateway, and keep the reviewed
   OS measurement. No OS upgrade belongs in this window. Arrange one measured standby device;
@@ -42,7 +47,7 @@ Verify each target app, device, hash and Safe nonce before signing.
 | Owner action | Prepare/sign | Execute | Calls |
 |---|---|---|---|
 | Safe batch #1 | T-1, from Deploy `prepare` | T-1, before provision commit | Base KmsAuth `deployAndRegisterApp(Safe,false,false,deviceId,importHash)`; record the receipt's new DstackApp in `dstack-app` |
-| Safe batch #2 | T-1, after new app is known | T-1 | New DstackApp `addComposeHash(restoreCheckHash)`, `addComposeHash(serviceHash)` without migration overlay, and optional `addDevice(standbyDeviceId)` |
+| Safe batch #2 | T-1, after new app is known | T-1 | New DstackApp `addComposeHash(restoreCheckHash)`, `addComposeHash(serviceHash)` without migration overlay, optional `addDevice(standbyDeviceId)`, and revocation of unused import hashes |
 | Safe batch #3 | **Pre-sign at T-1**, Safe nonce ordered after #2 | **T0, immediately after imported-app verification, or on rollback** | New DstackApp `removeComposeHash(importHash)` (the initial provision/overlay hash); retain the no-overlay service and restore-check approvals |
 | Runtime env and deploy state | T-1 | T-1/T0 | Seal env locally; select the correct `TOPUP_CVM_ID` and environment directory per run; never run concurrent deploys |
 | DNS, merchant pins and route controls | Agree before T-1 | T0 | Owner switches TXT/CNAME; each merchant verifies/re-pins; admin resumes only after final acceptance |
@@ -54,14 +59,17 @@ re-prepares and must reproduce the approved hash ([token rules](onchain-kms-upgr
 
 ## T-7d to T-1: prepare both applications
 
-Phala staging has a prepared [new Base environment](../environments/phala-network/staging/topup-okms/README.md)
-and an inert export-plan template in the old `staging/topup` directory. Fill and review their
-T-1 public evidence before use; the existing staging service remains on Phala KMS.
+The [staging Base environment](../environments/phala-network/staging/topup-okms/README.md)
+records the completed rehearsal and its public import/export plans. A new attempt needs fresh
+prefixes and reviewed T-1 evidence; do not reuse the completed rehearsal's plans.
 
 Use the release's `deploy/` scripts below, `images.json`, and the
 [admin helper](README.md#environment). Keep public evidence in a private, task-scoped directory
 `EVIDENCE`. Set `OLD_ENV`, `NEW_ENV`, `OLD_CVM_ID`, `NEW_CVM_ID`, `OLD_APP_ID`, `NEW_APP_ID`,
-`SAFE`, `GATEWAY` (new node's `gateway.<base-domain>`) and `DOMAIN` from reviewed records.
+`SAFE`, `GATEWAY` (new node's `gateway.dstack-base-<node>.phala.network`) and `DOMAIN` from
+reviewed records. For Base on `prod5`, use `gateway.dstack-base-prod5.phala.network`, **not**
+the old Phala KMS gateway `gateway.dstack-pha-prod5.phala.network`. The baseline render in
+`provision.json` and every `gateway_domain` input must use the reviewed Base gateway.
 App ids used in migration JSON are lowercase hex **without** `0x`; DstackApp contract arguments
 use the `0x` address. `BASE_URL` is always the environment's configured public origin.
 `OLD_ENV`/`NEW_ENV` and migration-plan inputs are committed paths relative to the caller's repo.
@@ -79,11 +87,17 @@ umask 077
 mkdir -p "$EVIDENCE"
 ```
 
-1. **T-7d: release and old service.** Deploy `mode: upgrade`, `variant: service`,
+1. **T-7d: release and old service (mandatory).** Deploy `mode: upgrade`, `variant: service`,
    `environment_dir: OLD_ENV`, with `TOPUP_CVM_ID=OLD_CVM_ID` and the old `kms: phala` settings.
    Verify the vN service, ingress and backup. Save its exact rendered artifact as
    `EVIDENCE/old-service.yml`, and its gateway as `OLD_GATEWAY`. Record its verified full
    app-compose hash and OS hash as `OLD_COMPOSE_HASH` and `OLD_OS_HASH` for checks and rollback.
+   The old service must be on the **same exact release as the export run**, including any
+   release adopted after this step. Skipping this fails at `Capture verified service Info
+   before export`, before fencing; a stable app-derived export key does not satisfy the
+   service-render check. In staging, run [43205920404](https://github.com/Phala-Network/phala-pay/actions/runs/43205920404)
+   failed here; upgrading the old service in [43206317742](https://github.com/Phala-Network/phala-pay/actions/runs/43206317742)
+   allowed export [43206975626](https://github.com/Phala-Network/phala-pay/actions/runs/43206975626) to pass.
 2. **T-1: fetch the old export key.** Challenge the admin endpoint with a fresh nonce; verify
    it with [Key evidence](#key-evidence) before using its public key:
 
@@ -124,22 +138,23 @@ mkdir -p "$EVIDENCE"
    Commit the receipt-derived `dstack-app`, then dispatch `commit` with the same inputs and the
    batch #1 transaction hash. Record `NEW_CVM_ID`, `IMPORT_HASH` and `NEW_DEVICE_ID` from the
    artifact; save its rendered compose as `EVIDENCE/import.yml` and set `TOPUP_CVM_ID` to the new CVM.
-   Verify owner, hash, device, proxy pins and Base provider as in the upgrade runbook. Import
-   commits use the existing partial attestation verifier for quote, event log, app id, compose
-   hash and measured OS claim. Initial provisioning is unsealed evidence, **not service
-   acceptance**. The summary and `acceptance-pending.txt` artifact keep full OS/vm_config
-   acceptance pending until step 6 verifies `import-info.json` and `recipient.json`.
-   For an existing import CVM, a fresh settled `stopped` state causes commit to start it through
-   the supported Cloud start operation after applying the approved compose and waiting up to
-   900 seconds for it to settle stopped, with no operation in progress and the target hash.
-   Another settled state fails closed before start. Then wait for the running state and expected
-   hash, read back the stored full hash and verify attestation. Pre-apply error or busy states
-   fail closed. The import CVM has no API, ingress or origin: Deploy skips
-   domain extraction, maintenance pause/resume, availability monitoring, healthz, public Info,
-   DNS records and certificate checks. No request goes to the old service's public URL.
-5. **T-1: seal.** Owner prepares `.env.ENV` with the complete secret set and pulls the pinned
-   image as directed by this runbook. The import summary points here instead of printing the
-   ordinary service sealing and DNS acceptance instructions. Use the full plan-aware command:
+   Verify the provision response, stored request and on-chain owner/hash/device/proxy policy
+   as in the upgrade runbook. **Current workflow limitation:** `POST /cvms` can succeed while
+   the initial commit run subsequently fails its wait/readback. An unsealed Base import cannot
+   boot: `postgres-walg` refuses without S3 credentials. Do not wait for an unsealed attestation
+   or retry initial provisioning after creation succeeded. Keep the created CVM id and artifact,
+   let that run finish, then seal immediately in step 5. This is creation, not acceptance.
+
+   The migration-import render **includes `dstack-ingress` and `topup`**; they start only after
+   `import-verify` succeeds. Before DNS switch the public origin is the **old service**.
+   Deploy therefore skips the import's `PUBLIC_URL` maintenance lease, origin probes, DNS
+   output and TLS checks. Preserve that isolation when retrying an existing import CVM.
+   Existing-CVM commit can apply/start an approved compose, but its running/attestation waits
+   cannot accept an import still waiting for the manifest either. Full acceptance is at T0.
+5. **T-1: seal locally, then start.** From the **operator machine**, prepare `.env.ENV` with
+   the complete secret set and pull the pinned image as directed by this runbook. Use Phala
+   CLI **1.2.7** for Base sealing: CLI 1.1.22 dropped `kms_info.k256_pubkey` and failed with
+   `KMS k256_pubkey is required`. Use the supported `-e` path, with the full plan-aware preflight:
 
    ```sh
    deploy/preflight.sh --env .env.ENV --compose "$EVIDENCE/import.yml" \
@@ -147,25 +162,35 @@ mkdir -p "$EVIDENCE"
    deploy/phala envs update "$NEW_CVM_ID" -e .env.ENV
    ```
 
-   The import now publishes `import-info.json` and `recipient.json` and waits; API, migrations and backup stay gated.
+   `envs update` leaves a stopped CVM stopped. After sealing has settled, inspect the state;
+   start only when `in_progress=false` and `status=stopped`:
+
+   ```sh
+   deploy/phala cvms get "$NEW_CVM_ID" --json >"$EVIDENCE/sealed-cvm.json"
+   jq -e '.in_progress == false and .status == "stopped"' "$EVIDENCE/sealed-cvm.json" >/dev/null
+   deploy/phala cvms start "$NEW_CVM_ID" --json
+   ```
+
+   If the CVM is already running/starting, do not issue a second start; inspect its current
+   operation. The import publishes `import-info.json` and `recipient.json` and waits; ingress,
+   API, migrations and backup stay gated. While waiting for the manifest, Cloud reports
+   `starting`, `is_online=false`, and its attestation endpoint has no compose hash. That state
+   does not prevent verifying the recipient's own quote in step 6.
    Default manifest wait is **172800 seconds (48h)** from import invocation; allow enough margin
    for the window. Do not run ordinary service acceptance against the old origin yet.
 6. **T-1: verify recipient and render export.** Fetch only public metadata using locally loaded
    AWS credentials; use the new provisioning artifact's hash and committed OS hash. This is
-   the required full OS/vm_config and recipient acceptance gate after Deploy's partial import
-   verification; complete it before export:
+   the **pre-export recipient quote gate**; complete it before export. Cloud's full
+   `verify-attestation` check must wait until import completes and Cloud reports `running`:
 
    ```sh
    aws --endpoint-url "$AWS_ENDPOINT" s3 cp \
      "${MIGRATION_OBJECT%/}/recipient.json" "$EVIDENCE/recipient.json"
    aws --endpoint-url "$AWS_ENDPOINT" s3 cp \
      "${MIGRATION_OBJECT%/}/import-info.json" "$EVIDENCE/import-info.json"
-   deploy/phala-cvm.sh attestation "$NEW_CVM_ID" "$IMPORT_HASH" >"$EVIDENCE/import-attestation.json"
    NEW_OS_HASH=$(cat "$NEW_ENV/os-image-hash")
-   deploy/verify-attestation.sh "$EVIDENCE/import-attestation.json" "$EVIDENCE/import-info.json" \
-     "$NEW_APP_ID" "$EVIDENCE/import.yml" migration-import "$NEW_OS_HASH" "$NEW_ENV"
    verify_key_evidence import "$EVIDENCE/recipient.json" "$NEW_APP_ID" \
-     "$IMPORT_HASH" "$(cat "$NEW_ENV/os-image-hash")"
+     "$IMPORT_HASH" "$NEW_OS_HASH"
    jq -n --arg recipient "$(jq -er .public_key "$EVIDENCE/recipient.json")" \
      --arg object "$MIGRATION_OBJECT" \
      '{migration_export:{recipient:$recipient,object:$object}}' >"$OLD_ENV/migration-export.json"
@@ -176,8 +201,11 @@ mkdir -p "$EVIDENCE"
    Review/commit the public export plan and exact render; no API, ingress, heartbeat or migrator
    may remain. The recipient key is app-derived and stable; an import restart changes its nonce,
    so re-verify current evidence and re-run export, without re-rendering for a nonce-only change.
+   Save both the recipient document and verified quote result. `import-info.json` is untrusted
+   transport saved for the later full OS/vm_config check; fetching it alone proves no acceptance.
 7. **T-1: approve closeout and restore.** Render the final service and restore-check with known
-   new app/node; `RESTORE_URL` is `https://<new-app-id>-8081.<gateway-base-domain>`:
+   new app/node; `RESTORE_URL` is `https://<new-app-id>-8081.dstack-base-<node>.phala.network`
+   (app id without `0x`), using the Base gateway domain rather than `dstack-pha-<node>`:
 
    ```sh
    deploy/render.sh --images images.json --gateway-domain "$GATEWAY" "$NEW_ENV" \
@@ -205,15 +233,52 @@ mkdir -p "$EVIDENCE"
    calls into Safe Transaction Builder batch #2 (include standby if needed), execute it, then
    pre-sign removal batch #3 at the next reserved Safe nonce. Record the no-overlay service hash
    as `SERVICE_HASH` and the restore-check hash alongside it.
+   One **MultiSendCallOnly** transaction may combine #2's approvals with removal of unused
+   import hashes from abandoned preparations. Review the MultiSend deployment/code and every
+   inner call. Keep the current `IMPORT_HASH` approved until imported-app verification; its
+   final revocation remains batch #3. Do not include it in the pre-T0 cleanup.
 8. **T-1: DNS and merchants.** Lower TXT/CNAME TTL to 60 seconds early enough for the previous
    TTL to expire. Record old values; check any Let's Encrypt CAA account restriction. Notify each
    merchant of downtime, old-secret expiry, fresh idempotency keys, unchanged addresses and the
    required pin rollout. Confirm who can change DNS and execute #3 throughout the window.
+   Complete the [Base gateway routing precheck](#base-gateway-routing-precheck) before T0.
+
+### Base gateway routing precheck
+
+The November 12, 2026 staging cutover needed a **Phala front-proxy fix** for custom domains on
+Base gateways. Correct TXT/CNAME records alone did not prove routing: the shared front sent
+custom-domain SNI to the old Phala gateway, while the Base instance passthrough worked.
+
+Before production T0, run these probes against an already-running Base staging/control service
+on the chosen gateway. Set `PROBE_DOMAIN` to its configured custom domain, `PROBE_GATEWAY` to
+its `gateway.dstack-base-<node>.phala.network`, and `PROBE_INSTANCE_ID` to its verified instance.
+Both probes must return that service's **ingress certificate**; save the certificate and
+fingerprint. A reset or `no peer certificate available` blocks cutover:
+
+```sh
+PROBE_BASE_DOMAIN=${PROBE_GATEWAY#gateway.}
+openssl s_client -connect "$PROBE_GATEWAY:443" -servername "$PROBE_DOMAIN" \
+  -showcerts </dev/null >"$EVIDENCE/base-custom-sni.txt" 2>&1
+openssl x509 -in "$EVIDENCE/base-custom-sni.txt" -noout -subject -issuer -fingerprint -sha256
+openssl s_client -connect "$PROBE_GATEWAY:443" \
+  -servername "$PROBE_INSTANCE_ID-443s.$PROBE_BASE_DOMAIN" \
+  -showcerts </dev/null >"$EVIDENCE/base-instance-passthrough.txt" 2>&1
+openssl x509 -in "$EVIDENCE/base-instance-passthrough.txt" -noout -subject -issuer -fingerprint -sha256
+```
+
+The new import's ingress is gated until import verification, so a pre-T0 probe of that instance
+cannot pass. Before DNS switch, the migration's public origin still reaches the old service;
+its certificate/health is not evidence for the new Base app. Repeat the passthrough probe with
+the **new verified instance** after import completes, then the custom-domain probe after DNS
+switch. A tls-alpn placeholder proves ingress reachability only; final acceptance still requires
+the issued domain certificate and [ingress evidence](../README.md#attestation-ingress-and-egress).
 
 ## T0: fence, transfer, verify and close out
 
-Record every transition in US Pacific time with its workflow run/commit. Target downtime is
-30–45 minutes, **unverified until staging measures it**; reserve a 60–90 minute window.
+Record every transition in US Pacific time with its workflow run/commit. In the November 12
+staging rehearsal, **fence → import complete was approximately 11 minutes**, and **closeout was
+approximately 5 minutes**, excluding the external Phala gateway outage. These measurements
+include an old-service release correction; they are not a production downtime guarantee.
 
 | When | Action and gate |
 |---|---|
@@ -221,12 +286,25 @@ Record every transition in US Pacific time with its workflow run/commit. Target 
 | T0 | Admin-pause `settlement` and `refunds` on every route; preserve pre-existing incident pauses. For **each live merchant**, check `GET /v1/webhook_endpoints`: every endpoint has `pending_deliveries=0`, `oldest_pending_at=null`; include RedPill with its restricted key and the smoke account. Check undelivered events too ([outbox](outbox-backlog.md)). Resolve any backlog before fencing; daily credited counters alone do not prove drain. |
 | T0, fence | Set `TOPUP_CVM_ID=OLD_CVM_ID`; select `OLD_ENV`, `mode: upgrade`, `variant: export`, `migration_plan: OLD_ENV/migration-export.json`. Deploy takes the instance maintenance pause before replacing the compose. Its verified **export attestation** is the fencing evidence: no topup/ingress/writer, no health check or successful maintenance resume. Do not proceed without that artifact. Maintenance is an in-memory lease; persistent route pauses travel in the dump. |
 | Transfer | Export runs final WAL switch/base backup to the **old prefix**, holds one read-only snapshot for counts and `pg_dump`, encrypts to the pinned recipient and signs/uploads the manifest last. Import checks signature/source/recipient/prefix/current nonce/ciphertext hash, restores, then `import-verify` compares signed table counts, latest migration and heartbeat and commits the completion marker. A failed gate keeps topup down. New migrations/API/heartbeat/backup can start only after that gate. |
+| Import complete, before DNS | Wait for Cloud `running` and the approved import hash, then run the **full migration-import attestation check below** with saved `import-info.json`. Record the verified new instance id. Probe its Base `<instance>-443s.<base-domain>` passthrough; ingress/topup now run after `import-verify`. |
 | DNS switch, routes still paused | Point `_dstack-app-address.DOMAIN` TXT to `<new verified instance_id>:443`; change `DOMAIN` CNAME to the new `GATEWAY` if it differs, DNS only. Use the new attestation's **instance id**, not app id or CVM UUID. Wait for DNS/cache convergence, TLS certificate and `/healthz` 200. The public origin now serves the new app with all routes paused: no new quotes or credits. |
-| Verify imported app | Verify migration-import attestation/OS/Base provider and ingress evidence using the release kit, committed new environment and exact import render. Healthy startup under that attested dependency chain is evidence the signed snapshot checks and completion marker succeeded; there is no admin row-count/marker endpoint, production DB access or guest log surface. Record the public signed manifest from S3 and its snapshot counts. Check admin daily/restore/deposit reads against saved state; do not lift carried-over holds. |
+| Verify imported app | Verify custom-domain SNI and ingress evidence after DNS switch. Healthy startup under the fully attested dependency chain is evidence the signed snapshot checks and completion marker succeeded; there is no admin row-count/marker endpoint, production DB access or guest log surface. Record the public signed manifest from S3 and its snapshot counts. Check admin daily/restore/deposit reads against saved state; do not lift carried-over holds. |
 | **Closeout, before resume** | **Immediately execute pre-signed batch #3**; confirm receipt success and `allowedComposeHashes(importHash)=false`. Set `TOPUP_CVM_ID=NEW_CVM_ID`, select `NEW_ENV`; Deploy `mode: commit`, `variant: service`, empty `migration_plan`, `transaction_hash: already-registered`. It reproduces the pre-approved no-overlay hash without a prepare PATCH, pauses at the now reachable public origin, re-verifies policy, applies the ordinary Cloud update and verifies the stored full compose hash/health/attestation/ingress. Both revocation and no-overlay deployment must finish in this T0 window; never leave the import path approved until T+7d. |
-| Final acceptance and pins | Verify the **final service** compose hash/app id/OS/Base KMS and ingress evidence. Each merchant verifies its nonce-bound attestation and replaces `PHALA_PAY_PINS` once, against this final deployment ([merchant procedure](../../docs/integration.md#53-pin-your-accounts-webhook-keys)). Duplicate key versions cannot be pinned side by side. Restart the staging reference product; confirm RedPill's rollout completed before resuming. |
+| Final acceptance and pins | Verify the **final service** compose hash/app id/OS/Base KMS and ingress evidence. Each merchant verifies its nonce-bound attestation against this final deployment ([merchant procedure](../../docs/integration.md#53-pin-your-accounts-webhook-keys)). The reference product re-pins from `/v1/attestation` on restart. RedPill and other merchants using static `PHALA_PAY_PINS` must replace those pins before resume; duplicate key versions cannot be pinned side by side. Confirm every merchant's restart/rollout completed. |
 | Resume and stop | Admin-resume `settlement`, then `refunds`, then `quotes` on every route whose pause this migration owns. **First resume of writes is the rollback boundary.** Confirm merchant reads/payment/credit acceptance below, then `deploy/phala cvms stop "$OLD_CVM_ID"`. Keep the old CVM/storage and old prefix **at least 30 days**; never run another writer against either prefix. |
 | Within 7 days | Run the [new-app restore drill](../RESTORE.md) using the pre-approved restore-check hash/device and new backup prefix. Record its results before widening onboarding. |
+
+After import completes, run the full check deferred from T-1 step 6, before final import-hash
+revocation. This proves OS/vm_config, compose/port/env policy and Base provider in addition to
+the earlier recipient quote:
+
+```sh
+deploy/phala-cvm.sh wait --compose-hash "$IMPORT_HASH" "$NEW_CVM_ID" >"$EVIDENCE/import-running.json"
+deploy/phala-cvm.sh attestation "$NEW_CVM_ID" "$IMPORT_HASH" >"$EVIDENCE/import-attestation.json"
+deploy/verify-attestation.sh "$EVIDENCE/import-attestation.json" "$EVIDENCE/import-info.json" \
+  "$NEW_APP_ID" "$EVIDENCE/import.yml" migration-import "$NEW_OS_HASH" "$NEW_ENV"
+deploy/phala-cvm.sh instance-id "$EVIDENCE/import-attestation.json"
+```
 
 Route commands below use the signed `admin` helper; repeat for each route and record returned
 `paused_scopes`. For resume, use the same path with `/resume` and only the scopes this cutover paused.
@@ -240,6 +318,23 @@ admin POST "/v1/admin/routes/$ROUTE/pause" '{"scopes":["settlement","refunds"]}'
 admin GET /v1/admin/reports/daily
 admin GET /v1/admin/restore
 ```
+
+### Staging timeline: November 12, 2026 (PST)
+
+| Time | Observed transition |
+|---|---|
+| 02:02 | Quotes paused; waited the configured one-hour maximum TTL. |
+| 03:04 | T0: settlement/refunds paused; export started. |
+| 03:06–03:11 | First export failed the old-service Info check; old service upgraded to the frozen v0.13.11 release. |
+| 03:15 | Export run [43206975626](https://github.com/Phala-Network/phala-pay/actions/runs/43206975626) completed; import completed and started the gated service. |
+| 03:17 | DNS switched to the new instance and `gateway.dstack-base-prod5.phala.network`. |
+| 03:20 | Full migration-import attestation verified. |
+| Until approximately 05:56 | Phala-side custom-domain gateway outage; certificate issuance at 05:56 PST (13:56 UTC) later established recovery. |
+| 16:27–16:32 | Closeout [43337188731](https://github.com/Phala-Network/phala-pay/actions/runs/43337188731) deployed the approved final service. |
+| 16:35 | Reference product restarted/re-pinned; resumed settlement, refunds, then quotes. |
+
+The operator confirmed recovery and began closeout later that afternoon. The full paused
+interval includes both the gateway outage and that delay; do not count it as migration runtime.
 
 ## Retry and rollback
 
@@ -436,8 +531,8 @@ Record:
   T0 closeout/old-CVM stop and the new-app restore drill within seven days. Restrict customer
   snapshots and storage evidence; retain no local plaintext dump or secret-bearing env files.
 
-**Confirm in staging:** Safe accepted as `deployer_address` (stop and return to the owner if
+**Confirm for each target:** Safe accepted as `deployer_address` (stop and return to the owner if
 rejected; no improvised EOA fallback), exact provision normalization, target-node Base availability,
 import/closeout/restore behavior, merchant secret caching/pin rollout, DNS/gateway/certificate
-delay and measured downtime including the closeout deployment. These are rehearsal gates, not
-verified production claims. Record timestamps and replace the downtime estimate with measurement.
+delay and measured downtime including the closeout deployment. Staging's recorded results are
+not verified production claims. Record production timestamps against the rehearsal measurements.
