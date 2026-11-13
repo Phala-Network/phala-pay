@@ -229,7 +229,7 @@ coverage meet the same key (`ON CONFLICT DO NOTHING`; marked rows are skipped by
   takes a fresh snapshot. Fresh quote snapshots are capped (§5.2) by a `daily_budgets` row per
   `(price chain)`; when exhausted, quotes needing that chain fail closed with a retryable
   `price_unavailable`. Staging PHA TWAP sampling: `uniswap_v2.rs` `SAMPLE_INTERVAL_S` 60 → 300
-  (staging-only, production-ineligible route; continuity and jump limits re-derived for 300 s).
+  (continuity and jump limits re-derived for staging's 300 s interval).
 - **Refunds** (`refunds.rs`): persisted event-driven phases. Inclusion probes use read receipt
   only at 0, 1, 2, 5, 10 minutes, every ten minutes through two hours, then hourly, with hourly
   verify fallback. After 24 hours of absence both probe every six hours. While absent, at most

@@ -52,19 +52,21 @@ environment. Do not change the existing CVM's KMS in place. Follow the
 ## Production
 
 Production has been live since October 23, 2026 PDT. `https://pay-api.phala.com` runs v0.13.4
-for RedPill; Phala Cloud onboarding is pending. Its
-[configuration](environments/phala-network/production/topup/topup.yaml) serves live routes only:
+for RedPill; Phala Cloud onboarding is pending. Its committed production
+[configuration](environments/phala-network/production/topup/topup.yaml) contains live routes only;
+the PHA addition still needs deployment and live acceptance:
 
 | Route | Chain | Token | Confirmations |
 |---|---|---|---|
 | `phala-cloud-ethereum-usdc-usd` | Ethereum (1) | USDC | 2 |
 | `phala-cloud-ethereum-usdt-usd` | Ethereum (1) | USDT | 2 |
+| `phala-cloud-ethereum-pha-usd` | Ethereum (1) | PHA | 2 |
 | `phala-cloud-base-usdc-usd` | Base (8453) | USDC | 3; sequencer uptime grace of one hour |
 
 The `phala-cloud-*` route ids predate RedPill onboarding. They are persistent catalog identifiers,
 not merchant bindings: accounts select accepted assets through payment settings and supply their
 own treasuries. Keep the ids stable for stored quotes, deposits, and recovery. There are no test
-routes or PHA route in production. The factory is
+routes in the production configuration. The factory is
 [deployed and verified on both mainnets](CONTRACTS.md#mainnet); screening uses verified OFAC SDN
 snapshots and audited operator supplements, not the legacy oracle fields.
 
@@ -155,7 +157,7 @@ Base Sepolia, Ethereum and Base. The mainnets are used for prices only. Sealed c
 `TOPUP_RPC_ANKR_KEY` and `TOPUP_RPC_INFURA_KEY`. Production keeps shared Ankr read and uses
 BlockPI verify on Ethereum and Base, with `TOPUP_RPC_BLOCKPI_ETHEREUM_KEY` and
 `TOPUP_RPC_BLOCKPI_BASE_KEY` from one free account. Production uses
-D=152/H=300/Q=600/factory=150/Safe=10; staging retains D=10/H=20/Q=30/factory=20/Safe=2.
+D=132/H=300/Q=600/factory=150/Safe=10; staging retains D=10/H=20/Q=30/factory=20/Safe=2.
 The [configuration](environments/phala-network/staging/topup/topup.yaml) uses strict HTTPS
 key templates. Run compose-path preflight with the complete sealed env before an authorized
 upgrade, including restore-check. The typed self-test checks actual receipt, transaction,
@@ -165,7 +167,9 @@ Staging PHA samples every 300 seconds with `max_sample_age_s: 900` (three interv
 `max_sample_jump_bps: 1100` (500 × sqrt(300/60), rounded). Defaults for 60-second sampling
 remain 180 seconds and 500 bps. The widened age applies only to test routes. The 1,800-second
 window plus 900-second age fits the 2,880-second Ethereum BLOCKHASH bound, leaving a 16-block
-margin within its 256-block reach. PHA remains production-ineligible.
+margin within its 256-block reach. Production PHA uses explicit owner acceptance of Kraken's
+PermissionRequired licence risk and a 15,000 PHA deposit cap; see [configuration](../docs/configuration.md#price-sources).
+Its sampler also runs every 300 seconds, with `max_sample_age_s: 600` and the default 500 bps jump limit.
 
 ## Staging reset (HUMAN-ONLY)
 

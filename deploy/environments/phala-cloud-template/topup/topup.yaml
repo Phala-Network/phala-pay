@@ -124,9 +124,9 @@ routes:
 
     price:
       mode: volatile
-      allow_unclear_sources: true # noncommercial staging only; production refuses non-Allowed sources
-      primary: [{ source: uniswap_v2_twap, observation_chain_id: 11155111 }]
-      check: [{ source: kraken, symbol: PHAUSD, company: kraken }] # production requires written permission
+      allow_unclear_sources: true # noncommercial staging rehearsal
+      primary: [{ source: uniswap_v2_twap, twap: { min_weth_reserve_usd: 50000, max_sample_age_s: 900, max_sample_jump_bps: 1100 }, observation_chain_id: 11155111 }]
+      check: [{ source: kraken, symbol: PHAUSD, company: kraken }] # PermissionRequired
       fx:
         - { source: chainlink, feed: USDT_USD, chain_id: 1, observation_chain_id: 11155111 }
 

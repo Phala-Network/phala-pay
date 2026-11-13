@@ -12,6 +12,7 @@ discovery:
   quote_checks_per_day: 100
 hints_per_day: 300
 quote_snapshots_per_day: 600
+twap_sample_interval_s: 300
 public_origin: https://pay-api.phala.com
 admin_key:
   id: admin/production-v1
@@ -24,12 +25,12 @@ maintenance_keys:
 # Independent Ankr read and BlockPI verify endpoints (deploy/RPC.md). Ankr is shared with staging;
 # BlockPI uses one mainnet key per chain from one free account. Staging retains Ankr + Infura.
 # Fast discovery uses read; coverage and money decisions require read/verify agreement.
-# Operational pilot caps: D=152 deposits/day, 150 factory verifications/day, 10 Safe proof sets/day.
+# Operational pilot caps: D=132 deposits/day, 150 factory verifications/day, 10 Safe proof sets/day.
 # At most 2,000 hot addresses/chain and 50 new issuances/chain/day; see deploy/RPC.md.
 # BlockPI log requests use its measured free-tier range limit; see deploy/RPC.md for the budget.
 # Daily monitoring allocations; shared Ankr allocations total 25,000 calls (deploy/RPC.md).
 quota_alerts:
-  deposits_per_day: 152
+  deposits_per_day: 132
   rpc:
     - name: ankr
       providers: [ankr-mainnet, ankr-base-mainnet]
@@ -98,6 +99,33 @@ routes:
       max_deposit_atomic: { default: "10100000000" }
       min_refund_atomic: { default: "1000000" }
       quote_spread_bps: { default: 0 }
+
+  - route: phala-cloud-ethereum-pha-usd
+    version: 1
+    livemode: true
+
+    chain:
+      chain_id: 1
+      forwarder_factory: "0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747"
+      confirmations: 2
+      sanctions_oracle: "0x40C57923924B5c5c5455c48D93317139ADDaC8fb"
+
+    asset:
+      symbol: pha
+      contract: "0x6c5bA91642F10282b576d91922Ae6448C9d52f4E"
+      decimals: 18
+
+    price:
+      mode: volatile
+      allow_unclear_sources: true # Owner Kingsley accepted Kraken's PermissionRequired risk, 2026-11-13.
+      primary: [{ source: uniswap_v2_twap, twap: { min_weth_reserve_usd: 50000, max_sample_age_s: 600 } }]
+      check: [{ source: kraken, symbol: PHAUSD, company: kraken }]
+      fx: [{ source: chainlink, feed: USDT_USD, chain_id: 1 }]
+
+    merchant:
+      min_amount: { default: 500 }
+      max_deposit_atomic: { default: "15000000000000000000000" }
+      min_refund_atomic: { default: "50000000000000000000" }
 
   # Ethereum mainnet USDT. Tether's canonical token is a no-return ERC-20; the factory's
   # SafeERC20 path supports it. See deploy/runbooks/usdt-issuer-controls.md for issuer controls.

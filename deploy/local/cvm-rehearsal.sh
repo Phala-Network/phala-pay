@@ -338,7 +338,7 @@ admin_public_key=$(openssl pkey -in "$tmp/admin.pem" -pubout -outform DER | tail
 write_config() {
     # Every route is kept on its committed on-chain pricing path. The local production-chain-id
     # Anvils below provide Chainlink, Uniswap and sequencer fixture state; exchange calls, when
-    # required by the staging-only PHA check, resolve only to the local stub.
+    # required by the PHA check, resolve only to the local stub.
     docker run --rm -i --network none "$TOPUP_IMAGE" topup config show /dev/stdin \
         <"$root/deploy/environments/phala-network/staging/topup/topup.yaml" |
         jq --arg id "$1" --arg key "$admin_public_key" --arg factory "$factory" \

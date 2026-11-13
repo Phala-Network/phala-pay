@@ -23,7 +23,7 @@ asset:
 
 price:
   mode: volatile
-  allow_unclear_sources: true # noncommercial staging only; production refuses non-Allowed sources
+  allow_unclear_sources: true # noncommercial rehearsal; production refuses the Prohibited Binance check
   primary: [{ source: kraken, symbol: PHAUSD, company: kraken }]
   check: [{ source: binance, symbol: PHAUSDT, company: binance }]
   fx: [{ source: kraken, symbol: USDTUSD, company: kraken }]

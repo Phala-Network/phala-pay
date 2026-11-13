@@ -82,7 +82,8 @@ Success: eligible deposits are credited exactly once with no operator step, also
 outage; balances reach the merchant's treasury whenever anyone flushes them, and the service
 sends no transaction; chain, service, and merchant ledger reconcile.
 
-Production-eligible routes use Chainlink-priced stablecoins; PHA is staging/noncommercial only
+Production-eligible routes use Chainlink-priced stablecoins or PHA with an explicitly opted-in
+PermissionRequired Kraken check
 ([price sources](configuration.md#price-sources)). New tokens and EVM chains are
 new route files, which any account of the route's mode quotes on; new merchants are accounts the
 operator creates (design D8), not configuration.
@@ -685,17 +686,19 @@ coalesce concurrent fetches. Cached observations record their age in the pricing
 
 Chainlink uses pinned feed addresses, decimals and heartbeat plus margin, complete positive
 rounds and independent RPC A/B agreement at one canonical hash-pinned block. PHA samples public pair
-cumulatives once/minute (every 300 seconds on the staging PHA route) into PostgreSQL, requires a continuous thirty-minute window, and enforces
+cumulatives once/minute by default (every 300 seconds on the shipped production and staging PHA routes)
+into PostgreSQL, requires a continuous thirty-minute window, and enforces
 liquidity, spot divergence (default 3%), sample freshness and jump limits. PHA valuation uses
 min(TWAP, current spot) × ETH/USD; independent Kraken order-book mid agreement checks current spot
 × ETH/USD, so average lag cannot overvalue a falling market or reject ordinary agreeing spot moves.
 Base additionally gates on the sequencer uptime
 feed with recovery grace. Test tokens explicitly observe configured mainnet endpoint pairs. Licensing
-verdicts are compiled into the attested provider registry: only Allowed can run in production;
+verdicts are compiled into the attested provider registry: production accepts Allowed sources
+and explicitly opted-in PermissionRequired sources;
 Chainlink on-chain consumption is Allowed and is the stablecoin default. Kraken is
 PermissionRequired; Binance/Coinbase/Coin Metrics are Prohibited for commercial use.
 `environment: staging` plus explicit route opt-in permits noncommercial TWAP/Kraken PHA
-rehearsal. PHA is production-ineligible until a second independent Allowed source exists;
+rehearsal. Production PHA explicitly records the owner's acceptance of Kraken's licence risk;
 see the [on-chain source](design/price-failover.md#pha-on-chain-follow-up). Coin Metrics remains disabled.
 See [price failover](design/price-failover.md) and [configuration](configuration.md#price-sources).
 

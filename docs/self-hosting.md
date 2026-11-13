@@ -265,12 +265,13 @@ Deploy `upgrade`, never a runtime setting.
   tokens and faucets). Any instance can copy them from its
   [topup.yaml](../deploy/environments/phala-network/staging/topup/topup.yaml) for a first
   noncommercial instance with `environment: staging` (or `testnet`, `local`, `sandbox`) and the
-  existing price-source opt-ins. PHA routes cannot be copied into a production configuration.
+  existing price-source opt-ins. In production, PermissionRequired sources need the route's explicit
+  `allow_unclear_sources: true` owner acceptance; Prohibited, Unclear and unknown sources are refused.
 - **Your own routes** are items of `topup.yaml`'s `routes`, written as route files are. The fields
   and their defaults are in [architecture §14](architecture.md#14-configuration-and-deployment),
   and [examples/phala-cloud-usdt.yaml](../examples/phala-cloud-usdt.yaml) is a production-eligible
   mainnet route template. [examples/phala-cloud-pha.yaml](../examples/phala-cloud-pha.yaml) is
-  **staging/noncommercial only**: PHA has no second Allowed independent price source. See
+  a mainnet template with an explicitly opted-in PermissionRequired Kraken check. See
   [price sources](configuration.md#price-sources). The kit's example environment ships only
   Chainlink-priced USDC/USDT test routes, valid under `environment: production`.
   `topup config check FILE` in the release's image checks the file (section 2), and

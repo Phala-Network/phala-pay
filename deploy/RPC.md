@@ -138,7 +138,7 @@ Both environments use Ankr read; production uses BlockPI verify, staging uses In
 
 | Limit | Production | Staging | Enforcement |
 |---|---:|---:|---|
-| Deposits handled/day, D | 152 | 10 | Operational |
+| Deposits handled/day, D | 132 | 10 | Operational |
 | Concurrent attached pending refunds, R | 10 | 1 | Atomic attachment admission |
 | New refund attachments/rolling 24 h, N | 10 | 1 | Atomic admission (`max_refund_attachments_per_day`) |
 | Unresolved finality stock/environment, S | 1 | 1 | Operational; pause affected-chain quotes and escalate above S |
@@ -368,11 +368,11 @@ dual receipts. Stored insert-only contradictions still freeze the chain.
 
 Sanctions screening uses local OFAC/manual lists, with no RPC term; address derivation is local.
 Staging's one PHA route (Sepolia) retains its five-minute TWAP sampler: 288 snapshots/day.
-Quotes have two price-chain instances per environment: `288+2·30+2·600=1,548` snapshots/day.
-Production's current stablecoin routes have no periodic TWAP work. Adding a future PHA route
-activates the sampler at `twap_sample_interval_s` (default 60 s outside staging, configurable
-60–300 s). Each fresh sample shares one Ethereum price-chain snapshot across routes: **one
-Ankr `eth_call` plus three BlockPI methods** (`eth_blockNumber`, `eth_getBlockByNumber`,
+Quotes have two price-chain instances per environment; both PHA routes sample every five minutes:
+`288+288+2·30+2·600=1,836` snapshots/day. Production sets `twap_sample_interval_s: 300`
+(default 60 s outside staging, configurable 60–300 s). Each fresh sample shares one Ethereum
+price-chain snapshot across routes: **one Ankr `eth_call` plus three BlockPI methods**
+(`eth_blockNumber`, `eth_getBlockByNumber`,
 `eth_call`), or **four logical methods and 50 BlockPI base RU** (`10+20+20`). The existing
 reviewed model conservatively reserves **60 BlockPI RU per snapshot**; retain that allowance
 for budget sign-off below. Persisted TWAP block-hash checks
@@ -380,26 +380,28 @@ stay inside the same multicall. Sampler snapshots do not consume Q; do not assum
 or failed samples save this allowance. Observation-only staging mainnets perform no payment
 discovery, checkpoints, coverage or custody; all staging verify traffic stays on Infura.
 
-Reserve the following incremental production sampler budget before enabling PHA. These are
+The following incremental production sampler budgets compare the supported intervals. These are
 steady-state allowances per price-chain sampler, without retries; non-refund budget accounting then
 applies the existing ×1.1 factor:
 
 | Production interval | Snapshots/day | Ankr calls/day | BlockPI methods/day | BlockPI RU/day | Budgeted Ankr / BlockPI per day (×1.1) |
 |---|---:|---:|---:|---:|---:|
 | 60 s (default) | 1,440 | 1,440 | 4,320 | 86,400 | 1,584 calls / 95,040 RU |
-| 300 s (recommended for budget review) | 288 | 288 | 864 | 17,280 | 317 calls / 19,008 RU |
+| 300 s (production PHA) | 288 | 288 | 864 | 17,280 | 317 calls / 19,008 RU |
 
-At the current D152/H300/Q600/F240 allocation, the shared Ankr total would rise from
+At the previous D152/H300/Q600/F240 allocation, the shared Ankr total would rise from
 22,498/day to **24,082/day at 60 s** or **22,814/day at 300 s**, leaving only 3.67% or 8.74%
 headroom below the 25,000/day stop line. BlockPI would rise from 506,317 to 601,357 or
 525,325 RU/day. Totals round after combining the existing model and sampler allowance.
-Both intervals therefore need a revised allocation to retain the reviewed
+Both intervals require a revised allocation to retain the reviewed
 ten-percent Ankr headroom: under the same model, D must fall to at most **56 at 60 s** or
 **132 at 300 s**, unless another allowance is reduced or more capacity is approved.
-The 300 s recommendation is conditional on separate risk approval of the route's freshness
-and jump policy: its `max_sample_age_s` must exceed 300 s and production validation caps it
-at 600 s. The default 180 s age cannot support that cadence. This budget does not authorize
-a PHA route, a licensing exception, a lower liquidity floor or a deployment.
+Production PHA uses **D132**, `max_sample_age_s: 600` and the default 500 bps sample jump limit.
+Its sample age must exceed 300 s and production validation caps it at 600 s; the default 180 s
+age cannot support that cadence. The allocation retains Q600 and the existing provider stop
+lines, for **22,484 Ankr calls/day (10.064% headroom)** and **510,695 BlockPI RU/day**.
+The owner separately accepted the Kraken licence risk and $50,000 WETH reserve floor on
+2026-11-13; deploying still requires operator approval.
 
 A deposit enters S at its first unresolved check, persisted as `first_unresolved_at`. This
 includes a `detected` deposit whose transfer both endpoints agree is absent during confirmation,
@@ -514,13 +516,13 @@ attempts; non-refund work uses ×1.1. The exact daily equations are:
 
 ```text
 Shared Ankr non-refund:
-5,488 fixed + 1,548 prices + 15×(152+10) D + 12×(300+20) H
+5,488 fixed + 1,836 prices + 15×(132+10) D + 12×(300+20) H
 + 3×(150+20) factory + 3×12 Safe + 300 extra + 380 openings
 + 688 S + 172 L + 300 monthly-recovery average
 + 2×240×3 production fresh + 2×30×2 staging fresh
-+ 2×100×2 production checks + 2×10×2 staging checks = 17,692
++ 2×100×2 production checks + 2×10×2 staging checks = 17,680
 Refunds: 3×(80×11 + 12×11) = 3,036
-Total: ceil(17,692×1.1 + 3,036) = 22,498 calls/day
+Total: ceil(17,680×1.1 + 3,036) = 22,484 calls/day
 
 Staging-only Infura non-refund:
 94,880 fixed + 240×348 prices + 1,520×10 D + 640×20 H
@@ -530,11 +532,11 @@ Refunds: 3×(6,400×1 + 960×1) = 22,080
 Total: 367,070×1.1 + 22,080 = 425,857 credits/day
 
 Production-only BlockPI non-refund:
-66,960 fixed + 60×1,200 prices + 665×152 D + 280×300 H
+66,960 fixed + 60×1,488 prices + 665×132 D + 280×300 H
 + 70×150 factory + 40×10 Safe + 50×150 extra + 20×300 openings
-+ 85×86 S + 20×86 L + 50×300 recovery = 372,470
++ 85×86 S + 20×86 L + 50×300 recovery = 376,450
 Refunds: 3×(2,800×10 + 420×10) = 96,600
-Total: ceil(372,470×1.1 + 96,600) = 506,317 RU/day
+Total: ceil(376,450×1.1 + 96,600) = 510,695 RU/day
 ```
 
 Staging's share of shared Ankr is `ceil(3,752×1.1+276)=4,404` calls/day before the shared
@@ -544,22 +546,23 @@ not receive separate Ankr quotas; BlockPI's two chain keys also share one accoun
 
 | Provider account | Modeled daily usage | Stop line/day | Usage of stop line | Headroom |
 |---|---:|---:|---:|---:|
-| Ankr (production + staging read) | 22,498 calls | 25,000 calls | **89.99%** | **10.01%** |
+| Ankr (production + staging read) | 22,484 calls | 25,000 calls | **89.94%** | **10.06%** |
 | Infura (staging verify) | 425,857 credits | 1,500,000 credits | **28.39%** | **71.61%** |
-| BlockPI (production verify) | 506,317 RU | 1,250,000 RU | **40.51%** | **59.49%** |
+| BlockPI (production verify) | 510,695 RU | 1,250,000 RU | **40.86%** | **59.14%** |
 
-At all other stated allowances, including automatic F240/F30 and on-demand checks100/10 per
-chain/day, shared Ankr is `ceil(19,989.2 + 16.5·D_production)`. The highest D retaining at least
-ten-percent headroom is **D=152** (22,498/day, 10.008% headroom); D153 would use 22,514/day.
-The previous D280 budget was 22,410/day. Automatic rounds add
+At all other stated allowances, including the 300 s production PHA sampler, automatic F240/F30
+and on-demand checks100/10 per chain/day, shared Ankr is `ceil(20,306 + 16.5·D_production)`.
+The highest D retaining at least ten-percent headroom is **D=132** (22,484/day, 10.064% headroom);
+D133 would use 22,501/day. Automatic rounds add
 `(2×240×3 + 2×30×2)×1.1 = 1,716` calls/day; one-address on-demand checks add
 `(2×100×2 + 2×10×2)×1.1 = 484` calls/day. Each on-demand check is one latest header plus one
 recipient-topic log query (not the hot set's two-page bound). Cold completion remains in D's
 three discovery methods, with shared immutable endpoint caches eliminating repeated completion;
-cache churn, reorgs and unusually wide ranges use recovery. Reducing D by 128 saves
-`128×15×1.1 = 2,112` calls/day. H, Q, refunds and dual confirmation remain unchanged.
+cache churn, reorgs and unusually wide ranges use recovery. Reducing D from 152 to 132 saves
+`20×15×1.1 = 330` calls/day, funding the production sampler's 317-call allowance.
+H, Q, refunds and dual confirmation remain unchanged.
 D is an operational allowance and early-warning threshold, not a new payment admission gate.
-**Production: D152/H300/Q600/F240 per chain, refunds N10/R10, per-account R3, 12,000 addresses/chain.**
+**Production: D132/H300/Q600/F240 per chain, refunds N10/R10, per-account R3, 12,000 addresses/chain.**
 **Staging: D10/H20/Q30/F30 per chain, refunds N1/R1, 1,000 addresses/chain.** Factory remains 150/20 and Safe
 10/2. These are modeled allowances, not measured seven-day run rates. Watch the hot set,
 issuance, monthly recovery ledger and provider dashboards; stop lines bind even within the

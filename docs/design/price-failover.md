@@ -1,15 +1,15 @@
 # Price failover
 
-Status: Accepted (owner-delegated, 2026-10-04); Chainlink and Uniswap on-chain consumption are
-Allowed. PHA production quotes and spot credit remain disabled because no second Allowed source
-is available.
+Status: Accepted (owner-delegated, 2026-10-04; production PHA opt-in, 2026-11-13).
+Chainlink and Uniswap on-chain consumption are Allowed. Production PHA uses explicit owner
+acceptance of the PermissionRequired Kraken check.
 Uniswap V2 TWAP is implemented with persisted service observations.
 
 ## Decision
 
 Remove Coin Metrics. Production stablecoin valuation reads Chainlink Data Feeds through the price
-chain's read and verify endpoints. Public exchange adapters remain available for explicit noncommercial staging rehearsal,
-not production defaults. Volatile prices require two fresh observations from independent
+chain's read and verify endpoints. Public exchange adapters require explicit opt-in; production
+accepts only PermissionRequired exchanges through this flag. Volatile prices require two fresh observations from independent
 companies to agree; an outage or disagreement
 pauses the affected quote/credit path. On-chain evidence follows [chain reads](chain-reads.md).
 
@@ -21,23 +21,24 @@ say “**non-commercial use only**” and the [announcement](https://coinmetrics
 
 The orchestrator reviewed the primary sources below on 2026-10-04. The attested registry records
 URL, date, quoted evidence, verdict, legal owner and rate limit. Production accepts **Allowed**
-only; **PermissionRequired**, **Prohibited** and **Unclear** are all refused. Explicit
-`allow_unclear_sources` is retained for noncommercial staging rehearsal only, including the
-existing PHA route; it is never commercial permission. Coin Metrics remains removed from runtime.
+sources; **PermissionRequired** sources require route `allow_unclear_sources: true`, which
+records the owner's acceptance of the licence risk without changing the verdict or granting
+permission. **Prohibited**, **Unclear** and unknown sources remain refused in production.
+Explicit opt-in also permits noncommercial staging rehearsal. Coin Metrics remains removed from runtime.
 
 | Source | Evidence and quoted clause | Verdict / use |
 |---|---|---|
 | Chainlink on-chain feeds | Public on-chain feed state read via our own RPC, without an account/key. [ToS](https://chain.link/terms) is client-rendered; full text could not be retrieved. The basis is public on-chain consumption, not a fetched commercial API grant. | **Allowed** for this on-chain consumption. |
-| Kraken public market data | [API guide](https://docs-legacy.kraken.com/api/docs/guides/global-intro): “You must seek our prior permission for certain uses of the Kraken API's. This includes, but is not limited to, any non-personal commercial use of data from publicly accessible endpoints, such as market data … contacting `marketdata@kraken.com`”. | **PermissionRequired**; staging-only. |
+| Kraken public market data | [API guide](https://docs-legacy.kraken.com/api/docs/guides/global-intro): “You must seek our prior permission for certain uses of the Kraken API's. This includes, but is not limited to, any non-personal commercial use of data from publicly accessible endpoints, such as market data … contacting `marketdata@kraken.com`”. | **PermissionRequired**; production requires explicit owner opt-in. |
 | Binance, including `data-api.binance.vision` | [Terms](https://data.binance.vision/terms-of-use.html) §3.1: **CC BY-NC-SA 4.0**; §3.4: “any commercial utilization requires a separate, written enterprise data license agreement executed with Binance”. | **Prohibited** for commercial use without an enterprise licence. |
 | Coinbase market data | [Terms](https://www.coinbase.com/legal/market_data): “exclusively for you or your entity's personal or research purposes and may not be used to build an application intended for use by end users…”; redistribution and derived works are also prohibited. | **Prohibited**. No adapter. |
 | Coin Metrics Community | [Package terms](https://docs.coinmetrics.io/packages/coin-metrics-community-data): “non-commercial use only”; [licence](https://coinmetrics.io/?p=16175): **CC BY-NC 4.0**. | **Prohibited**; removed from runtime and defaults. |
 | Uniswap V2 on-chain TWAP | [PHA/WETH pair contract](https://etherscan.io/address/0x8867f20c1c63baccec7617626254a060eeb0e61e): public contract state through our own RPC; no API account or terms. | **Allowed**; source `uniswap_v2_twap`, company `uniswap-v2-onchain`. |
 
 Staging PHA uses on-chain TWAP primary and explicitly opted-in Kraken check. Stablecoin defaults use only
-Chainlink and do not need a staging licensing opt-in. PHA production quotes/spot credit remain
-unavailable until the Kraken check is Allowed after written permission. Source counts and
-company disjointness are never weakened to enable production.
+Chainlink and do not need a licensing opt-in. The owner accepted Kraken's licence risk for the
+production PHA route on 2026-11-13, recorded next to its explicit opt-in in the shipped configuration.
+Source counts and company disjointness are never weakened to enable production.
 
 ## Valuation rules
 
@@ -45,7 +46,9 @@ company disjointness are never weakened to enable production.
 
 USDC and USDT are the only RedPill assets. The source set is Chainlink USDC/USD and USDT/USD on the route chain when a feed exists
 (Ethereum and Base), plus Ethereum-mainnet Chainlink as a configured fallback. Defaults contain Chainlink only;
-exchange USDC/USD and USDT/USD adapters require explicit noncommercial staging opt-in. Sepolia and Base Sepolia deliberately use mainnet feeds through a
+exchange USDC/USD and USDT/USD adapters require explicit opt-in. In production, owner opt-in accepts
+PermissionRequired Kraken; Prohibited, Unclear and unknown sources are always refused. Non-production
+opt-in also permits noncommercial rehearsal. Sepolia and Base Sepolia deliberately use mainnet feeds through a
 configured mainnet read/verify pair and/or exchange tickers: test tokens have no market, and config marks
 this cross-network observation explicitly. A Base route must also read the [sequencer uptime feed](https://docs.chain.link/data-feeds/l2-sequencer-feeds):
 when `answer == 1`, or the grace period after recovery has not elapsed, halt.
@@ -79,13 +82,12 @@ FX is independently checked and is required for USDT-quoted markets.
 | Role | Ordered sources | Rule |
 |---|---|---|
 | primary | **min(Uniswap V2 PHA/WETH TWAP, current spot) × Chainlink ETH/USD** | public on-chain state, Allowed; agreement uses current spot × ETH/USD |
-| check | **Kraken PHA/USD order-book mid (`PHAUSD`)** | compare against Uniswap current spot; spread guard at `max_deviation_bps`; PermissionRequired and staging-only |
+| check | **Kraken PHA/USD order-book mid (`PHAUSD`)** | compare against Uniswap current spot; spread guard at `max_deviation_bps`; PermissionRequired with explicit owner opt-in in production |
 | fx | Chainlink USDT/USD | independently peg-checked by the existing volatile policy; the USD check is not multiplied by USDT |
 
-Production rejects the route because Kraken is PermissionRequired and no second Allowed source is
-available. The two companies remain disjoint. Do not substitute one company or an unreviewed
-endpoint.
-Legacy exchange adapters remain available for explicit noncommercial rehearsal.
+Production requires explicit owner acceptance of the PermissionRequired Kraken check. The two
+companies remain disjoint. Do not substitute one company or an unreviewed endpoint.
+The Binance adapter remains available only for explicit noncommercial rehearsal.
 
 ## PHA on-chain follow-up
 
@@ -94,9 +96,9 @@ feed directories (over 1,800 feeds checked), and no Pyth PHA feed. DIA's free AP
 CoinGecko paid is dropped. Do not add these as defaults or implement a CoinGecko adapter.
 
 The follow-up to #331 implements persisted Uniswap V2 PHA/WETH TWAP and current spot, multiplied by
-Chainlink ETH/USD, as the staging primary; the Kraken PHA/USD order-book mid check remains an
-explicit staging-only test source. Kraken permission and a sponsored Chainlink PHA/USD feed are out of
-scope, so PHA is production-ineligible until a separately reviewed Allowed source exists.
+Chainlink ETH/USD. Production now uses that primary and the explicitly opted-in Kraken PHA/USD
+order-book mid check. Kraken permission and a sponsored Chainlink PHA/USD feed are out of scope;
+the provider's verdict remains PermissionRequired.
 
 The implementation reads the pair's `price0CumulativeLast`/`price1CumulativeLast` and reserves
 through independent Ethereum read and verify endpoints, verifies token ordering and requires agreement,
@@ -145,8 +147,9 @@ Default guard rails (under source `twap`) are:
 | `max_spot_deviation_bps` | 300 (3%) | pauses fast markets and rejects spikes/ramps inconsistent with the averaging window |
 | `max_sample_jump_bps` | 500 (5%) | rejects abrupt sample-to-sample reserve-ratio changes before insertion |
 
-The staging-only PHA sampler runs every **300 s** even without quote traffic. Staging explicitly
-sets `max_sample_age_s: 900` and `max_sample_jump_bps: 1100`; the defaults remain 180 s and
+Production and staging PHA samplers run every **300 s** even without quote traffic. Production sets
+`max_sample_age_s: 600` and keeps the default 500 bps sample jump limit; staging explicitly sets
+`max_sample_age_s: 900` and `max_sample_jump_bps: 1100`. The defaults remain 180 s and
 500 bps. Quote/credit workers share PostgreSQL history and an atomic per-policy lock, append
 no more than once every 300 s, and refuse storage failure. Between persisted samples, the
 quote's counterfactual endpoint still uses the same
@@ -172,9 +175,9 @@ trade against it. This requires moving inventory, paying fees and repeatedly def
 an isolated transaction cannot dominate the average. These costs depend on actual reserves,
 arbitrage participation and external prices, so they are not a guaranteed dollar security bound.
 A flat sustained skew can pass TWAP's internal guard rails: the independent agreeing Kraken check
-is available only in staging, and `max_unfinalized_credit` (default **$1,000**) bounds our
-outstanding exposure. Production remains disabled for PHA until a second Allowed source exists.
-The route remains disabled in production; staging-only operation is bounded by the existing caps.
+requires explicit owner acceptance in production, and `max_unfinalized_credit` (default **$1,000**)
+bounds our outstanding exposure. Production caps each deposit at 15,000 PHA (about $480 at
+$0.032/PHA) and sets the WETH reserve floor to $50,000, also used by staging's same-pool source.
 
 Tests cover arithmetic against recorded Ethereum blocks **26,120,450** and **26,120,610**
 ([raw fixture](../../crates/adapters/tests/fixtures/uniswap-v2-pha-mainnet.json)), including wrapping counters,
@@ -198,7 +201,7 @@ price:
         observation_chain_id: 11155111 }
   primary: [{ source: uniswap_v2_twap,
               observation_chain_id: 11155111 }] # volatile PHA only
-  check: [{ source: kraken, symbol: PHAUSD, company: kraken }] # requires written permission in production
+  check: [{ source: kraken, symbol: PHAUSD, company: kraken }] # production requires explicit owner opt-in
   fx: [{ source: chainlink, feed: USDT_USD, chain_id: 1, observation_chain_id: 11155111 }]
   sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600 }
 ```
@@ -208,9 +211,10 @@ sources, missing FX for USDT markets, unsupported chain/feed pairs, non-positive
 empty list. Stablecoin mode requires `sources` and forbids `primary`, `check` and `fx`; it must
 cover both symbols or an explicit Ethereum-mainnet fallback. `observation_chain_id` is required
 for Sepolia/Base Sepolia mainnet observations. `topup config check` resolves and prints ordered lists, feed heartbeat and testnet
-behaviour (without secrets), and fails on any non-Allowed production source or migration ambiguity.
+behaviour (without secrets), and fails on Prohibited, Unclear or non-opted-in PermissionRequired
+production sources or migration ambiguity.
 The old `primary` maps to a one-item primary list and old `check` to check/fx; volatile routes fail
-validation until an independent second source is configured; production also requires Allowed verdicts.
+validation until an independent second source is configured; production also enforces the licensing gate above.
 
 ## Operations, metrics and runbooks
 

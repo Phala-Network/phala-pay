@@ -164,8 +164,9 @@ GitHub-hosted `ubuntu-latest` runners.
    `topup-sdk keygen --keyid admin/<Environment>-v1`, a separate key per Environment; the seed stays
    with the admin), the RPC providers, and the routes. Deploy renders that directory and nothing
    else, so a setting changes only through a reviewed commit and a Deploy `upgrade`.
-   The example ships production-eligible Chainlink USDC/USDT routes on Sepolia. PHA is
-   staging/noncommercial only ([price sources](../docs/configuration.md#price-sources)).
+   The example ships production-eligible Chainlink USDC/USDT routes on Sepolia. A PHA route's Kraken
+   check passes production only when the route opts in with `allow_unclear_sources: true`; Prohibited,
+   Unclear and unknown sources are always refused ([price sources](../docs/configuration.md#price-sources)).
 
    No setting names a treasury or a transaction-signing key: treasuries are each account's own, set
    through the API, and the service sends no transactions.

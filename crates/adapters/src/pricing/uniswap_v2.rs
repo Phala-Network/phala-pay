@@ -23,7 +23,7 @@ pub const PAIR: Address = address!("8867f20c1c63baccec7617626254a060eeb0e61e");
 pub const PHA: Address = address!("6c5ba91642f10282b576d91922ae6448c9d52f4e");
 /// Mainnet WETH, with 18 decimals.
 pub const WETH: Address = address!("c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2");
-/// Staging-only PHA samples, shared across quote, credit and sampler workers.
+/// 300-second PHA sample spacing (staging default; production sets it with `twap_sample_interval_s`).
 pub const SAMPLE_INTERVAL_S: u64 = 300;
 sol! {
     function token0() external view returns (address);

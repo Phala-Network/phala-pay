@@ -38,7 +38,8 @@ For PHA, inspect `uniswap_v2_twap` evidence and `price_source_refusals_total{cod
 Read the pinned PHA/WETH pair through both mainnet endpoints at the **same canonical block hash** as ETH/USD;
 compare headers, token order, both cumulatives and reserves. Check the WETH-side USD reserve floor,
 TWAP/spot divergence, the persisted window's block range, and sample ages/gaps. The service sampler
-must advance once/minute even without quote traffic (every 300 seconds on staging PHA). Do not call `sync()` or mutate the pair.
+must advance at the configured interval even without quote traffic (every 300 seconds on production
+and staging PHA). Do not call `sync()` or mutate the pair.
 
 ## Decide
 
@@ -51,8 +52,9 @@ must advance once/minute even without quote traffic (every 300 seconds on stagin
 - Disagreement or FX depeg: investigate market/feed integrity. Ordered failover must not hide it.
 - Licensing failure: stablecoin defaults use only Allowed Chainlink on-chain data. Kraken is
   PermissionRequired; Binance (including data-api.binance.vision), Coinbase and Coin Metrics are
-  Prohibited for commercial use. Keep PHA production disabled. Staging opt-in permits only
-  noncommercial rehearsal, never production or a licence grant.
+  Prohibited for commercial use. Production accepts PermissionRequired sources only with the route's
+  explicit `allow_unclear_sources: true` owner acceptance; it always refuses Prohibited, Unclear and
+  unknown sources. Non-production opt-in permits noncommercial rehearsal; it grants no licence.
 - `twap_history`/`twap_stale_sample`: restore continuous sampling and wait for the configured
   window (at least thirty minutes). Restart does not erase history; a long gap needs a new window.
 - `twap_liquidity`, `twap_spot_divergence` or `twap_sample_jump`: investigate reserves and market
@@ -63,15 +65,16 @@ must advance once/minute even without quote traffic (every 300 seconds on stagin
   escalate persistent failures. Do not delete history or override a price.
 - PHA uses [min(TWAP, spot) × ETH/USD valuation](../../docs/design/price-failover.md#pha-on-chain-follow-up)
   and current Uniswap spot × ETH/USD versus Kraken PHA/USD agreement. The default spot/TWAP
-  divergence limit is 3%. Production remains disabled until written Kraken permission and an
-  attested Allowed verdict. A sponsored Chainlink PHA feed is a long-term option.
+  divergence limit is 3%. The production PHA route records owner acceptance of the PermissionRequired
+  Kraken check. A sponsored Chainlink PHA feed is a long-term option.
 
 ## Fix
 
 Probe each feed/exchange, correct reviewed configuration or restore provider availability, then
 observe **two complete policy windows** (the relevant feed heartbeat plus margin or exchange age,
-including sequencer recovery grace, and a continuous TWAP window for PHA). Source replacement requires a Legal-approved, company-disjoint
-route config PR and Deploy `upgrade`. See [provider disagreement](provider-disagreement.md).
+including sequencer recovery grace, and a continuous TWAP window for PHA). Source replacement requires
+a reviewed, company-disjoint route config PR that passes the production licensing gate and Deploy
+`upgrade`. See [provider disagreement](provider-disagreement.md).
 
 ## Done when
 

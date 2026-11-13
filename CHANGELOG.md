@@ -20,6 +20,18 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   persisted TWAP observation spacing. Defaults remain 300 seconds in staging and 60 elsewhere;
   validation requires the interval to fit every enabled TWAP source's freshness limit.
   Document the incremental RPC budget and allocation review required before a production PHA route.
+- Add the production Ethereum PHA route for Phala Cloud, capped at 15,000 PHA per deposit
+  (about $480 at $0.032/PHA), with a $5 minimum sale, 50 PHA minimum refund, 50 bps quote
+  spread and two confirmations. It uses Uniswap V2 TWAP with an independent Kraken PHA/USD check.
+
+### Changed
+
+- Let a route's explicit price-source opt-in record owner acceptance of PermissionRequired
+  licence risk in production. Kraken retains that verdict; Prohibited and Unclear sources remain
+  refused. Production deployment revalidates this gate regardless of the reporting environment.
+- Lower the production and staging PHA pool WETH reserve floor to $50,000. Budget production's
+  PHA sampler at 300 seconds with a 600-second sample age and reduce the deposit pilot stop line
+  from 152 to 132 per day, retaining the existing quote snapshot and provider allocations.
 
 ### Fixed
 

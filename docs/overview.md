@@ -44,12 +44,13 @@ A route is one chain and one token, in test or live mode. Routes are settings th
 commits to its environment repository, so they are part of the attested deployment; further
 merchants are accounts, not configuration.
 
-Phala's committed [production routes](../deploy/phala.md#production) are live Ethereum USDC/USDT
+Phala's committed [production routes](../deploy/phala.md#production) are live Ethereum USDC/USDT/PHA
 and Base USDC; its [staging routes](../deploy/phala.md#staging-routes) are test-only on Sepolia
 and Base Sepolia. Production-eligible examples use Chainlink-priced stablecoins
 ([USDT mainnet template](../examples/phala-cloud-usdt.yaml)). The
-[PHA mainnet template](../examples/phala-cloud-pha.yaml) is staging/noncommercial only: PHA has
-no second Allowed independent price source ([price sources](configuration.md#price-sources)).
+[PHA mainnet template](../examples/phala-cloud-pha.yaml) uses an explicitly opted-in PermissionRequired
+Kraken check; production always refuses Prohibited, Unclear and unknown sources
+([price sources](configuration.md#price-sources)).
 
 ## Architecture at a glance
 
