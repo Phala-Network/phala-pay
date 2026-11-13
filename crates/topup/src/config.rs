@@ -131,7 +131,8 @@ struct ResolvedConfig<'a> {
     max_refund_attachments_per_day: u32,
     hints_per_day: i32,
     quote_snapshots_per_day: i32,
-    twap_sample_interval_s: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    twap_sample_interval_s: Option<u64>,
     discovery: crate::scanner::ScanConfig,
     #[serde(skip_serializing_if = "crate::observability::quota::QuotaAlerts::is_disabled")]
     quota_alerts: &'a crate::observability::quota::QuotaAlerts,
@@ -372,7 +373,9 @@ impl Config {
             max_refund_attachments_per_day: self.max_refund_attachments_per_day,
             hints_per_day: self.hints_per_day,
             quote_snapshots_per_day: self.quote_snapshots_per_day,
-            twap_sample_interval_s: self.twap_sample_interval_s,
+            twap_sample_interval_s: (self.twap_sample_interval_s
+                != default_twap_sample_interval_s(&self.environment))
+            .then_some(self.twap_sample_interval_s),
             discovery: self.discovery,
             quota_alerts: &self.quota_alerts,
             public_origin: self.public_origin.as_ref().map(ToString::to_string),
@@ -503,10 +506,20 @@ mod tests {
             );
             let parsed = Config::parse(&yaml).unwrap();
             assert_eq!(parsed.twap_sample_interval_s, expected);
+            let shown: serde_json::Value =
+                serde_json::from_str(&parsed.resolved_json().unwrap()).unwrap();
+            assert!(shown.get("twap_sample_interval_s").is_none());
             for interval in [60, 120, 300] {
                 let parsed =
                     Config::parse(&format!("{yaml}twap_sample_interval_s: {interval}\n")).unwrap();
                 let shown = parsed.resolved_json().unwrap();
+                let resolved: serde_json::Value = serde_json::from_str(&shown).unwrap();
+                assert_eq!(
+                    resolved
+                        .get("twap_sample_interval_s")
+                        .and_then(|value| value.as_u64()),
+                    (interval != expected).then_some(interval)
+                );
                 assert_eq!(
                     Config::parse(&shown).unwrap().twap_sample_interval_s,
                     interval
@@ -518,6 +531,9 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(production.twap_sample_interval_s, 60);
+        let shown: serde_json::Value =
+            serde_json::from_str(&production.resolved_json().unwrap()).unwrap();
+        assert!(shown.get("twap_sample_interval_s").is_none());
         for invalid in ["0", "59", "301", "-1", "1.5", "false"] {
             assert!(
                 Config::parse(&format!("{base}twap_sample_interval_s: {invalid}\n")).is_err(),

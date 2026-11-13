@@ -26,6 +26,9 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - Preserve background TWAP sampler failure codes in `price_source_refusals_total` and the
   existing `price-outage` alert's `check`, including liquidity, RPC, deviation and timeout
   failures, with bounded labels and the existing alert grouping and repeat throttle.
+- Omit the default TWAP sampler interval from resolved configuration so older strict parsers
+  accept unchanged settings during rollback. Nondefault intervals require removing the key
+  before rollback. Preserve the rollback drill's original error when failure diagnostics fail.
 
 ## [0.13.12] - 2026-11-12
 

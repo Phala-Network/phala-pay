@@ -173,7 +173,8 @@ release's budget; a rollback never clears rolling attachment history.
   [PROXY rollback requirements](../deploy/README.md#custom-domain).
 - **`twap_sample_interval_s`** optionally sets the background TWAP sampler interval and minimum
   persisted observation spacing in seconds. It accepts integers from 60 to 300, defaults to 300
-  only when `environment: staging` and 60 otherwise, and appears in `topup config show`.
+  only when `environment: staging` and 60 otherwise. `topup config show` omits the key when
+  it equals that environment's default, preserving compatibility with older strict parsers.
   It must be strictly less than `max_sample_age_s` on every enabled Uniswap V2 TWAP source;
   validation rejects an interval that cannot maintain fresh history. The sampler starts
   immediately, skips missed ticks and remains independent of `quote_snapshots_per_day`.
@@ -183,8 +184,9 @@ release's budget; a rollback never clears rolling attachment history.
   keeps the existing route/asset/check dimensions and repeat throttle. No raw provider error
   becomes a label. Review the [sampler RPC allowance](../deploy/RPC.md#remaining-variable-allowances)
   and route freshness/jump limits before changing cadence. Older releases reject this key;
-  use their retained verified configuration for rollback, including when the new key came
-  from `config show`.
+  an environment that explicitly sets it must remove it before rolling back to a release
+  predating this setting. Use the target's retained verified configuration, including when
+  a nondefault key came from `config show`; the target resumes its hard-coded sampler cadence.
 - **`discovery`** optionally sets fast-discovery activity windows. `quote_window_hours` accepts
   integers 1–8,760 (default 24), and `deposit_window_days` accepts 1–365 (default 7). Either field
   may be omitted. `quote_window_hours × 3600` must cover `merchant.quote_ttl_seconds.max`
