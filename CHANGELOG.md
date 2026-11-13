@@ -14,6 +14,19 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Changed
+
+- Pin deployment tooling to Phala Cloud CLI 1.2.7 and SDK 0.6.5, retaining viem 2.57.1.
+  Base CVM reads now preserve the KMS public key needed to verify environment encryption keys.
+  Preserve raw approval hashing despite the SDK's new hash normalization, with staging attested
+  compose regressions. Recheck prepare/commit and CLI response contracts against the tagged
+  sources, and remove the deployment CLI's Zod exception now that the lockfile resolves patched
+  Zod 4.6.7.
+- Rename the optional deployment Environment variable `PHALA_NODE_ID` to `PHALA_NODE`: set the
+  physical node name (for example, `prod5`) for CLI 1.2.7's `deploy --node`. A nonempty legacy
+  `PHALA_NODE_ID` fails with migration instructions; remove it before deploying. Empty or unset
+  `PHALA_NODE` keeps automatic placement, and upgrades keep the CVM's node.
+
 ### Fixed
 
 - Base KMS commit waits for an approved update of a stopped CVM to settle stopped on the target

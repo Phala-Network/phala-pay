@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { getComposeHash } from '../tools/node_modules/@phala/cloud/dist/index.mjs';
+import { getComposeHash as getRawComposeHash } from '../tools/node_modules/@phala/dstack-sdk/dist/index.mjs';
 import { canonical, composeHash, compareHash, batch, prepare, verify, deployment, identity, verifyProviderEvent, config, slot, appEvents, kmsEvents } from '../tools/onchain-kms.mjs';
 import { encodeEventTopics, toEventSelector, toFunctionSelector } from '../tools/node_modules/viem/_esm/index.js';
 
@@ -17,12 +18,27 @@ test('production v0.13.6 app-compose reproduces the attested raw bytes and SHA-2
   assert.equal(composeHash(compose), 'ed7dc915032602b6f2be6aa738c622d36828613f386be01e81efabcd8791e4e4');
   assert.equal(composeHash(compose), getComposeHash(compose));
 });
-test('hash vectors match pinned official export, preserving arrays and UTF-8', () => {
+test('hash vectors match the pinned dstack raw export, preserving arrays and UTF-8', () => {
   for (const compose of [{z: {b: 'é雪', a: 3}, a: [false, null, {z: 1, a: 2}]}, {runner: 'bash', docker_compose_file: 'x', pre_launch_script: ''}]) {
-    assert.equal(composeHash(compose), getComposeHash(compose));
+    assert.equal(composeHash(compose), getRawComposeHash(compose));
     assert.equal(compareHash(compose, `0x${composeHash(compose)}`), composeHash(compose));
     assert.throws(() => compareHash(compose, hash), /differs/);
   }
+});
+test('staging Base service and restore-check reproduce their attested compose hashes', () => {
+  for (const [variant, expected] of [
+    ['service', 'b3ef37455a3013885942ad946b8e2962933ffeb9078ce516dc8ca5102be0bfbc'],
+    ['restore-check', 'b7017913bf5dc97fe7b899af91d66e4180865c0e7624b4864cf2dcd25a977f4f'],
+  ]) {
+    const compose = JSON.parse(readFileSync(new URL(`./fixtures/staging-base-${variant}-app-compose.json`, import.meta.url)));
+    assert.equal(composeHash(compose), expected);
+    assert.equal(composeHash(compose), getRawComposeHash(compose));
+  }
+});
+test('approval hashing does not adopt the Cloud SDK normalization of empty and default fields', () => {
+  const compose = {runner: 'docker-compose', docker_compose_file: 'services: {}', pre_launch_script: ''};
+  assert.equal(composeHash(compose), getRawComposeHash(compose));
+  assert.notEqual(composeHash(compose), getComposeHash(compose));
 });
 test('Safe calldata matches independently recorded Solidity selectors and ABI words', () => {
   const words = value => value.padStart(64, '0');

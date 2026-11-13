@@ -28,8 +28,8 @@ name: Deploy
 # env stays. Each target's public origin is its custom domain, served by dstack-ingress in the CVM
 # (deploy/README.md, "Custom domain"); the summary lists the DNS records the owner creates for it.
 #
-# The kit's deploy/phala runs Phala Cloud CLI 1.1.22 with its dependencies locked (checked against
-# Phala-Network/phala-cloud tag cli-v1.1.22), through deploy/phala-cvm.sh:
+# The kit's deploy/phala runs Phala Cloud CLI 1.2.7 with its dependencies locked (checked against
+# Phala-Network/phala-cloud tags cli-v1.2.7 and js-v0.6.5), through deploy/phala-cvm.sh:
 # - Authentication is the PHALA_CLOUD_API_KEY environment variable, which the CLI prefers over a
 #   stored profile; PHALA_CLOUD_DIR points at an empty directory so no profile or API prefix from
 #   the runner's home can be read. The API key belongs to the workspace in vars.PHALA_WORKSPACE.
@@ -38,7 +38,7 @@ name: Deploy
 # - Provision sends the kit's pre-launch script with `--pre-launch-script`; compose-update sets
 #   that same script and the explicit port policy on upgrades and provisioning follow-ups.
 #   verify-attestation.sh requires both in the attested app-compose.
-# - `deploy --json` ignores `--wait` on a new CVM; this workflow waits by polling `cvms get`.
+# - Provision omits `--wait`; this workflow waits by polling `cvms get` with bounded deadlines.
 
 on:
   workflow_call:
@@ -135,6 +135,7 @@ jobs:
       STAGING_PRODUCT_CVM_ID: ${{ vars.STAGING_PRODUCT_CVM_ID }}
       PHALA_WORKSPACE: ${{ vars.PHALA_WORKSPACE }}
       # Optional node pin for provision only; an upgrade keeps the CVM's node.
+      PHALA_NODE: ${{ vars.PHALA_NODE }}
       PHALA_NODE_ID: ${{ vars.PHALA_NODE_ID }}
     steps:
       # Fixes the target's kit scripts and CVM for the later steps.
@@ -148,8 +149,10 @@ jobs:
             { echo "::error::PHALA_CLOUD_API_KEY is empty: a caller in the Phala-Network organisation passes 'secrets: inherit' with the key as the Environment's secret; a caller in another organisation passes PHALA_CLOUD_API_KEY from a repository secret (docs/self-hosting.md, step 5)"; status=1; }
           [[ -n "$PHALA_WORKSPACE" ]] ||
             { echo "::error::Environment variable PHALA_WORKSPACE is not set"; status=1; }
-          [[ -z "$PHALA_NODE_ID" || "$PHALA_NODE_ID" =~ ^[0-9]+$ ]] ||
-            { echo "::error::Environment variable PHALA_NODE_ID must be empty (auto) or digits"; status=1; }
+          [[ -z "$PHALA_NODE_ID" ]] ||
+            { echo "::error::Environment variable PHALA_NODE_ID is no longer supported: remove it and set PHALA_NODE to the physical node name instead (for example, prod5)"; status=1; }
+          [[ -z "$PHALA_NODE" || "$PHALA_NODE" =~ ^[A-Za-z][A-Za-z0-9-]*$ ]] ||
+            { echo "::error::Environment variable PHALA_NODE must be empty (auto) or a physical node name starting with a letter and containing only letters, digits and hyphens"; status=1; }
           [[ "$VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]] ||
             { echo "::error::version must be a release tag, v<semver>"; status=1; }
           [[ "$DEPLOY_ENVIRONMENT" == staging || "$DEPLOY_ENVIRONMENT" == production ]] ||
@@ -576,7 +579,7 @@ jobs:
               "$ENVIRONMENT_DIR" >"$WORK/deploy.json"
           elif [[ "$MODE" == provision ]]; then
             node_args=()
-            [[ -z "$PHALA_NODE_ID" ]] || node_args=(--node-id "$PHALA_NODE_ID")
+            [[ -z "$PHALA_NODE" ]] || node_args=(--node "$PHALA_NODE")
             "$KIT/deploy/phala-cvm.sh" deploy "$WORK/deploy.json" \
               "${node_args[@]}" \
               --name "$CVM_NAME" \
@@ -636,7 +639,7 @@ jobs:
             echo "| CVM id | \`$cvm_id\` |"
             echo "| App id | \`$app_id\` |"
             if [[ "$MODE" == provision ]]; then
-              echo "| Requested node | \`${PHALA_NODE_ID:-auto}\` |"
+              echo "| Requested node | \`${PHALA_NODE:-auto}\` |"
             else
               echo "| Requested node | unchanged (upgrade) |"
             fi

@@ -52,7 +52,7 @@ expect "FAIL: down did not pull in 3 attempts: Error response from daemon: Get \
     sort "$tmp/pulls" | uniq -c >&2
     exit 1
 }
-expect "FAIL: the Phala CLI is error: request failed: ECONNRESET; these steps are verified against 1.1.22"
+expect "FAIL: the Phala CLI is error: request failed: ECONNRESET; these steps are verified against 1.2.7"
 expect "FAIL: the CLI is not logged in to workspace 'workspace': request failed: ECONNRESET"
 expect "FAIL: 'os-images --prod' failed: request failed: ECONNRESET"
 expect "FAIL: 'api /teepods/available' failed: request failed: ECONNRESET"
@@ -61,7 +61,7 @@ expect "FAIL: 'api /teepods/available' failed: request failed: ECONNRESET"
 cat >"$tmp/bin/phala" <<'STUB'
 #!/usr/bin/env bash
 case "$1" in
-    --version) echo v1.1.22 ;;
+    --version) echo v1.2.7 ;;
     status) echo '{"team_name":"workspace"}' ;;
     os-images) jq -nc --arg version "$STUB_VERSION" --argjson dev "$STUB_DEV" \
         '{items: [{name: "dstack-0.6.1", version: $version, is_dev: $dev}]}' ;;

@@ -35,7 +35,7 @@ this today, and slow external calls or platform routing can exceed the target.
 
 | Question | Evidence and conclusion |
 |---|---|
-| Can one app run old and new compose simultaneously? | **Yes.** Cloud's [replication guide][replicas] explicitly describes multiple live compose hashes. [instances add][add] accepts `--app-id` and `--compose-file`; [deploy/phala](../../deploy/phala) pins CLI 1.1.22. Its [published package][cli-package], `dist/index.js` instances/add handler, POSTs `docker_compose_file` to `/apps/{app_id}/instances`. A new UUID/instance ID has independent disk and billing. |
+| Can one app run old and new compose simultaneously? | **Yes.** Cloud's [replication guide][replicas] explicitly describes multiple live compose hashes. [instances add][add] accepts `--app-id` and `--compose-file`; [deploy/phala](../../deploy/phala) pins CLI 1.2.7. Its [tagged instances/add handler][cli-source] POSTs `docker_compose_file` to `/apps/{app_id}/instances` (CLI behavior rechecked 2026-11-12 PST). A new UUID/instance ID has independent disk and billing. |
 | Does replication deploy the new release? | `cvms replicate` copies the selected source compose and encrypted env; it does not copy volumes or replace compose. Use `instances add` with the reviewed new artifact, or replicate then upgrade **only the new UUID** while passive. Never upgrade by ambiguous app ID. |
 | Does the gateway route to several instances? | In [dstack v0.5.9 gateway source][gateway], `select_top_n_hosts` resolves an instance ID directly or an app ID to candidate instances. [TLS passthrough][passthrough] races TCP connects and takes the first success. This is connection selection, not HTTP readiness or primary election. |
 | What does the custom domain do today? | [Ingress 2.6 tlsalpn.sh][tlsalpn] pins `_dstack-app-address.DOMAIN` to `<instance_id>:443`: only that instance receives traffic. Its [README][ingress] explains that `dns-01` can instead bind `<app_id>:443` and use multiple instances. Multiple TXT records are not weighted routing: the gateway reads the first record. |
@@ -242,7 +242,7 @@ Until these gates and the drill pass, keep the graceful restart path; do not cla
 [run]: https://github.com/Phala-Network/phala-pay/actions/runs/37215125136
 [replicas]: https://docs.phala.com/phala-cloud/cvm/replicating-cvms
 [add]: https://docs.phala.com/phala-cloud/phala-cloud-cli/instances/add
-[cli-package]: https://registry.npmjs.org/phala/-/phala-1.1.22.tgz
+[cli-source]: https://github.com/Phala-Network/phala-cloud/blob/cli-v1.2.7/cli/src/commands/instances/add/index.ts#L270-L302
 [gateway]: https://github.com/Dstack-TEE/dstack/blob/v0.5.9/gateway/src/main_service.rs
 [passthrough]: https://github.com/Dstack-TEE/dstack/blob/v0.5.9/gateway/src/proxy/tls_passthough.rs
 [gateway-config]: https://github.com/Dstack-TEE/dstack/blob/v0.5.9/gateway/gateway.toml

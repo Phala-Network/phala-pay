@@ -320,7 +320,7 @@ main() {
             "$docs#2-your-environment-repository, step 1), or export PHALA_CLOUD_API_KEY"
     # A CVM's name is unique in its workspace: one there already, perhaps from a run elsewhere whose
     # recorded id this run cannot see, is refused rather than duplicated, before anything is written
-    # (an admin seed included). The locked CLI's answer (cli/src/commands/cvms/list, CLI 1.1.22) must
+    # (an admin seed included). The locked CLI's answer (cli/src/commands/cvms/list, CLI 1.2.7) must
     # be one complete page: page 1 of 1 (or of 0, for no match), every match on it (total fits the page
     # and is the items' count), each item a name and an app id. Anything else is refused, never read
     # as "no such name"; that includes a match the CLI leaves out (an app without a current CVM).

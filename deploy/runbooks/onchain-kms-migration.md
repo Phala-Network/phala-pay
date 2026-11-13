@@ -66,7 +66,9 @@ App ids used in migration JSON are lowercase hex **without** `0x`; DstackApp con
 use the `0x` address. `BASE_URL` is always the environment's configured public origin.
 `OLD_ENV`/`NEW_ENV` and migration-plan inputs are committed paths relative to the caller's repo.
 `TOPUP_CVM_ID` below means the **GitHub Environment variable**, not a shell override; freeze
-other deploys while it is unset or switched. Set `PHALA_NODE_ID` to the reviewed provision node.
+other deploys while it is unset or switched. Set `PHALA_NODE` to the reviewed physical provision
+node name (for example, `prod5`), starting with a letter and containing only letters, digits and
+hyphens. Remove the legacy `PHALA_NODE_ID` variable; a nonempty value fails workflow validation.
 
 Run the snippets in Bash with failure stopping enabled; define the
 [evidence helper](#key-evidence) before its first use:

@@ -41,11 +41,12 @@ exact allowed env-name set. Any backend-injected init command, extra key or chan
 refusal before a batch is produced. Backend defaults must be reviewed in the baseline. Resolve the selected node's gateway before preparing.
 
 The baseline describes the **stored/attested** compose. Pin `manifest_version` to the string
-`"3"` for the current backend; the current OpenAPI permits strings and integers, whereas the
-pinned SDK's compose parser still expects a number. The raw API path sends the reviewed type
+`"3"` for the current backend. SDK 0.6.5's
+[compose parser](https://github.com/Phala-Network/phala-cloud/blob/js-v0.6.5/js/src/actions/cvms/provision_cvm.ts#L217-L258)
+now preserves this string through its open schema. The raw API path sends the reviewed type
 unchanged. Include both `gateway_enabled: true` and `tproxy_enabled: true` in that baseline.
 For the creation payload only, `provision-prepare` omits `tproxy_enabled`, following the pinned
-SDK's [gateway compatibility handling](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.1.22/js/src/actions/cvms/provision_cvm.ts#L280).
+SDK's [gateway compatibility handling](https://github.com/Phala-Network/phala-cloud/blob/js-v0.6.5/js/src/actions/cvms/provision_cvm.ts#L320-L350).
 Cloud rejects the deprecated alias on create and restores it in the final compose. Local hashing
 still includes it: this explicit request projection does not relax any returned hash or baseline
 check. Do not strip it from stored compose or upgrade requests. No other normalization is accepted.
@@ -179,37 +180,45 @@ prepare operation, followed by sealing; the ordinary upgrade helper preserves th
 
 The hash is SHA-256 over the **exact** sorted compact UTF-8 app-compose JSON, including port policy,
 pre-launch script and public/KMS flags. The production v0.13.6 fixture reproduces its attested
-`ed7dc915…` hash byte for byte. The pinned SDK's public `getComposeHash` matches it; an older
-internal SDK helper uses four-space JSON and yields a different hash. No approval uses that
-older helper. `attested-compose.sh` continues hashing the attested raw bytes.
+`ed7dc915…` hash byte for byte; the staging Base service and restore-check fixtures reproduce
+`b3ef3745…` and `b7017913…`. The pinned dstack SDK's `getComposeHash` without normalization matches
+our raw hashing. Cloud SDK 0.6.5's public `getComposeHash` now
+[normalizes fields before hashing](https://github.com/Phala-Network/phala-cloud/blob/js-v0.6.5/js/src/utils/get_compose_hash.ts):
+it adds a missing gateway alias, drops empty/null fields and can rewrite manifest/init-script
+fields for an OS version. Never use that normalizing helper for an approval decision.
+`attested-compose.sh` continues hashing the attested raw bytes.
 
-The implementation follows the pinned CLI 1.1.22's
-[prepare handling](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.1.22/cli/src/commands/deploy/handler.ts#L944)
-and [commit handling](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.1.22/cli/src/commands/deploy/handler.ts#L1223),
-with [SDK PATCH](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.1.22/js/src/actions/cvms/patch_cvm.ts#L159)
-and [SDK commit](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.1.22/js/src/actions/cvms/commit_cvm_update.ts#L67):
+The implementation follows the pinned CLI 1.2.7's
+[prepare handling](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.2.7/cli/src/commands/deploy/handler.ts#L1306-L1334)
+and [commit handling](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.2.7/cli/src/commands/deploy/handler.ts#L1450-L1486),
+with [SDK PATCH](https://github.com/Phala-Network/phala-cloud/blob/js-v0.6.5/js/src/actions/cvms/patch_cvm.ts#L251-L291)
+and [SDK commit](https://github.com/Phala-Network/phala-cloud/blob/js-v0.6.5/js/src/actions/cvms/commit_cvm_update.ts#L67-L91):
 `PATCH /cvms/{id}` with `X-Prepare-Only: true` can return 465 with a token when registration is
 needed, then `POST /cvms/{id}/commit-update` accepts `token`, `compose_hash`, `transaction_hash`.
 The same SDK PATCH omits `X-Prepare-Only` for ordinary updates. A successful response is an
 initiated update (`requiresOnChainHash: false`), including when prepare-only was requested;
-the [CLI's explicit handling](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.1.22/cli/src/commands/deploy/handler.ts#L958)
+the [CLI's explicit handling](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.2.7/cli/src/commands/deploy/handler.ts#L1322-L1333)
 confirms that such an update was applied directly. This is why approved hashes must bypass
 prepare PATCH and use ordinary PATCH inside the maintenance window. The pinned
-[start action](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.1.22/js/src/actions/cvms/start_cvm.ts)
+[start action](https://github.com/Phala-Network/phala-cloud/blob/js-v0.6.5/js/src/actions/cvms/start_cvm.ts)
 uses `POST /cvms/{id}/start` for stopped CVMs, exposed by the
-[CLI start command](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.1.22/cli/src/commands/cvms/start/index.ts)
+[CLI start command](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.2.7/cli/src/commands/cvms/start/index.ts)
 as `phala cvms start CVM_ID --json`. Both changed-compose applies and unchanged approved-compose
 commits use this operation only when a fresh pre-apply read reports exactly `stopped` and no
 operation in progress. Changed applies must also settle stopped on the target hash before the
 start request; another settled state fails closed. Other pre-apply states do not trigger a start.
-Initial provision uses `POST /cvms/provision`, then
+The kit's initial provision uses `POST /cvms/provision`, then
 `POST /cvms` with receipt-derived app/contract and Safe deployer addresses. These are in the
 [reviewed current OpenAPI](https://github.com/Phala-Network/phala-docs/blob/e90f9a99bb44f657746fa32c4ed88dff338d8c8c/openapi.json), operationIds
 `update_cvm_endpoint_api_v1_cvms__cvm_id__patch`,
 `commit_cvm_update_api_v1_cvms__cvm_id__commit_update_post`,
 and `handle_create_cvm_api_v1_cvms_post`. The current create endpoint documents a same-path
 token flow and explicitly retains the legacy `POST /cvms/provision` → `POST /cvms` pair during
-its deprecation window; this kit uses that existing pair. Its prepare response now includes an
+its deprecation window; this kit uses that existing pair. SDK 0.6.5's
+[`provisionCvm`](https://github.com/Phala-Network/phala-cloud/blob/js-v0.6.5/js/src/actions/cvms/provision_cvm.ts#L354-L364)
+now uses the same-path token flow, while
+[`commitCvmProvision`](https://github.com/Phala-Network/phala-cloud/blob/js-v0.6.5/js/src/actions/cvms/commit_cvm_provision.ts#L208-L240)
+still accepts the legacy `app_id` + `compose_hash` payload. The legacy prepare response includes an
 optional token, which the legacy `app_id` + `compose_hash` commit does not use.
 There is no documented `/compose_file/commit`.
 

@@ -3,8 +3,8 @@
   "private": true,
   "description": "The Phala Cloud CLI that deploy/phala runs, with its dependencies locked: npm ci --prefix deploy/tools",
   "dependencies": {
-    "@phala/cloud": "0.4.0",
-    "phala": "1.1.22",
+    "@phala/cloud": "0.6.5",
+    "phala": "1.2.7",
     "viem": "2.57.1"
   }
 }

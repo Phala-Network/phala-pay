@@ -13,6 +13,11 @@ Steps outside the workflows that change a registry, Phala Cloud, a CVM, a Safe, 
 a secret are marked **HUMAN-ONLY**. Backup and restore: [RESTORE.md](RESTORE.md). Incident response:
 [runbooks](runbooks/README.md). Contracts: [CONTRACTS.md](CONTRACTS.md).
 
+`deploy/phala` runs the locked Phala Cloud CLI **1.2.7**, with `@phala/cloud` **0.6.5** and
+viem **2.57.1**. Install it with `npm ci --prefix deploy/tools`. The
+[CLI compatibility record](runbooks/phala-cli-compatibility.md) cites the tagged upstream
+sources and records the Base environment-encryption fix, response contracts and hash behavior.
+
 ## What runs where
 
 | Where | What | Deployed by |
@@ -87,7 +92,7 @@ Keep the existing app-compose manifest version; changing it to `"3"` prevents ro
 
 #### Approval evidence for dstack-0.6.1
 
-Checked on 2026-10-16 against Phala Cloud CLI 1.1.22 and the official
+OS evidence collected on 2026-10-16 against the official
 [mkosi-os-v0.6.1 release](https://github.com/Dstack-TEE/dstack/releases/tag/mkosi-os-v0.6.1):
 
 - `phala os-images --prod --all --json` lists `name: dstack-0.6.1`, `version: 0.6.1`,
@@ -269,9 +274,11 @@ official dstack verifier; it uploads the rendered compose and the verification a
 [Deploy Phala's instance](../.github/workflows/deploy-phala.yml) is Phala's caller, the same way;
 adopting a release is a pull request that changes its release.
 
-The optional GitHub Environment variable `PHALA_NODE_ID` pins a new CVM to a Phala Cloud node:
-empty or unset lets Phala Cloud select it; otherwise the value must contain only digits, the
-node id from `deploy/phala nodes list` with that workspace's API key. Deploy passes `--node-id`
+The optional GitHub Environment variable `PHALA_NODE` pins a new CVM to a physical Phala Cloud node:
+empty or unset lets Phala Cloud select it; otherwise use the node name (for example, `prod5`)
+from `deploy/phala nodes list` with that workspace's API key. The name must start with a letter
+and contain only letters, digits and hyphens. Remove the old `PHALA_NODE_ID` variable before
+deploying: a nonempty legacy value fails validation with migration instructions. Deploy passes `--node`
 only for `mode: provision`; an upgrade keeps the CVM's node. The run summary records the
 requested node (or `auto`) and the actual node's id, name and region from `cvm.json`.
 The CLI's JSON output is logged even if deployment fails, with its exit status preserved.
@@ -672,8 +679,9 @@ preserves the owner-sealed values. Calls share a five-minute stage deadline and 
 capped at 30 seconds; failures print the CLI/API diagnostic. OUT records the provision response,
 including its hash; callers wait for that exact hash to settle before verifying attestation or
 probing the upgraded service.
-Deploy upgrades and both provisioning follow-ups use this path because CLI 1.1.22 cannot set
-`port_policy` directly. The **service** policy is
+Deploy upgrades and both provisioning follow-ups retain this path to preserve the full current
+app-compose and sealed environment while setting `port_policy`, which the CLI's ordinary deploy
+flags do not expose. The **service** policy is
 `{"ports":[{"port":443,"pp":true}],"restrict_mode":false}`; **restore-check** inherits that
 same policy through `instances add`. PROXY on 443 is inert there: no ingress or listener runs
 on 443, and only plain HTTP on 8081 is published. **Product and template** keep `pp:false`

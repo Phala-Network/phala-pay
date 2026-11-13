@@ -119,7 +119,7 @@ jq -nc '["health"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
                     "VARIANT": "service",
                     "GITHUB_STEP_SUMMARY": str(self.tmp / "summary"),
                     "PHALA_CLOUD_API_KEY": "test-key", "PHALA_WORKSPACE": "test-workspace",
-                    "PHALA_NODE_ID": "", "TOPUP_CVM_ID": "", "STAGING_PRODUCT_CVM_ID": "",
+                    "PHALA_NODE": "", "PHALA_NODE_ID": "", "TOPUP_CVM_ID": "", "STAGING_PRODUCT_CVM_ID": "",
                     "VERSION": "v0.10.4", "DEPLOY_ENVIRONMENT": "production", "TARGET": "topup",
                     "MODE": "provision", "ENVIRONMENT_DIR": "production/topup",
                     "CVM_NAME": "test-cvm", "CVM_ID_VARIABLE": "TOPUP_CVM_ID",
@@ -146,23 +146,32 @@ jq -nc '["health"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
                               env=self.env, capture_output=True, text=True, timeout=10)
 
     def test_node_validation(self):
-        for node in ("", "26", "0", "026"):
+        for node in ("", "prod5", "usw5", "us-west-1", "Prod5"):
             with self.subTest(node=node):
-                self.env["PHALA_NODE_ID"] = node
+                self.env["PHALA_NODE"] = node
                 result = self.run_step("Check inputs and Environment settings")
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        for node in ("prod5", "-1", "2.6", " 26", "26 ", "26\n", "26; echo unsafe"):
+        for node in ("26", "-prod5", "prod.5", " prod5", "prod5 ", "prod5\n", "prod5; echo unsafe"):
             with self.subTest(node=node):
-                self.env["PHALA_NODE_ID"] = node
+                self.env["PHALA_NODE"] = node
                 result = self.run_step("Check inputs and Environment settings")
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn("PHALA_NODE_ID must be empty (auto) or digits", result.stdout)
+                self.assertIn("PHALA_NODE must be empty (auto) or a physical node name", result.stdout)
+
+    def test_legacy_node_id_requires_explicit_operator_migration(self):
+        for node in ("", "prod5"):
+            with self.subTest(node=node):
+                self.env.update(PHALA_NODE=node, PHALA_NODE_ID="26")
+                result = self.run_step("Check inputs and Environment settings")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("PHALA_NODE_ID is no longer supported: remove it and set PHALA_NODE", result.stdout)
+                self.assertFalse((self.tmp / "cli.jsonl").exists())
 
     def test_node_selection_and_summary(self):
-        for mode, node, variant in (("provision", "26", "service"), ("provision", "", "service"),
-                                    ("upgrade", "26", "service"), ("upgrade", "26", "product")):
+        for mode, node, variant in (("provision", "prod5", "service"), ("provision", "", "service"),
+                                    ("upgrade", "prod5", "service"), ("upgrade", "prod5", "product")):
             with self.subTest(mode=mode, node=node, variant=variant):
-                self.env.update(MODE=mode, PHALA_NODE_ID=node, VARIANT=variant,
+                self.env.update(MODE=mode, PHALA_NODE=node, VARIANT=variant,
                                 TARGET="topup" if variant == "service" else "product")
                 for path in (self.tmp / "cli.jsonl", self.tmp / "summary", self.tmp / "compose-committed"):
                     path.unlink(missing_ok=True)
@@ -171,10 +180,11 @@ jq -nc '["health"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
                 calls = [json.loads(line) for line in (self.tmp / "cli.jsonl").read_text().splitlines()]
                 if mode == "provision":
                     deployment = next(args for args in calls if args[0] == "deploy")
+                    self.assertNotIn("--node-id", deployment)
                     if node:
-                        self.assertEqual(deployment[deployment.index("--node-id") + 1], "26")
+                        self.assertEqual(deployment[deployment.index("--node") + 1], node)
                     else:
-                        self.assertNotIn("--node-id", deployment)
+                        self.assertNotIn("--node", deployment)
                     self.assertFalse(any(args[0] == "api" for args in calls))
                 else:
                     self.assertFalse(any(args[0] == "deploy" for args in calls))
@@ -182,6 +192,7 @@ jq -nc '["health"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
                     self.assertEqual([args[1] for args in updates], ["/cvms/cvm-1/compose_file",
                                      "/cvms/cvm-1/compose_file/provision", "/cvms/cvm-1/compose_file"])
                     for update in updates:
+                        self.assertNotIn("--node", update)
                         self.assertNotIn("--node-id", update)
                         self.assertNotIn("-e", update)
                     self.assert_policy_request(self.work / "deploy.json.request.json")

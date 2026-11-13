@@ -48,7 +48,7 @@ class OnchainUpgradeTests(unittest.TestCase):
         self.stored = self.tmp / 'stored.json'
         self.cvm = self.tmp / 'cvm.json'
         self.stored.write_text(json.dumps(self.baseline))
-        self.cvm.write_text(json.dumps({'app_id': APP, 'kms_type': 'BASE', 'kms_info': {'chain_id': 8453,
+        self.cvm.write_text(json.dumps({'app_id': APP, 'kms_type': 'base', 'kms_info': {'chain_id': 8453,
             'dstack_kms_address': self.pin['kms_auth']}, 'compose_hash': compose_hash(self.baseline),
             'node_info': {'device_id': DEVICE}, 'status': 'running', 'in_progress': False, 'os': {'name': 'dstack-0.6.1'}}))
         self.approved = True

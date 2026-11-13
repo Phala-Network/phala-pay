@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Phala Cloud CVM steps of .github/workflows/deploy.yml, with the locked CLI (deploy/phala: Phala
-# Cloud CLI 1.1.22; PHALA_CLOUD_API_KEY and PHALA_CLOUD_DIR come from the environment).
+# Cloud CLI 1.2.7; PHALA_CLOUD_API_KEY and PHALA_CLOUD_DIR come from the environment).
 #
 # Usage:
 #   deploy/phala-cvm.sh provision-prepare REQUEST_JSON OUT ENVIRONMENT_DIR
@@ -148,7 +148,7 @@ case "$command" in
             exit 64
         }
         stage_start os-image "${OS_IMAGE_WAIT_SECONDS:-900}"
-        # CLI 1.1.22 has no OS-image subcommand. Its raw API sends this JSON body; Cloud
+        # CLI 1.2.7's raw API sends this JSON body; Cloud
         # responds 202 with no body and reboots the same CVM, retaining app/KMS identity.
         status=0
         response=$(phala api "/cvms/$1/os-image" -X PATCH -F "os_image_name=$2") || status=$?
