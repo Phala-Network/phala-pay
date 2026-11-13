@@ -5,6 +5,6 @@
   "dependencies": {
     "@phala/cloud": "0.6.5",
     "phala": "1.2.7",
-    "viem": "2.57.1"
+    "viem": "2.57.17"
   }
 }
