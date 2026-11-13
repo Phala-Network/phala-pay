@@ -369,8 +369,37 @@ dual receipts. Stored insert-only contradictions still freeze the chain.
 Sanctions screening uses local OFAC/manual lists, with no RPC term; address derivation is local.
 Staging's one PHA route (Sepolia) retains its five-minute TWAP sampler: 288 snapshots/day.
 Quotes have two price-chain instances per environment: `288+2·30+2·600=1,548` snapshots/day.
-Production has no periodic TWAP sampler. Observation-only staging mainnets perform no payment
+Production's current stablecoin routes have no periodic TWAP work. Adding a future PHA route
+activates the sampler at `twap_sample_interval_s` (default 60 s outside staging, configurable
+60–300 s). Each fresh sample shares one Ethereum price-chain snapshot across routes: **one
+Ankr `eth_call` plus three BlockPI methods** (`eth_blockNumber`, `eth_getBlockByNumber`,
+`eth_call`), or **four logical methods and 50 BlockPI base RU** (`10+20+20`). The existing
+reviewed model conservatively reserves **60 BlockPI RU per snapshot**; retain that allowance
+for budget sign-off below. Persisted TWAP block-hash checks
+stay inside the same multicall. Sampler snapshots do not consume Q; do not assume quote reuse
+or failed samples save this allowance. Observation-only staging mainnets perform no payment
 discovery, checkpoints, coverage or custody; all staging verify traffic stays on Infura.
+
+Reserve the following incremental production sampler budget before enabling PHA. These are
+steady-state allowances per price-chain sampler, without retries; non-refund budget accounting then
+applies the existing ×1.1 factor:
+
+| Production interval | Snapshots/day | Ankr calls/day | BlockPI methods/day | BlockPI RU/day | Budgeted Ankr / BlockPI per day (×1.1) |
+|---|---:|---:|---:|---:|---:|
+| 60 s (default) | 1,440 | 1,440 | 4,320 | 86,400 | 1,584 calls / 95,040 RU |
+| 300 s (recommended for budget review) | 288 | 288 | 864 | 17,280 | 317 calls / 19,008 RU |
+
+At the current D152/H300/Q600/F240 allocation, the shared Ankr total would rise from
+22,498/day to **24,082/day at 60 s** or **22,814/day at 300 s**, leaving only 3.67% or 8.74%
+headroom below the 25,000/day stop line. BlockPI would rise from 506,317 to 601,357 or
+525,325 RU/day. Totals round after combining the existing model and sampler allowance.
+Both intervals therefore need a revised allocation to retain the reviewed
+ten-percent Ankr headroom: under the same model, D must fall to at most **56 at 60 s** or
+**132 at 300 s**, unless another allowance is reduced or more capacity is approved.
+The 300 s recommendation is conditional on separate risk approval of the route's freshness
+and jump policy: its `max_sample_age_s` must exceed 300 s and production validation caps it
+at 600 s. The default 180 s age cannot support that cadence. This budget does not authorize
+a PHA route, a licensing exception, a lower liquidity floor or a deployment.
 
 A deposit enters S at its first unresolved check, persisted as `first_unresolved_at`. This
 includes a `detected` deposit whose transfer both endpoints agree is absent during confirmation,

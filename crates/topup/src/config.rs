@@ -25,7 +25,7 @@ use crate::routes::RouteSet;
 use crate::rpc_provider::ProviderUrl;
 
 /// The file as written. Maintenance keys default to empty; the two runtime-resolved public
-/// settings, daily budgets and discovery windows may be omitted. Other fields are required
+/// settings, daily budgets, sampling interval and discovery windows may be omitted. Other fields are required
 /// and unknown fields are errors.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -39,6 +39,8 @@ struct ConfigSpec {
     hints_per_day: i32,
     #[serde(default = "default_quote_snapshots_per_day")]
     quote_snapshots_per_day: i32,
+    #[serde(default)]
+    twap_sample_interval_s: Option<u64>,
     #[serde(default)]
     discovery: crate::scanner::ScanConfig,
     #[serde(default)]
@@ -85,6 +87,8 @@ pub struct Config {
     pub hints_per_day: i32,
     /// Atomic fresh quote snapshot limit per price chain and UTC day (default 60).
     pub quote_snapshots_per_day: i32,
+    /// Background TWAP sampling and minimum persisted observation spacing, in seconds.
+    pub twap_sample_interval_s: u64,
     /// Fast discovery activity windows; hourly dual coverage still includes cold addresses.
     pub discovery: crate::scanner::ScanConfig,
     /// Optional RPC account allocations and deposit stop line, used only for alerts.
@@ -127,6 +131,7 @@ struct ResolvedConfig<'a> {
     max_refund_attachments_per_day: u32,
     hints_per_day: i32,
     quote_snapshots_per_day: i32,
+    twap_sample_interval_s: u64,
     discovery: crate::scanner::ScanConfig,
     #[serde(skip_serializing_if = "crate::observability::quota::QuotaAlerts::is_disabled")]
     quota_alerts: &'a crate::observability::quota::QuotaAlerts,
@@ -154,6 +159,10 @@ impl Config {
         let spec: ConfigSpec =
             serde_saphyr::from_str(yaml).map_err(|error| format!("invalid YAML: {error}"))?;
         validate_daily_budgets(spec.hints_per_day, spec.quote_snapshots_per_day)?;
+        let twap_sample_interval_s = spec
+            .twap_sample_interval_s
+            .unwrap_or_else(|| default_twap_sample_interval_s(&spec.environment));
+        validate_twap_sample_interval_s(twap_sample_interval_s, &spec.routes)?;
         spec.discovery.validate()?;
         spec.quota_alerts.validate(&spec.rpc)?;
         validate_capacity(
@@ -246,6 +255,7 @@ impl Config {
             max_refund_attachments_per_day: spec.max_refund_attachments_per_day,
             hints_per_day: spec.hints_per_day,
             quote_snapshots_per_day: spec.quote_snapshots_per_day,
+            twap_sample_interval_s,
             discovery: spec.discovery,
             quota_alerts: spec.quota_alerts,
             public_origin,
@@ -326,6 +336,7 @@ impl Config {
         }
         RouteSet::with_rpc(self.routes.clone(), clients)?
             .with_environment(self.environment.clone())
+            .with_twap_sample_interval_s(self.twap_sample_interval_s)?
             .with_discovery(self.discovery)
             .with_quota_alerts(self.quota_alerts.clone())
             .with_daily_budgets(self.hints_per_day, self.quote_snapshots_per_day)
@@ -361,6 +372,7 @@ impl Config {
             max_refund_attachments_per_day: self.max_refund_attachments_per_day,
             hints_per_day: self.hints_per_day,
             quote_snapshots_per_day: self.quote_snapshots_per_day,
+            twap_sample_interval_s: self.twap_sample_interval_s,
             discovery: self.discovery,
             quota_alerts: &self.quota_alerts,
             public_origin: self.public_origin.as_ref().map(ToString::to_string),
@@ -397,6 +409,34 @@ pub(crate) fn validate_daily_budgets(hints: i32, snapshots: i32) -> Result<(), S
     ] {
         if !(1..=1_000_000).contains(&limit) {
             return Err(format!("{name} must be an integer from 1 to 1000000"));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn default_twap_sample_interval_s(environment: &str) -> u64 {
+    if environment == "staging" { 300 } else { 60 }
+}
+
+pub(crate) fn validate_twap_sample_interval_s(
+    interval_s: u64,
+    routes: &[RouteFile],
+) -> Result<(), String> {
+    if !(60..=300).contains(&interval_s) {
+        return Err("twap_sample_interval_s must be an integer from 60 to 300".to_owned());
+    }
+    for route in routes {
+        for (_, sources) in route.pricing.roles() {
+            for source in sources {
+                if let topup_core::price::Source::UniswapV2Twap { twap, .. } = source
+                    && interval_s >= twap.max_sample_age_s
+                {
+                    return Err(format!(
+                        "twap_sample_interval_s must be less than TWAP max_sample_age_s ({} seconds) on route `{}`",
+                        twap.max_sample_age_s, route.route
+                    ));
+                }
+            }
         }
     }
     Ok(())
@@ -451,6 +491,64 @@ mod tests {
         format!(
             "environment: staging\nmax_attached_pending_refunds: 2\nmax_refund_attachments_per_day: 1\npublic_origin: {origin}\nadmin_key:\n  id: admin/staging-v1\n  public_key: {KEY}\n{providers}\nroutes:\n  -\n{route}\n"
         )
+    }
+
+    #[test]
+    fn twap_sampling_defaults_overrides_and_bounds_round_trip() {
+        let base = config(PROVIDERS, "https://pay.example");
+        for (environment, expected) in [("staging", 300), ("testnet", 60), ("local", 60)] {
+            let yaml = base.replace(
+                "environment: staging",
+                &format!("environment: {environment}"),
+            );
+            let parsed = Config::parse(&yaml).unwrap();
+            assert_eq!(parsed.twap_sample_interval_s, expected);
+            for interval in [60, 120, 300] {
+                let parsed =
+                    Config::parse(&format!("{yaml}twap_sample_interval_s: {interval}\n")).unwrap();
+                let shown = parsed.resolved_json().unwrap();
+                assert_eq!(
+                    Config::parse(&shown).unwrap().twap_sample_interval_s,
+                    interval
+                );
+            }
+        }
+        let production = Config::parse(include_str!(
+            "../../../deploy/environments/phala-network/production/topup/topup.yaml"
+        ))
+        .unwrap();
+        assert_eq!(production.twap_sample_interval_s, 60);
+        for invalid in ["0", "59", "301", "-1", "1.5", "false"] {
+            assert!(
+                Config::parse(&format!("{base}twap_sample_interval_s: {invalid}\n")).is_err(),
+                "accepted invalid TWAP sampling interval {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn twap_sampling_must_fit_every_enabled_source_freshness_limit() {
+        let mut config = Config::parse(include_str!(
+            "../../../deploy/environments/phala-network/staging/topup/topup.yaml"
+        ))
+        .unwrap();
+        assert_eq!(config.twap_sample_interval_s, 300);
+        for route in &mut config.routes {
+            for source in &mut route.pricing.primary {
+                if let topup_core::price::Source::UniswapV2Twap { twap, .. } = source {
+                    twap.max_sample_age_s = 180;
+                }
+            }
+        }
+        for interval in [180, 300] {
+            config.twap_sample_interval_s = interval;
+            let error = Config::parse(&config.resolved_json().unwrap()).unwrap_err();
+            assert!(
+                error.contains("twap_sample_interval_s must be less than TWAP max_sample_age_s")
+            );
+        }
+        config.twap_sample_interval_s = 60;
+        assert!(Config::parse(&config.resolved_json().unwrap()).is_ok());
     }
 
     #[test]

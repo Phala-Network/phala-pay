@@ -14,6 +14,19 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Added
+
+- Attested `twap_sample_interval_s` configuration (60–300 seconds) for background sampling and
+  persisted TWAP observation spacing. Defaults remain 300 seconds in staging and 60 elsewhere;
+  validation requires the interval to fit every enabled TWAP source's freshness limit.
+  Document the incremental RPC budget and allocation review required before a production PHA route.
+
+### Fixed
+
+- Preserve background TWAP sampler failure codes in `price_source_refusals_total` and the
+  existing `price-outage` alert's `check`, including liquidity, RPC, deviation and timeout
+  failures, with bounded labels and the existing alert grouping and repeat throttle.
+
 ## [0.13.12] - 2026-11-12
 
 ### Changed

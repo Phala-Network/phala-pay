@@ -10,6 +10,47 @@ use topup_adapters::pricing::{
 use topup_core::price::TwapConfig;
 
 #[tokio::test]
+async fn postgres_observation_spacing_uses_the_configured_sampler_interval() -> Result<()> {
+    support::with_database(|database| {
+        Box::pin(async move {
+            for interval in [60_u64, 120, 300] {
+                let policy = TwapConfig {
+                    max_sample_age_s: interval
+                        .checked_mul(2)
+                        .ok_or_else(|| anyhow::anyhow!("fixture age"))?,
+                    ..TwapConfig::default()
+                };
+                let sample = |elapsed: u64| -> Result<Sample> {
+                    Ok(Sample {
+                        block: 100_u64
+                            .checked_add(elapsed)
+                            .ok_or_else(|| anyhow::anyhow!("fixture block"))?,
+                        hash: B256::repeat_byte(1),
+                        timestamp: 10_000_u64
+                            .checked_add(elapsed)
+                            .ok_or_else(|| anyhow::anyhow!("fixture timestamp"))?,
+                        spot: U256::from(1),
+                        cumulative: U256::from(elapsed),
+                    })
+                };
+                let store = TwapStore::with_interval(database.app_pool.clone(), interval);
+                ensure!(store.record(&sample(0)?, &policy).await?.len() == 1);
+                let before = interval
+                    .checked_sub(1)
+                    .ok_or_else(|| anyhow::anyhow!("fixture interval"))?;
+                ensure!(store.record(&sample(before)?, &policy).await?.len() == 1);
+                ensure!(store.record(&sample(interval)?, &policy).await?.len() == 2);
+                drop(store);
+                let restarted = TwapStore::with_interval(database.app_pool.clone(), interval);
+                ensure!(restarted.history(&policy).await?.len() == 2);
+            }
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
 async fn postgres_window_survives_restart_and_refused_samples_are_not_inserted() -> Result<()> {
     support::with_database(|database| {
         Box::pin(async move {

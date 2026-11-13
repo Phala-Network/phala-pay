@@ -467,11 +467,10 @@ impl PricingRuntime {
             }
         }
         let store: Arc<dyn topup_adapters::pricing::uniswap_v2::ObservationStore> =
-            Arc::new(if routes.staging() {
-                crate::db::pricing::TwapStore::staging(pool.clone())
-            } else {
-                crate::db::pricing::TwapStore::new(pool.clone())
-            });
+            Arc::new(crate::db::pricing::TwapStore::with_interval(
+                pool.clone(),
+                routes.twap_sample_interval_s(),
+            ));
         let budget: Arc<dyn topup_adapters::pricing::snapshot::SnapshotBudget> =
             Arc::new(crate::db::pricing::PriceBudget {
                 pool,
@@ -679,19 +678,25 @@ impl PricingRuntime {
     }
     /// Accumulate TWAP history even when no merchant requests a quote.
     pub async fn sample_twaps(&self, route: &RouteFile, arrived: tokio::time::Instant) {
-        for entry in self
+        for (role, entry) in self
             .primary
             .iter()
-            .chain(&self.check)
-            .filter(|e| e.company == "uniswap-v2-onchain")
+            .map(|entry| ("primary", entry))
+            .chain(self.check.iter().map(|entry| ("check", entry)))
+            .filter(|(_, entry)| entry.company == "uniswap-v2-onchain")
         {
             let deadline = tokio::time::Instant::now() + SOURCE_TIMEOUT;
-            match tokio::time::timeout_at(deadline, entry.source.sample_since(arrived, deadline))
-                .await
+            let code = match tokio::time::timeout_at(
+                deadline,
+                entry.source.sample_since(arrived, deadline),
+            )
+            .await
             {
-                Ok(Ok(_)) => {}
-                _ => price_metrics::failure(route, &PricingFailure::new("price_unavailable")),
-            }
+                Ok(Ok(())) => continue,
+                Ok(Err(error)) => error_code(&error),
+                Err(_) => error_code(&PriceError::Timeout),
+            };
+            price_metrics::refusal(route, role, entry.source_id, entry.company, code);
         }
     }
 
@@ -2300,16 +2305,26 @@ mod tests {
         }
     }
     #[tokio::test(start_paused = true)]
-    async fn service_sampler_uses_five_minutes_only_in_staging() {
-        for (environment, interval) in [("staging", 300), ("testnet", 60)] {
+    async fn service_sampler_uses_environment_defaults_and_configured_intervals() {
+        for (environment, configured, interval) in [
+            ("staging", None, 300),
+            ("testnet", None, 60),
+            ("production", None, 60),
+            ("staging", Some(60), 60),
+            ("testnet", Some(300), 300),
+            ("production", Some(120), 120),
+        ] {
             let inner = CountingSource::new(Duration::ZERO);
             let mut runtime = runtime();
             runtime.primary[0].source = Arc::new(shared(inner.clone()));
             runtime.primary[0].company = "uniswap-v2-onchain";
             let route = route();
-            let routes = RouteSet::new(vec![route.clone()])
+            let mut routes = RouteSet::new(vec![route.clone()])
                 .unwrap()
                 .with_environment(environment.into());
+            if let Some(configured) = configured {
+                routes = routes.with_twap_sample_interval_s(configured).unwrap();
+            }
             let provider = crate::locks::ConfiguredQuoteProvider::from_runtimes(Arc::new(
                 BTreeMap::from([((route.route, route.version), Arc::new(runtime))]),
             ));
@@ -2336,6 +2351,114 @@ mod tests {
             assert_eq!(inner.calls(), 2, "{environment} skipped the next sample");
             cancellation.cancel();
             task.await.unwrap();
+        }
+    }
+
+    #[test]
+    fn sampler_reports_precise_refusals_without_new_alert_dimensions() {
+        use sentry::test::with_captured_events_options;
+
+        let executor = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        for role in ["primary", "check"] {
+            for (error, code) in [
+                (
+                    Some(PriceError::Feed {
+                        class: "twap_liquidity",
+                        evidence: json!({"detail":"untrusted-provider-detail"}),
+                    }),
+                    "twap_liquidity",
+                ),
+                (
+                    Some(PriceError::Feed {
+                        class: "twap_sample_jump",
+                        evidence: Value::Null,
+                    }),
+                    "twap_sample_jump",
+                ),
+                (
+                    Some(PriceError::Feed {
+                        class: "twap_storage",
+                        evidence: Value::Null,
+                    }),
+                    "twap_storage",
+                ),
+                (Some(PriceError::RpcUnavailable), "outage"),
+                (Some(PriceError::Disagreement), "divergent"),
+                (None, "timeout"),
+            ] {
+                let mut runtime = runtime();
+                let mut source = entry("uniswap-v2-onchain", 10_000_000, 0, error.clone());
+                if error.is_none() {
+                    source.source = Arc::new(shared(CountingSource::new(Duration::from_secs(31))));
+                }
+                match role {
+                    "primary" => runtime.primary = vec![source],
+                    _ => runtime.check = vec![source],
+                }
+                let mut route = route();
+                route.route = format!("sampler-{role}-{code}");
+                let events = with_captured_events_options(
+                    || {
+                        tracing::subscriber::with_default(
+                            crate::observability::log_subscriber(std::io::sink),
+                            || {
+                                executor.block_on(async {
+                                    tokio::time::pause();
+                                    for _ in 0..2 {
+                                        runtime
+                                            .sample_twaps(&route, tokio::time::Instant::now())
+                                            .await;
+                                        tokio::time::advance(Duration::from_secs(60)).await;
+                                    }
+                                    tokio::time::resume();
+                                });
+                            },
+                        );
+                    },
+                    sentry::ClientOptions::default(),
+                );
+                assert_eq!(events.len(), 2, "{role}: {code}");
+                for event in events {
+                    assert_eq!(event.tags.len(), 4);
+                    assert_eq!(event.tags["alert"], "price-outage");
+                    assert_eq!(event.tags["route"], route.route);
+                    assert_eq!(event.tags["asset"], route.asset.symbol);
+                    assert_eq!(event.tags["check"], code);
+                    assert!(
+                        !serde_json::to_string(&event)
+                            .unwrap()
+                            .contains("untrusted-provider-detail")
+                    );
+                }
+                let refusals = price_metrics::collect().unwrap();
+                let refusals = refusals
+                    .iter()
+                    .find(|family| family.name() == "price_source_refusals_total")
+                    .unwrap();
+                assert!(
+                    refusals.get_metric().iter().any(|metric| {
+                        [
+                            ("route", route.route.as_str()),
+                            ("asset", route.asset.symbol.as_str()),
+                            ("role", role),
+                            ("source", "uniswap_v2_twap"),
+                            ("company", "uniswap-v2-onchain"),
+                            ("code", code),
+                        ]
+                        .into_iter()
+                        .all(|(name, value)| {
+                            metric
+                                .get_label()
+                                .iter()
+                                .any(|label| label.name() == name && label.value() == value)
+                        }) && metric.get_counter().get_value() == 2.0
+                    }),
+                    "missing sampler refusal metric for {role}: {code}"
+                );
+            }
         }
     }
 
