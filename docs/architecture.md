@@ -685,7 +685,8 @@ coalesce concurrent fetches. Cached observations record their age in the pricing
 
 Chainlink uses pinned feed addresses, decimals and heartbeat plus margin, complete positive
 rounds and independent RPC A/B agreement at one canonical hash-pinned block. PHA samples public pair
-cumulatives once/minute (every 300 seconds on the staging PHA route) into PostgreSQL, requires a continuous thirty-minute window, and enforces
+cumulatives once/minute by default (every 300 seconds on the shipped production and staging PHA routes)
+into PostgreSQL, requires a continuous thirty-minute window, and enforces
 liquidity, spot divergence (default 3%), sample freshness and jump limits. PHA valuation uses
 min(TWAP, current spot) × ETH/USD; independent Kraken order-book mid agreement checks current spot
 × ETH/USD, so average lag cannot overvalue a falling market or reject ordinary agreeing spot moves.

@@ -167,6 +167,7 @@ remain 180 seconds and 500 bps. The widened age applies only to test routes. The
 window plus 900-second age fits the 2,880-second Ethereum BLOCKHASH bound, leaving a 16-block
 margin within its 256-block reach. Production PHA uses explicit owner acceptance of Kraken's
 PermissionRequired licence risk and a 15,000 PHA deposit cap; see [configuration](../docs/configuration.md#price-sources).
+Its sampler also runs every 300 seconds, with `max_sample_age_s: 600` and the default 500 bps jump limit.
 
 ## Staging reset (HUMAN-ONLY)
 

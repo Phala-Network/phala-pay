@@ -12,6 +12,7 @@ discovery:
   quote_checks_per_day: 100
 hints_per_day: 300
 quote_snapshots_per_day: 600
+twap_sample_interval_s: 300
 public_origin: https://pay-api.phala.com
 admin_key:
   id: admin/production-v1

@@ -383,6 +383,10 @@ and `max_sample_jump_bps: 500`. Windows below thirty minutes are rejected. The s
 once/minute into PostgreSQL even without quote traffic (300 seconds on staging PHA); startup and gaps require a continuous
 window before prices become available. `config show` includes the resolved guard rails.
 
+Production PHA sets `twap_sample_interval_s: 300` with `max_sample_age_s: 600`; the sample jump
+limit keeps its 500 bps default. Its D132 pilot preserves the reviewed RPC headroom with the
+existing 600 fresh quote snapshots per chain per day; see [RPC budget](../deploy/RPC.md).
+
 The staging PHA routes use 300 s TWAP samples with `max_sample_age_s: 900` and
 `max_sample_jump_bps: 1100`. The gap bound retains three sample intervals, tolerating two
 missed samples. The jump bound scales the existing 500 bps per minute by
