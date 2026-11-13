@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Validate committed topup configs as shipped, including their declared environment.
 # Route-only examples have deployment placeholders, so use the route template validator;
-# their price-source opt-ins permit noncommercial rehearsal, not production use.
+# production PermissionRequired sources require explicit owner opt-in; Prohibited sources are refused.
 set -euo pipefail
 
 root=$(CDPATH='' cd -- "$(dirname "$0")/../.." && pwd)

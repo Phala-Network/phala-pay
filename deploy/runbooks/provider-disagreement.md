@@ -66,13 +66,14 @@ one provider's word. Sanctions decisions also require agreement at the same cano
 ## Fix
 
 Open provider incidents with the exact block and log evidence. Replacing a provider is a route
-config change and Deploy `upgrade`. Price-source replacement also needs a Legal **Allowed**
-verdict in the attested registry and disjoint primary/check companies. Never override a price
-or substitute another endpoint of the same company. Stablecoin defaults are Chainlink-only;
-Kraken requires written commercial permission and Binance/Coinbase/Coin Metrics are not
-commercially eligible. PHA production uses
-[Uniswap V2 TWAP](../../docs/design/price-failover.md#pha-on-chain-follow-up) but still needs an Allowed
-Kraken check after written permission. The reader halts on TWAP/spot divergence, sample jumps,
+config change and Deploy `upgrade`. Price-source replacement must pass the production licensing
+gate and preserve disjoint primary/check companies. Never override a price or substitute another
+endpoint of the same company. Stablecoin defaults are Chainlink-only. Production accepts
+PermissionRequired sources such as Kraken only with explicit `allow_unclear_sources: true` owner
+acceptance; it always refuses Prohibited, Unclear and unknown sources, including
+Binance/Coinbase/Coin Metrics. PHA production uses
+[Uniswap V2 TWAP](../../docs/design/price-failover.md#pha-on-chain-follow-up) and an explicitly opted-in
+PermissionRequired Kraken check. The reader halts on TWAP/spot divergence, sample jumps,
 staleness, insufficient persisted history or liquidity below its floor. After repair, observe two policy windows.
 
 ## Done when

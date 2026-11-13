@@ -36,8 +36,9 @@ drill on the current release or the owner's real-money acceptance.
 ## Phala Cloud and follow-ups
 
 Phala Cloud still needs its merchant integration, account onboarding, treasury proofs, payment
-settings, pinned webhook keys, and live acceptance. PHA price-lock support remains in the service
-and staging; production PHA is disabled pending an Allowed independent price source.
+settings, pinned webhook keys, and live acceptance. The committed production PHA route uses on-chain
+TWAP and an explicitly opted-in PermissionRequired Kraken check; deployment and live acceptance
+remain pending.
 
 The Zod and crypto-bigint security exceptions in [Trivy](../.github/security/trivy-ignore.yaml)
 and [cargo-deny](../deny.toml) expire November 24, 2026 at 4 PM PST (November 25 at 00:00 UTC).

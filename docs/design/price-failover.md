@@ -21,7 +21,7 @@ say “**non-commercial use only**” and the [announcement](https://coinmetrics
 
 The orchestrator reviewed the primary sources below on 2026-10-04. The attested registry records
 URL, date, quoted evidence, verdict, legal owner and rate limit. Production accepts **Allowed**
-sources and **PermissionRequired** sources only with route `allow_unclear_sources: true`, which
+sources; **PermissionRequired** sources require route `allow_unclear_sources: true`, which
 records the owner's acceptance of the licence risk without changing the verdict or granting
 permission. **Prohibited**, **Unclear** and unknown sources remain refused in production.
 Explicit opt-in also permits noncommercial staging rehearsal. Coin Metrics remains removed from runtime.
@@ -46,7 +46,9 @@ Source counts and company disjointness are never weakened to enable production.
 
 USDC and USDT are the only RedPill assets. The source set is Chainlink USDC/USD and USDT/USD on the route chain when a feed exists
 (Ethereum and Base), plus Ethereum-mainnet Chainlink as a configured fallback. Defaults contain Chainlink only;
-exchange USDC/USD and USDT/USD adapters require explicit noncommercial staging opt-in. Sepolia and Base Sepolia deliberately use mainnet feeds through a
+exchange USDC/USD and USDT/USD adapters require explicit opt-in. In production, owner opt-in accepts
+PermissionRequired Kraken; Prohibited, Unclear and unknown sources are always refused. Non-production
+opt-in also permits noncommercial rehearsal. Sepolia and Base Sepolia deliberately use mainnet feeds through a
 configured mainnet read/verify pair and/or exchange tickers: test tokens have no market, and config marks
 this cross-network observation explicitly. A Base route must also read the [sequencer uptime feed](https://docs.chain.link/data-feeds/l2-sequencer-feeds):
 when `answer == 1`, or the grace period after recovery has not elapsed, halt.
@@ -85,7 +87,7 @@ FX is independently checked and is required for USDT-quoted markets.
 
 Production requires explicit owner acceptance of the PermissionRequired Kraken check. The two
 companies remain disjoint. Do not substitute one company or an unreviewed endpoint.
-Legacy exchange adapters remain available for explicit noncommercial rehearsal.
+The Binance adapter remains available only for explicit noncommercial rehearsal.
 
 ## PHA on-chain follow-up
 
@@ -145,8 +147,9 @@ Default guard rails (under source `twap`) are:
 | `max_spot_deviation_bps` | 300 (3%) | pauses fast markets and rejects spikes/ramps inconsistent with the averaging window |
 | `max_sample_jump_bps` | 500 (5%) | rejects abrupt sample-to-sample reserve-ratio changes before insertion |
 
-The staging-only PHA sampler runs every **300 s** even without quote traffic. Staging explicitly
-sets `max_sample_age_s: 900` and `max_sample_jump_bps: 1100`; the defaults remain 180 s and
+Production and staging PHA samplers run every **300 s** even without quote traffic. Production sets
+`max_sample_age_s: 600` and keeps the default 500 bps sample jump limit; staging explicitly sets
+`max_sample_age_s: 900` and `max_sample_jump_bps: 1100`. The defaults remain 180 s and
 500 bps. Quote/credit workers share PostgreSQL history and an atomic per-policy lock, append
 no more than once every 300 s, and refuse storage failure. Between persisted samples, the
 quote's counterfactual endpoint still uses the same

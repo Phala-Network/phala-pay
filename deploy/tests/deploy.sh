@@ -468,7 +468,12 @@ for answer in 'not JSON' '[]' '{"success": true}' "{$page}" "{$page, \"items\": 
     [[ ! -e "$tmp/unreadable-list.seed" ]] || fail "unreadable-list generated an admin key for $answer"
 done
 
-refused price-license "production refuses staging-only price licensing opt-in" DEPLOY_ENVIRONMENT=production \
+mkdir -p "$tmp/price-license/topup"
+cp "$tmp/custom/topup/"{topup.yaml,compose.yaml,os-image-hash} "$tmp/price-license/topup/"
+sed -i 's/source: kraken, symbol: PHAUSD, company: kraken/source: binance, symbol: PHAUSDT, company: binance/' \
+    "$tmp/price-license/topup/topup.yaml"
+refused price-license "production refuses prohibited or unapproved price sources" DEPLOY_ENVIRONMENT=production \
+    DOMAIN=pay-api.operator.test ENVIRONMENT_DIR="$tmp/price-license/topup" \
     TOPUP_ADMIN_PUBLIC_KEY=11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=
 refused short-name "CVM_NAME must be 5 to 63 characters" CVM_NAME=abcd
 refused bad--name "CVM_NAME must be letters, digits, and -"

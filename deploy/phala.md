@@ -52,19 +52,21 @@ environment. Do not change the existing CVM's KMS in place. Follow the
 ## Production
 
 Production has been live since October 23, 2026 PDT. `https://pay-api.phala.com` runs v0.13.4
-for RedPill; Phala Cloud onboarding is pending. Its
-[configuration](environments/phala-network/production/topup/topup.yaml) serves live routes only:
+for RedPill; Phala Cloud onboarding is pending. Its committed production
+[configuration](environments/phala-network/production/topup/topup.yaml) contains live routes only;
+the PHA addition still needs deployment and live acceptance:
 
 | Route | Chain | Token | Confirmations |
 |---|---|---|---|
 | `phala-cloud-ethereum-usdc-usd` | Ethereum (1) | USDC | 2 |
 | `phala-cloud-ethereum-usdt-usd` | Ethereum (1) | USDT | 2 |
+| `phala-cloud-ethereum-pha-usd` | Ethereum (1) | PHA | 2 |
 | `phala-cloud-base-usdc-usd` | Base (8453) | USDC | 3; sequencer uptime grace of one hour |
 
 The `phala-cloud-*` route ids predate RedPill onboarding. They are persistent catalog identifiers,
 not merchant bindings: accounts select accepted assets through payment settings and supply their
 own treasuries. Keep the ids stable for stored quotes, deposits, and recovery. There are no test
-routes or PHA route in production. The factory is
+routes in the production configuration. The factory is
 [deployed and verified on both mainnets](CONTRACTS.md#mainnet); screening uses verified OFAC SDN
 snapshots and audited operator supplements, not the legacy oracle fields.
 

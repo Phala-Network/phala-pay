@@ -82,7 +82,8 @@ Success: eligible deposits are credited exactly once with no operator step, also
 outage; balances reach the merchant's treasury whenever anyone flushes them, and the service
 sends no transaction; chain, service, and merchant ledger reconcile.
 
-Production-eligible routes use Chainlink-priced stablecoins; PHA is staging/noncommercial only
+Production-eligible routes use Chainlink-priced stablecoins or PHA with an explicitly opted-in
+PermissionRequired Kraken check
 ([price sources](configuration.md#price-sources)). New tokens and EVM chains are
 new route files, which any account of the route's mode quotes on; new merchants are accounts the
 operator creates (design D8), not configuration.

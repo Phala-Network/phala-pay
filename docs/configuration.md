@@ -339,7 +339,8 @@ Routes use `price:` with explicit `mode: volatile` or `mode: stablecoin`. Stable
 an Ethereum-mainnet fallback for the route asset. Runtime uses only that asset's observations;
 another stablecoin's price cannot authorize its credit. Volatile assets require ordered `primary`, `check`, and `fx`
 lists, with disjoint primary/check company identities. PHA uses `uniswap_v2_twap` (company `uniswap-v2-onchain`) primary and Kraken `PHAUSD` check.
-Missing either company pauses PHA; the Kraken check is staging/noncommercial only.
+Missing either company pauses PHA; the PermissionRequired Kraken check needs explicit owner opt-in
+in production.
 
 Source descriptors are `source: kraken`/`binance`, `symbol`, and the canonical `company`, or
 `source: chainlink`, `feed`, `chain_id`, and `observation_chain_id` for explicit cross-network
@@ -380,7 +381,8 @@ For PHA, configure `source: uniswap_v2_twap` and `observation_chain_id` for cros
 are pinned in the image. Optional `twap` settings default to `window_s: 1800`,
 `max_sample_age_s: 180`, `min_weth_reserve_usd: 100000`, `max_spot_deviation_bps: 300`,
 and `max_sample_jump_bps: 500`. Windows below thirty minutes are rejected. The service samples
-once/minute into PostgreSQL even without quote traffic (300 seconds on staging PHA); startup and gaps require a continuous
+at the configured interval into PostgreSQL even without quote traffic (300 seconds on production
+and staging PHA); startup and gaps require a continuous
 window before prices become available. `config show` includes the resolved guard rails.
 
 Production PHA sets `twap_sample_interval_s: 300` with `max_sample_age_s: 600`; the sample jump
@@ -389,6 +391,7 @@ existing 600 fresh quote snapshots per chain per day; see [RPC budget](../deploy
 Rollback to v0.13.12 must restore its prior production configuration, removing both
 `twap_sample_interval_s` and the PHA route: its strict parser rejects the interval key and its
 licensing gate refuses the opted-in Kraken check.
+PHA deposits in flight stay uncredited until the route is restored.
 
 The staging PHA routes use 300 s TWAP samples with `max_sample_age_s: 900` and
 `max_sample_jump_bps: 1100`. The gap bound retains three sample intervals, tolerating two
