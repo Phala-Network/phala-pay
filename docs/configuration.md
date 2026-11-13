@@ -386,6 +386,9 @@ window before prices become available. `config show` includes the resolved guard
 Production PHA sets `twap_sample_interval_s: 300` with `max_sample_age_s: 600`; the sample jump
 limit keeps its 500 bps default. Its D132 pilot preserves the reviewed RPC headroom with the
 existing 600 fresh quote snapshots per chain per day; see [RPC budget](../deploy/RPC.md).
+Rollback to v0.13.12 must restore its prior production configuration, removing both
+`twap_sample_interval_s` and the PHA route: its strict parser rejects the interval key and its
+licensing gate refuses the opted-in Kraken check.
 
 The staging PHA routes use 300 s TWAP samples with `max_sample_age_s: 900` and
 `max_sample_jump_bps: 1100`. The gap bound retains three sample intervals, tolerating two

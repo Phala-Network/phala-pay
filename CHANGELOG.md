@@ -20,7 +20,6 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
   persisted TWAP observation spacing. Defaults remain 300 seconds in staging and 60 elsewhere;
   validation requires the interval to fit every enabled TWAP source's freshness limit.
   Document the incremental RPC budget and allocation review required before a production PHA route.
-
 - Add the production Ethereum PHA route for Phala Cloud, capped at 15,000 PHA per deposit
   (about $480 at $0.032/PHA), with a $5 minimum sale, 50 PHA minimum refund, 50 bps quote
   spread and two confirmations. It uses Uniswap V2 TWAP with an independent Kraken PHA/USD check.

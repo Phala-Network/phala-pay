@@ -371,8 +371,8 @@ Staging's one PHA route (Sepolia) retains its five-minute TWAP sampler: 288 snap
 Quotes have two price-chain instances per environment; both PHA routes sample every five minutes:
 `288+288+2·30+2·600=1,836` snapshots/day. Production sets `twap_sample_interval_s: 300`
 (default 60 s outside staging, configurable 60–300 s). Each fresh sample shares one Ethereum
-price-chain snapshot across routes: **one
-Ankr `eth_call` plus three BlockPI methods** (`eth_blockNumber`, `eth_getBlockByNumber`,
+price-chain snapshot across routes: **one Ankr `eth_call` plus three BlockPI methods**
+(`eth_blockNumber`, `eth_getBlockByNumber`,
 `eth_call`), or **four logical methods and 50 BlockPI base RU** (`10+20+20`). The existing
 reviewed model conservatively reserves **60 BlockPI RU per snapshot**; retain that allowance
 for budget sign-off below. Persisted TWAP block-hash checks

@@ -531,10 +531,10 @@ mod tests {
             "../../../deploy/environments/phala-network/production/topup/topup.yaml"
         ))
         .unwrap();
-        assert_eq!(production.twap_sample_interval_s, 60);
+        assert_eq!(production.twap_sample_interval_s, 300);
         let shown: serde_json::Value =
             serde_json::from_str(&production.resolved_json().unwrap()).unwrap();
-        assert!(shown.get("twap_sample_interval_s").is_none());
+        assert_eq!(shown["twap_sample_interval_s"], 300);
         for invalid in ["0", "59", "301", "-1", "1.5", "false"] {
             assert!(
                 Config::parse(&format!("{base}twap_sample_interval_s: {invalid}\n")).is_err(),
