@@ -20,7 +20,7 @@ impl TwapStore {
             interval_s: 60,
         }
     }
-    /// Approved staging-only 300-second cadence; limits remain route configuration.
+    /// 300-second cadence (the staging default); limits remain route configuration.
     pub fn staging(pool: PgPool) -> Self {
         Self {
             pool,
