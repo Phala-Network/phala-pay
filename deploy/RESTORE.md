@@ -212,8 +212,8 @@ dstack 0.6.1 reads `allowed_envs` from the instance's attested app-compose
 ([system_setup.rs](https://github.com/Dstack-TEE/dstack/blob/v0.6.1/dstack/dstack-util/src/system_setup.rs#L3166-L3179))
 and drops any decrypted env name outside that list
 ([parse_env_file.rs](https://github.com/Dstack-TEE/dstack/blob/v0.6.1/dstack/dstack-util/src/parse_env_file.rs#L63-L70)).
-The pinned Phala CLI 1.1.22's
-[`instances add` flow](https://github.com/Phala-Network/phala-cloud/blob/4ff72a6/cli/src/commands/instances/add/index.ts#L283-L347)
+The pinned Phala CLI 1.2.7's
+[`instances add` flow](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.2.7/cli/src/commands/instances/add/index.ts#L239-L302)
 encrypts the explicit env file and sends `encrypted_env`, `docker_compose_file`, and
 `pre_launch_script` to `/apps/{app_id}/instances`; it does not send a new `allowed_envs` list.
 The backend [copies the source app-compose](https://github.com/Phala-Network/phala-cloud-monorepo/blob/0899f1c7975531ce2b2a841ba03623bccb11acc8/teehouse/api/routes/workspace/apps/cvms.py#L263-L288),
@@ -296,8 +296,9 @@ live_isolated() {
    and cleanup are in [production-launch.md §9](runbooks/production-launch.md#9-production-restore-drill).
 
 2. **Verify its attestation**, addressing the guest agent by the instance id from the attested
-   event log. Fetch the attestation from the Phala Cloud API by `vm_uuid`: CLI 1.1.22's
-   `cvms attestation` looks the CVM up and then requests `cvms/app_<app id>/attestation`, which
+   event log. Fetch the attestation from the Phala Cloud API by `vm_uuid`: CLI 1.2.7's
+   [`cvms attestation`](https://github.com/Phala-Network/phala-cloud/blob/cli-v1.2.7/cli/src/commands/cvms/attestation/index.ts#L43-L51)
+   looks the CVM up and then requests `cvms/app_<app id>/attestation`, which
    the API refuses (`Multiple CVMs match this identifier`) while the app has two instances, as it
    does here and in a drill (seen in the full drill of 2026-09-30):
 

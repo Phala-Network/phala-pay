@@ -45,7 +45,7 @@ class BaseBaselineTests(unittest.TestCase):
         (self.environment / 'app-compose.json').write_text(json.dumps(BASELINE))
         self.current = self.tmp / 'current.json'
         self.cvm = self.tmp / 'cvm.json'
-        self.cvm.write_text(json.dumps({'app_id': APP, 'kms_type': 'BASE', 'kms_info': {
+        self.cvm.write_text(json.dumps({'app_id': APP, 'kms_type': 'base', 'kms_info': {
             'chain_id': 8453, 'dstack_kms_address': '0x2f83172A49584C017F2B256F0FB2Dca14126Ba9C'}}))
         phala = self.deploy / 'phala'
         phala.write_text('''#!/bin/sh

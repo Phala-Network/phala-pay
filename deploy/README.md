@@ -13,6 +13,11 @@ Steps outside the workflows that change a registry, Phala Cloud, a CVM, a Safe, 
 a secret are marked **HUMAN-ONLY**. Backup and restore: [RESTORE.md](RESTORE.md). Incident response:
 [runbooks](runbooks/README.md). Contracts: [CONTRACTS.md](CONTRACTS.md).
 
+`deploy/phala` runs the locked Phala Cloud CLI **1.2.7**, with `@phala/cloud` **0.6.5** and
+viem **2.57.1**. Install it with `npm ci --prefix deploy/tools`. The
+[CLI compatibility record](runbooks/phala-cli-compatibility.md) cites the tagged upstream
+sources and records the Base environment-encryption fix, response contracts and hash behavior.
+
 ## What runs where
 
 | Where | What | Deployed by |
@@ -87,7 +92,7 @@ Keep the existing app-compose manifest version; changing it to `"3"` prevents ro
 
 #### Approval evidence for dstack-0.6.1
 
-Checked on 2026-10-16 against Phala Cloud CLI 1.1.22 and the official
+OS evidence collected on 2026-10-16 against the official
 [mkosi-os-v0.6.1 release](https://github.com/Dstack-TEE/dstack/releases/tag/mkosi-os-v0.6.1):
 
 - `phala os-images --prod --all --json` lists `name: dstack-0.6.1`, `version: 0.6.1`,
@@ -672,8 +677,9 @@ preserves the owner-sealed values. Calls share a five-minute stage deadline and 
 capped at 30 seconds; failures print the CLI/API diagnostic. OUT records the provision response,
 including its hash; callers wait for that exact hash to settle before verifying attestation or
 probing the upgraded service.
-Deploy upgrades and both provisioning follow-ups use this path because CLI 1.1.22 cannot set
-`port_policy` directly. The **service** policy is
+Deploy upgrades and both provisioning follow-ups retain this path to preserve the full current
+app-compose and sealed environment while setting `port_policy`, which the CLI's ordinary deploy
+flags do not expose. The **service** policy is
 `{"ports":[{"port":443,"pp":true}],"restrict_mode":false}`; **restore-check** inherits that
 same policy through `instances add`. PROXY on 443 is inert there: no ingress or listener runs
 on 443, and only plain HTTP on 8081 is published. **Product and template** keep `pp:false`

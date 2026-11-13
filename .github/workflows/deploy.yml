@@ -28,8 +28,8 @@ name: Deploy
 # env stays. Each target's public origin is its custom domain, served by dstack-ingress in the CVM
 # (deploy/README.md, "Custom domain"); the summary lists the DNS records the owner creates for it.
 #
-# The kit's deploy/phala runs Phala Cloud CLI 1.1.22 with its dependencies locked (checked against
-# Phala-Network/phala-cloud tag cli-v1.1.22), through deploy/phala-cvm.sh:
+# The kit's deploy/phala runs Phala Cloud CLI 1.2.7 with its dependencies locked (checked against
+# Phala-Network/phala-cloud tags cli-v1.2.7 and js-v0.6.5), through deploy/phala-cvm.sh:
 # - Authentication is the PHALA_CLOUD_API_KEY environment variable, which the CLI prefers over a
 #   stored profile; PHALA_CLOUD_DIR points at an empty directory so no profile or API prefix from
 #   the runner's home can be read. The API key belongs to the workspace in vars.PHALA_WORKSPACE.

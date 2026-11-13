@@ -67,9 +67,9 @@ check_phala_cloud() {
     echo "== Phala Cloud (read-only)"
     read -r -a phala <<<"${PHALA:-$REPO_ROOT/deploy/phala}"
     version=$(stage_call 30 "${phala[@]}" --version 2>"$tmp/phala.err") || version="error: $(tool_error "$tmp/phala.err")"
-    [[ "$version" == v1.1.22* || "$version" == 1.1.22* ]] ||
-        fail "the Phala CLI is $version; these steps are verified against 1.1.22"
-    # Best effort: `status --json` in CLI 1.1.22 reports only the workspace display name (team_name),
+    [[ "$version" == v1.2.7* || "$version" == 1.2.7* ]] ||
+        fail "the Phala CLI is $version; these steps are verified against 1.2.7"
+    # Best effort: `status --json` in CLI 1.2.7 reports only the workspace display name (team_name),
     # no workspace id, so two workspaces with the same name cannot be told apart here.
     if ! stage_call 30 "${phala[@]}" status --json >"$tmp/status.json" 2>"$tmp/phala.err"; then
         fail "the CLI is not logged in to workspace '$workspace': $(tool_error "$tmp/phala.err")"

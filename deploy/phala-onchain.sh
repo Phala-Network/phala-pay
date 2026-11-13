@@ -75,7 +75,7 @@ case "$command" in
         deployed=$(kms deployment "$tx" "$safe")
         [[ -z "$app" || "${app,,}" == "${deployed,,}" ]] || fail "receipt app differs from committed dstack-app"
         "$root/verify-onchain-app.sh" "$deployed" "$safe" "$hash" "$device" >"$output.onchain.json"
-        # Pinned CLI src/commands/deploy/index.ts hI: commitCvmProvision after deployAppAuth.
+        # SDK 0.6.5 commitCvmProvision still accepts this legacy app_id + compose_hash payload.
         # OpenAPI: handle_create_cvm_api_v1_cvms_post accepts legacy CreateTappRequest.
         jq --arg app "${deployed#0x}" --arg contract "$deployed" --arg safe "$safe" \
             --slurpfile request "$request" '{app_id: $app, compose_hash, kms_id,

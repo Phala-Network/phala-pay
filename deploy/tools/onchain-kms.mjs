@@ -28,8 +28,8 @@ export function address(value) { return getAddress(hex(value, 20)); }
 export function canonical(compose) {
   const sort = value => Array.isArray(value) ? value.map(sort) : value && typeof value === 'object'
     ? Object.fromEntries(Object.keys(value).sort().map(key => [key, sort(value[key])])) : value;
-  // Empirically matches production v0.13.6's attested compose_file bytes. Current
-  // @phala/cloud exports @phala/dstack-sdk's sorted, compact JSON (no preprocessing).
+  // Matches attested raw bytes and @phala/dstack-sdk's default unnormalized sorted compact JSON.
+  // @phala/cloud 0.6.5 normalizes before hashing; approvals must preserve the raw bytes.
   return JSON.stringify(sort(compose));
 }
 export function composeHash(compose) { return createHash('sha256').update(canonical(compose)).digest('hex'); }
