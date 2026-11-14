@@ -68,6 +68,8 @@ class OnchainUpgradeTests(unittest.TestCase):
                 method = payload['method']
                 if method == 'eth_chainId':
                     result = '0x2105'
+                elif method == 'eth_getTransactionReceipt':
+                    result = fixture.receipt
                 elif method == 'eth_getStorageAt':
                     impl = fixture.pin['app_implementation' if payload['params'][0].lower() == APP.lower() else 'kms_implementation']
                     result = '0x' + impl[2:].lower().rjust(64, '0')
@@ -161,6 +163,10 @@ elif args[:2] == ['cvms', 'start']:
     print('{}')
 elif args[:2] == ['cvms', 'attestation']:
     print(json.dumps({'tcb_info': {'event_log': [{'event': 'compose-hash', 'event_payload': json.loads(cvm.read_text())['compose_hash']}]}}))
+elif args[:2] == ['api', '/cvms']:
+    if os.environ.get('FIXTURE_CREATE_STATUS'): raise SystemExit(int(os.environ['FIXTURE_CREATE_STATUS']))
+    record(['create', json.loads(Path(args[-1]).read_text())])
+    print(json.dumps({'id': 'cvm-1', 'app_id': os.environ.get('FIXTURE_CREATED_APP', json.loads(cvm.read_text())['app_id'])}))
 elif args[:2] == ['api', '/cvms/cvm-1/compose_file']: print(Path(os.environ['FIXTURE_STORED']).read_text())
 else: raise SystemExit('unexpected Cloud call')
 ''')
@@ -198,6 +204,7 @@ import sys
 with Path(os.environ['STUB_LOG']).open('a') as stream: stream.write(json.dumps(['monitor', *sys.argv[1:]]) + '\\n')
 ''')
         self.env.update(MODE='commit', VARIANT='service', INITIAL_BASE='false', TRANSACTION_HASH='already-registered',
+            COMPOSE_NAME='docker-compose.production.yml', MIGRATION_PLAN='migration-import.json',
             CVM_ID='cvm-1', APP_ID=APP, DOMAIN='example.invalid', ENVIRONMENT_DIR=str(self.environment), FIXTURE_NODE=shutil.which('node'),
             FIXTURE_CVM=str(self.cvm), FIXTURE_STORED=str(self.stored), FIXTURE_LEASE=str(self.lease),
             FIXTURE_VERIFIED=str(self.tmp / 'verified'), PHALA_CLOUD_API_KEY='fixture-key',
@@ -443,6 +450,110 @@ with Path(os.environ['STUB_LOG']).open('a') as stream: stream.write(json.dumps([
         self.assertIn('compose hash differs', result.stderr)
         self.assertFalse((self.tmp / 'verified').exists())
         self.assertTrue(self.lease.exists())
+
+
+class InitialBaseWorkflowTests(unittest.TestCase):
+    run_step = OnchainUpgradeTests.run_step
+    calls = OnchainUpgradeTests.calls
+    set_current_image = OnchainUpgradeTests.set_current_image
+    step = OnchainUpgradeTests.step
+
+    def setUp(self):
+        OnchainUpgradeTests.setUp(self)
+        self.env.update(INITIAL_BASE='true', VARIANT='migration-import', EXISTING_CVM_ID='',
+                        TRANSACTION_HASH='0x' + '12' * 32, GATEWAY='gateway.example.invalid', PUBLIC_URL='')
+        self.stored.write_text(json.dumps(self.request))
+        cvm = json.loads(self.cvm.read_text())
+        cvm.update(status='starting', in_progress=True, compose_hash=self.hash)
+        self.cvm.write_text(json.dumps(cvm))
+        self.prepared = self.work / 'onchain-prepare.json'
+        self.prepared.write_text(json.dumps({'compose_hash': self.hash, 'device_id': DEVICE,
+            'kms_info': {'chain_id': 8453, 'kms_contract_address': self.pin['kms_auth']}}))
+        Path(str(self.prepared) + '.request.json').write_text(json.dumps(self.request))
+        self.receipt = {'status': '0x1', 'logs': [{'address': self.pin['kms_auth'], 'data': '0x',
+            'topics': ['0xfd86d7f6962eba3b7a3bf9129c06c0b2f885e1c61ef2c9f0dbb856be0deefdee',
+                       '0x' + APP[2:].lower().rjust(64, '0'), '0x' + SAFE[2:].lower().rjust(64, '0')]}]}
+
+    def test_initial_import_succeeds_while_starting_and_records_pending_acceptance(self):
+        self.step('Deploy (${{ inputs.mode }}) and wait for the CVM')
+        record = json.loads((self.work / 'deployment-record.json').read_text())
+        self.assertEqual(record, {'cvm_id': 'cvm-1', 'app_id': APP, 'compose_hash': self.hash,
+                                 'device_id': DEVICE, 'gateway_domain': self.env['GATEWAY']})
+        self.assertEqual([call[:2] for call in self.calls()], [
+            ['api', '/cvms'], ['create', {'app_id': APP[2:], 'compose_hash': self.hash,
+                'contract_address': APP, 'deployer_address': SAFE, 'env_keys': self.request['allowed_envs']}],
+            ['cvms', 'get'], ['api', '/cvms/cvm-1/compose_file']])
+        self.assertIn('CVM_ID=cvm-1\n', (self.tmp / 'env').read_text())
+        self.assertIn('acceptance_pending=true\n', (self.tmp / 'output').read_text())
+        workflow = (ROOT / '.github/workflows/deploy.yml').read_text()
+        readback = workflow.split('      - name: Read back and verify the attested compose\n', 1)[1]
+        self.assertIn("if: inputs.mode != 'prepare' && steps.deployment.outputs.acceptance_pending != 'true'", readback.split('      - name:', 1)[0])
+        for name in ['cvm.json', 'committed-compose.json', 'deployment-record.json',
+                     'acceptance-pending.txt', 'onchain-prepare.json.request.json', 'onchain-prepare.json.onchain.json']:
+            self.assertTrue((self.work / name).is_file(), name)
+            self.assertIn('${{ runner.temp }}/deploy/' + name, workflow)
+        for name in ['attestation.json', 'partial-verification.txt', 'info.json', 'ingress-evidence.txt']:
+            self.assertFalse((self.work / name).exists(), name)
+        self.step("Print the owner's sealing step")
+        summary = (self.tmp / 'summary').read_text()
+        for command in [
+            'kit/deploy/preflight.sh --env .env.production --compose docker-compose.production.yml '
+            f'--environment-dir {self.environment} --migration-import migration-import.json --offline',
+            'kit/deploy/phala envs update cvm-1 -e .env.production',
+            'kit/deploy/phala cvms start cvm-1', 'verify_key_evidence import', 'step 6', 'After T0 import completes']:
+            self.assertIn(command, summary)
+        self.assertIn('No readiness or attestation check ran', (self.work / 'acceptance-pending.txt').read_text())
+
+    def test_initial_service_keeps_unsealed_wait_and_partial_attestation(self):
+        self.env['VARIANT'] = 'service'
+        cvm = json.loads(self.cvm.read_text())
+        cvm.update(status='running', in_progress=False)
+        self.cvm.write_text(json.dumps(cvm))
+        self.step('Deploy (${{ inputs.mode }}) and wait for the CVM')
+        self.assertFalse((self.tmp / 'output').exists())
+        self.assertFalse((self.work / 'deployment-record.json').exists())
+        self.assertFalse(any(call[:2] == ['api', '/cvms/cvm-1/compose_file'] for call in self.calls()))
+        self.step('Read back and verify the attested compose')
+        self.assertTrue((self.tmp / 'partial-verified').exists())
+        self.assertTrue(any(call[:2] == ['cvms', 'attestation'] for call in self.calls()))
+
+    def test_initial_import_rejects_receipt_request_or_policy_failure_before_creation(self):
+        for failure in ['receipt', 'request', 'policy']:
+            with self.subTest(failure=failure):
+                self.receipt['status'] = '0x0' if failure == 'receipt' else '0x1'
+                self.approved = failure != 'policy'
+                request = {**self.request, 'public_logs': True} if failure == 'request' else self.request
+                Path(str(self.prepared) + '.request.json').write_text(json.dumps(request))
+                (self.tmp / 'cli.jsonl').unlink(missing_ok=True)
+                result = self.run_step('Deploy (${{ inputs.mode }}) and wait for the CVM')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((self.tmp / 'cli.jsonl').exists())
+                self.assertFalse((self.work / 'deployment-record.json').exists())
+                self.assertFalse((self.tmp / 'output').exists())
+
+    def test_initial_import_rejects_wrong_created_or_readback_app_and_stored_hash(self):
+        for failure in ['response-app', 'stored-app', 'stored-hash']:
+            with self.subTest(failure=failure):
+                self.env['FIXTURE_CREATED_APP'] = '0x' + '22' * 20 if failure == 'response-app' else APP
+                cvm = json.loads(self.cvm.read_text())
+                cvm['app_id'] = '0x' + '22' * 20 if failure == 'stored-app' else APP
+                self.cvm.write_text(json.dumps(cvm))
+                stored = {**self.request, 'public_logs': True} if failure == 'stored-hash' else self.request
+                self.stored.write_text(json.dumps(stored))
+                result = self.run_step('Deploy (${{ inputs.mode }}) and wait for the CVM')
+                self.assertNotEqual(result.returncode, 0)
+                expected = 'compose hash differs' if failure == 'stored-hash' else "Created CVM app differs"
+                self.assertIn(expected, result.stdout + result.stderr)
+                self.assertFalse((self.work / 'deployment-record.json').exists())
+                self.assertFalse((self.tmp / 'output').exists())
+
+    def test_initial_import_creation_failure_cannot_report_success(self):
+        self.env['FIXTURE_CREATE_STATUS'] = '42'
+        result = self.run_step('Deploy (${{ inputs.mode }}) and wait for the CVM')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual([call[:2] for call in self.calls()], [['api', '/cvms']])
+        self.assertFalse((self.work / 'deployment-record.json').exists())
+        self.assertFalse((self.tmp / 'output').exists())
 
 
 if __name__ == '__main__':

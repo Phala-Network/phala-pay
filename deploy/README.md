@@ -908,10 +908,13 @@ port/env and KMS-provider policies still apply. A failed partial check blocks th
 This records **acceptance pending**: no service endpoint exists before sealing and DNS.
 Seal, configure DNS, then run `upgrade` for full OS/vm_config verification and acceptance.
 Partial verification can never satisfy acceptance. **Migration import has a separate sequence:**
-unsealed `postgres-walg` refuses without S3 credentials, so the initial Base commit may create
-the CVM successfully and then fail its wait. Keep that CVM, seal from the operator machine
-with CLI 1.2.7 and the full plan-aware preflight, then start if stopped. While import waits for
-its manifest, Cloud reports `starting`/`is_online=false` and no attested compose hash. Verify
+the initial Base commit succeeds after creation, receipt/app and stored full-compose hash checks,
+without readiness, attestation or public-origin checks. Its artifact includes
+`deployment-record.json` (CVM id, app id, approved hash, device id and gateway), the exact render
+and an acceptance-pending notice. Unsealed `postgres-walg` requires S3 credentials. Follow the
+summary to seal from the operator machine with CLI 1.2.7 and the full `--migration-import`
+preflight, then start if stopped. While import waits for its manifest, Cloud reports
+`starting`/`is_online=false` and no attested compose hash. Verify
 `recipient.json`'s own quote with `verify_key_evidence import` before export; retain the public
 `import-info.json` from the same prefix. After import completes and Cloud reports `running`,
 use that Info with the Cloud quote for full `verify-attestation` acceptance, following the

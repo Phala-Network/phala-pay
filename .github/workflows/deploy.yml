@@ -552,6 +552,7 @@ jobs:
       # The CLI output (JSON, no secrets: the key is only in the environment and env values are
       # encrypted client-side) goes to the log as well, so a failure shows its reason.
       - name: Deploy (${{ inputs.mode }}) and wait for the CVM
+        id: deployment
         if: inputs.mode != 'prepare'
         # OS-image change: <=15 min convergence + <=10 min health + a fresh lease;
         # compose: <=5 min submit + <=15 min stopped apply + <=15 min boot + <=10 min health.
@@ -657,9 +658,23 @@ jobs:
               echo
             fi
           } >>"$GITHUB_STEP_SUMMARY"
-          # Provision creates the CVM before these waits. An unsealed migration import cannot boot
-          # without S3 credentials; the current wait may fail after creation. Follow migration
-          # steps 5/6 to seal/start and verify recipient evidence, then full attestation after import.
+          if [[ "$MODE" == commit && "$VARIANT" == migration-import && "${INITIAL_BASE:-false}" == true ]]; then
+            "$KIT/deploy/phala-cvm.sh" get "$cvm_id" >"$WORK/cvm.json"
+            jq -e --arg expected "$(cat "$ENVIRONMENT_DIR/dstack-app")" --arg created "$app_id" '
+              (.app_id | ascii_downcase | ltrimstr("0x")) == ($expected | ascii_downcase | ltrimstr("0x")) and
+              ($created | ascii_downcase | ltrimstr("0x")) == ($expected | ascii_downcase | ltrimstr("0x"))
+            ' "$WORK/cvm.json" >/dev/null || { echo "::error::Created CVM app differs from the receipt's dstack-app"; exit 1; }
+            timeout 60 "$KIT/deploy/phala" api "/cvms/$cvm_id/compose_file" >"$WORK/committed-compose.json"
+            node "$KIT/deploy/tools/onchain-kms.mjs" check-hash "$WORK/committed-compose.json" "$WORK/onchain-prepare.json"
+            jq -n --arg cvm "$cvm_id" --arg app "$app_id" --arg gateway "$GATEWAY" \
+              --slurpfile prepared "$WORK/onchain-prepare.json" '{cvm_id: $cvm, app_id: $app,
+                compose_hash: $prepared[0].compose_hash, device_id: $prepared[0].device_id,
+                gateway_domain: $gateway}' >"$WORK/deployment-record.json"
+            echo "Migration import created and stored compose verified. Acceptance pending: seal locally, start if stopped, verify recipient.json before export (migration step 6), then verify full Cloud attestation after T0 import completes. No readiness or attestation check ran." |
+              tee "$WORK/acceptance-pending.txt" >>"$GITHUB_STEP_SUMMARY"
+            echo "acceptance_pending=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [[ "$VARIANT" == export ]]; then
             expected=$(jq -er '.compose_hash' "$WORK/deploy.json")
             "$KIT/deploy/phala-cvm.sh" wait --unsealed --compose-hash "$expected" "$cvm_id" >"$WORK/cvm.json"
@@ -704,7 +719,7 @@ jobs:
 
       # After an upgrade the attestation can still describe the previous compose for a while.
       - name: Read back and verify the attested compose
-        if: inputs.mode != 'prepare'
+        if: inputs.mode != 'prepare' && steps.deployment.outputs.acceptance_pending != 'true'
         timeout-minutes: 20
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
@@ -813,7 +828,36 @@ jobs:
         if: inputs.mode == 'provision' || (inputs.mode == 'commit' && env.INITIAL_BASE == 'true')
         run: |
           if [[ "$VARIANT" == migration-import ]]; then
-            echo "Migration import: seal locally with CLI 1.2.7 and the complete preflight command in migration step 5, then start if stopped. Verify the recipient quote in step 6; full Cloud attestation follows import completion at T0. Ingress/topup start after import-verify; before DNS switch the origin is the old service." >>"$GITHUB_STEP_SUMMARY"
+            owner_env=.env.$DEPLOY_ENVIRONMENT
+            {
+              echo "### Owner: seal and start the migration import (runbook step 5)"
+              echo
+              echo "Creation succeeded; acceptance is pending. Keep this CVM and the deployment record; do not retry initial provisioning."
+              echo "Set the \`$DEPLOY_ENVIRONMENT\` Environment variable \`$CVM_ID_VARIABLE\` to \`$CVM_ID\`."
+              echo "On the operator machine, use this release's kit (Phala CLI 1.2.7 supports Base sealing),"
+              echo "the caller checkout at \`$GITHUB_SHA\`, and \`$COMPOSE_NAME\` from this run's artifact."
+              echo "Write \`$owner_env\` (mode 0600) with the complete runtime secret set. Run the full plan-aware preflight, then seal:"
+              echo
+              echo '```sh'
+              echo "npm ci --prefix kit/deploy/tools --ignore-scripts"
+              echo "docker pull $(jq -r '.["phala-pay"]' "$WORK/release/images.json")"
+              echo "kit/deploy/preflight.sh --env $owner_env --compose $COMPOSE_NAME --environment-dir $ENVIRONMENT_DIR --migration-import $MIGRATION_PLAN --offline"
+              echo "kit/deploy/phala envs update $CVM_ID -e $owner_env"
+              echo "kit/deploy/phala cvms get $CVM_ID --json"
+              echo '```'
+              echo
+              echo "After sealing settles, if \`in_progress=false\` and \`status=stopped\`, run \`kit/deploy/phala cvms start $CVM_ID\`."
+              echo "If already running/starting, inspect the operation without issuing another start."
+              echo "Before export, fetch recipient.json and import-info.json and run the migration runbook's step 6:"
+              echo
+              echo '```sh'
+              echo 'verify_key_evidence import "$EVIDENCE/recipient.json" "$NEW_APP_ID" "$IMPORT_HASH" "$NEW_OS_HASH"'
+              echo '```'
+              echo
+              echo "While waiting for the manifest, Cloud can report starting with no attestation. After T0 import completes and Cloud reports running,"
+              echo "run the full import acceptance in the migration runbook with import-info.json, the exact import render and committed Base environment."
+              echo "Ingress/topup start after import-verify; before DNS switch the origin is the old service."
+            } >>"$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           compose_json=$("$("$KIT/deploy/pinned-compose.sh")" -f "$COMPOSE" config --no-interpolate --format json)
@@ -901,8 +945,12 @@ jobs:
             ${{ runner.temp }}/deploy/onchain-prepare.json.batch.json
             ${{ runner.temp }}/deploy/onchain-prepare.json.device-batch.json
             ${{ runner.temp }}/deploy/onchain-prepare.json.summary.json
+            ${{ runner.temp }}/deploy/onchain-prepare.json.request.json
+            ${{ runner.temp }}/deploy/onchain-prepare.json.onchain.json
             ${{ runner.temp }}/deploy/onchain-verification.json
             ${{ runner.temp }}/deploy/deploy.json
+            ${{ runner.temp }}/deploy/deployment-record.json
+            ${{ runner.temp }}/deploy/committed-compose.json
             ${{ runner.temp }}/deploy/deploy-public-url.json
             ${{ runner.temp }}/deploy/cvm.json
             ${{ runner.temp }}/deploy/attestation.json
