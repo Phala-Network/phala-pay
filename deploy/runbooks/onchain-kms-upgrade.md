@@ -73,14 +73,15 @@ Execute it outside GitHub. Record the DstackApp address from the KmsAuth-emitted
 Dispatch `commit` with the executed transaction hash and the same gateway input. The workflow
 recomputes the request, matches the receipt's factory and Safe, verifies owner/compose/device and
 both implementations, then calls `POST /cvms`. Set `TOPUP_CVM_ID` from the created CVM's
-deployment record, even if the subsequent wait fails. **An unsealed migration import cannot
-boot:** `postgres-walg` requires S3 credentials, so this commit cannot establish unsealed
-attestation/acceptance. The current workflow may fail after successful creation; keep that CVM
-and let the run finish. Follow [migration steps 5 and 6](onchain-kms-migration.md#t-7d-to-t-1-prepare-both-applications):
+deployment record. **Initial migration-import commit succeeds after creation and bounded
+readback:** it checks the created app against the receipt and the stored full compose hash
+against the approval, writes `deployment-record.json`, then stops before readiness/attestation.
+Acceptance remains pending: unsealed `postgres-walg` requires S3 credentials. Keep that CVM and
+follow [migration steps 5 and 6](onchain-kms-migration.md#t-7d-to-t-1-prepare-both-applications):
 seal locally, start if stopped, and verify the recipient's own quote. Cloud reports `starting`
 and no attested compose while import waits for the manifest. Run full `verify-attestation`
 only after import completes and Cloud reports `running`, before revocation/closeout. Do not
-retry initial provisioning merely because its wait failed.
+retry initial provisioning after creation succeeded, including if a post-creation check failed.
 
 For ordinary service provisioning, pre-seal partial quote verification remains distinct from
 acceptance: seal runtime values locally, configure DNS from the verified instance id, then
@@ -179,7 +180,8 @@ origin serves the **old service**. Deploy therefore skips the `PUBLIC_URL` maint
 availability monitor, origin probes, DNS output and TLS checks for import deployments.
 This isolation prevents an import upgrade from pausing the old writer during T-1.
 
-The current commit workflow still waits for running/Cloud attestation, which cannot accept a
+Initial migration-import commit stops successfully before readiness/Cloud attestation.
+An existing-CVM import commit still waits for running/Cloud attestation, which cannot accept a
 sealed import waiting for its manifest (`starting`, `is_online=false`, no attested compose hash).
 Its `--partial` branch/`acceptance-pending.txt` can be reached only if those waits succeed;
 they do not replace the migration runbook's two evidence stages. Before export, verify

@@ -106,8 +106,11 @@ Final approved v0.13.11 full app-compose hashes used the Base gateway:
 | `RESTORE_URL` | `https://69428dad275df0f82ba35af7c84694e3320fb7f3-8081.dstack-base-prod5.phala.network` |
 
 These hashes record the frozen rehearsal release; prepare new approvals from the exact target
-release rather than copying historical hashes. Before DNS switch,
-the public origin was the old service. The new import included ingress/topup gated on
+release rather than copying historical hashes. Current initial migration-import commit succeeds
+after creation and receipt/app/stored-hash checks, writes `deployment-record.json` with the CVM,
+app, approved hash, device and gateway, and skips readiness/attestation. Follow its step summary
+to seal/start and complete the two evidence stages below; the failed waits above are historical.
+Before DNS switch, the public origin was the old service. The new import included ingress/topup gated on
 `import-verify`; Cloud reported `starting`/`is_online=false` and no attested compose while the
 manifest was pending. The recipient's own quote was verified before export, then full Cloud
 attestation after import. Unsealed boot was impossible without S3 credentials. Use CLI 1.2.7

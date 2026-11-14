@@ -14,6 +14,13 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Fixed
+
+- Initial Base migration-import commit now succeeds after creation, receipt/app and stored
+  full-compose hash verification, retaining the deployment record and exact render without
+  waiting for an unsealed boot or attestation. Print full local preflight, sealing/start and
+  recipient-verification instructions; defer full import acceptance until T0 import completes.
+
 ## [0.13.13] - 2026-11-13
 
 ### Added

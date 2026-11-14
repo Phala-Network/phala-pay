@@ -136,14 +136,16 @@ mkdir -p "$EVIDENCE"
    `migration_plan: NEW_ENV/migration-import.json`, `environment_dir: NEW_ENV`,
    `gateway_domain: GATEWAY`. Check its locally recomputed hash/device summary; execute batch #1.
    Commit the receipt-derived `dstack-app`, then dispatch `commit` with the same inputs and the
-   batch #1 transaction hash. Record `NEW_CVM_ID`, `IMPORT_HASH` and `NEW_DEVICE_ID` from the
-   artifact; save its rendered compose as `EVIDENCE/import.yml` and set `TOPUP_CVM_ID` to the new CVM.
-   Verify the provision response, stored request and on-chain owner/hash/device/proxy policy
-   as in the upgrade runbook. **Current workflow limitation:** `POST /cvms` can succeed while
-   the initial commit run subsequently fails its wait/readback. An unsealed Base import cannot
-   boot: `postgres-walg` refuses without S3 credentials. Do not wait for an unsealed attestation
-   or retry initial provisioning after creation succeeded. Keep the created CVM id and artifact,
-   let that run finish, then seal immediately in step 5. This is creation, not acceptance.
+   batch #1 transaction hash. The initial import commit succeeds after `POST /cvms`, verifies
+   the created app against the receipt and the stored full compose hash against the approved hash,
+   and stops before readiness or attestation. Its provision checks still verify the reviewed
+   request and on-chain owner/hash/device/proxy policy. Save `deployment-record.json` from the
+   artifact: it records the CVM id, app id, import hash, device id and gateway. Set `NEW_CVM_ID`,
+   `NEW_APP_ID`, `IMPORT_HASH` and `NEW_DEVICE_ID` from it; save the rendered compose as
+   `EVIDENCE/import.yml` and set `TOPUP_CVM_ID` to the new CVM. This is creation; acceptance
+   remains pending. An unsealed Base import cannot boot because `postgres-walg` requires S3
+   credentials. Seal immediately in step 5. If a post-creation check fails, keep the created CVM
+   id and artifact and investigate; do not retry initial provisioning after creation succeeded.
 
    The migration-import render **includes `dstack-ingress` and `topup`**; they start only after
    `import-verify` succeeds. Before DNS switch the public origin is the **old service**.
@@ -152,8 +154,9 @@ mkdir -p "$EVIDENCE"
    Existing-CVM commit can apply/start an approved compose, but its running/attestation waits
    cannot accept an import still waiting for the manifest either. Full acceptance is at T0.
 5. **T-1: seal locally, then start.** From the **operator machine**, prepare `.env.ENV` with
-   the complete secret set and pull the pinned image as directed by this runbook. Use Phala
-   CLI **1.2.7** for Base sealing: CLI 1.1.22 dropped `kms_info.k256_pubkey` and failed with
+   the complete secret set and pull the pinned image as directed by this runbook and the
+   successful commit's step summary. Use Phala CLI **1.2.7** for Base sealing:
+   CLI 1.1.22 dropped `kms_info.k256_pubkey` and failed with
    `KMS k256_pubkey is required`. Use the supported `-e` path, with the full plan-aware preflight:
 
    ```sh
@@ -180,8 +183,9 @@ mkdir -p "$EVIDENCE"
    for the window. Do not run ordinary service acceptance against the old origin yet.
 6. **T-1: verify recipient and render export.** Fetch only public metadata using locally loaded
    AWS credentials; use the new provisioning artifact's hash and committed OS hash. This is
-   the **pre-export recipient quote gate**; complete it before export. Cloud's full
-   `verify-attestation` check must wait until import completes and Cloud reports `running`:
+   the **pre-export recipient quote gate** following creation and sealing; complete it before
+   export. Cloud's full `verify-attestation` check must wait until import completes and Cloud
+   reports `running`:
 
    ```sh
    aws --endpoint-url "$AWS_ENDPOINT" s3 cp \
