@@ -119,7 +119,7 @@ the public plans and rendered composes, and retain the runbook's private evidenc
 | `migration-import.json` / `export_public_key` | Filled November 14, 2026 (PST): `a70d6945…635f`, verified against v0.13.14 service compose `7ed97e22…` (Deploy run 43581474770) | Verify the nonce-challenged source admin export-key response |
 | Both plans / `object` | `s3://phala-pay-production/production-okms1-migration` | Recheck empty before this attempt; change both plans together for a new attempt |
 | `../topup/migration-export.json` / `recipient` | `T1_AGE_RECIPIENT` | Verify the new import's public recipient quote after sealing/start |
-| `dstack-app` | Absent | Add the address from KmsAuth's verified batch #1 deployment receipt |
+| `dstack-app` | `0x44E5dc567AcC435D1e5a70e7A0d4C81c15e91514` (batch #1, November 14, 2026 PST) | Add the address from KmsAuth's verified batch #1 deployment receipt |
 
 First upgrade the source service to the **same release as export** and verify it. The recorded
 source compose hash will change; use the fresh `OLD_COMPOSE_HASH`, `OLD_OS_HASH`, and the
