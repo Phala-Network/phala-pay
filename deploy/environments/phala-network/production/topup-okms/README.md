@@ -116,7 +116,7 @@ the public plans and rendered composes, and retain the runbook's private evidenc
 | File / field | Current value | T-1 action |
 |---|---|---|
 | `migration-import.json` / `source_app_id` | Verified source app id above | Re-read source CVM and verify its service attestation |
-| `migration-import.json` / `export_public_key` | `T1_EXPORT_PUBLIC_KEY` | Verify the nonce-challenged source admin export-key response |
+| `migration-import.json` / `export_public_key` | Filled November 14, 2026 (PST): `a70d6945…635f`, verified against v0.13.14 service compose `7ed97e22…` (Deploy run 43581474770) | Verify the nonce-challenged source admin export-key response |
 | Both plans / `object` | `s3://phala-pay-production/production-okms1-migration` | Recheck empty before this attempt; change both plans together for a new attempt |
 | `../topup/migration-export.json` / `recipient` | `T1_AGE_RECIPIENT` | Verify the new import's public recipient quote after sealing/start |
 | `dstack-app` | Absent | Add the address from KmsAuth's verified batch #1 deployment receipt |
