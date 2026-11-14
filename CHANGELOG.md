@@ -14,6 +14,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+## [0.13.13] - 2026-11-13
+
 ### Added
 
 - Attested `twap_sample_interval_s` configuration (60–300 seconds) for background sampling and
@@ -26,6 +28,9 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ### Changed
 
+- Rolling back to v0.13.12 must restore its prior production configuration, removing both
+  `twap_sample_interval_s` and the PHA route; PHA deposits in flight stay uncredited until the route
+  is restored.
 - Let a route's explicit price-source opt-in record owner acceptance of PermissionRequired
   licence risk in production. Kraken retains that verdict; Prohibited and Unclear sources remain
   refused. Production deployment revalidates this gate regardless of the reporting environment.
@@ -2780,7 +2785,8 @@ happens only from two-provider finalized data.
   events were held for up to an hour at a time. A notice's outcome now neither cools nor clears
   the endpoint.
 
-[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.13.12...HEAD
+[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.13.13...HEAD
+[0.13.13]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.13
 [0.13.12]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.12
 [0.13.11]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.11
 [0.13.10]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.10
