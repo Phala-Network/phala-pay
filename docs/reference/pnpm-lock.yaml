@@ -167,16 +167,16 @@ importers:
   .:
     devDependencies:
       '@redocly/cli':
-        specifier: 2.71.0
-        version: 2.71.0
+        specifier: 2.76.0
+        version: 2.76.0
 
 packages:
 
-  '@redocly/cli@2.71.0':
-    resolution: {integrity: sha512-QaAo5zdmvtK2GCJzLNZYCn5q3tm2MYImvRt/kDJdwd/zYJsTjNrGl+aindv63tFBrh0FWckXeUnOM5aM+7NQuA==}
+  '@redocly/cli@2.76.0':
+    resolution: {integrity: sha512-o967iiLTq4B9oPDBqclurfLn3HOhQvYNwJ+BEkZoW/p5PwIycqIoaNv+Q+Uabb4cH/XnSyo646tCAscnjzZ6Ig==}
     engines: {node: '>=22.12.0 || >=20.19.0 <21.0.0', npm: '>=10'}
     hasBin: true
 
 snapshots:
 
-  '@redocly/cli@2.71.0': {}
+  '@redocly/cli@2.76.0': {}
