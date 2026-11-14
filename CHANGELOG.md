@@ -14,6 +14,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+## [0.13.14] - 2026-11-14
+
 ### Fixed
 
 - Initial Base migration-import commit now succeeds after creation, receipt/app and stored
@@ -2792,7 +2794,8 @@ happens only from two-provider finalized data.
   events were held for up to an hour at a time. A notice's outcome now neither cools nor clears
   the endpoint.
 
-[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.13.13...HEAD
+[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.13.14...HEAD
+[0.13.14]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.14
 [0.13.13]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.13
 [0.13.12]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.12
 [0.13.11]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.11
