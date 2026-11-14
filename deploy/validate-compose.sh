@@ -42,6 +42,8 @@ render staging-okms "$staging/topup-okms"
 render staging-okms-restore-check "$staging/topup-okms" --restore-check
 render production "$production/topup"
 render production-restore-check "$production/topup" --restore-check
+render production-okms "$production/topup-okms"
+render production-okms-restore-check "$production/topup-okms" --restore-check
 render example "$root/deploy/environments/example/topup"
 render example-restore-check "$root/deploy/environments/example/topup" --restore-check
 render product "$staging/product"
@@ -63,18 +65,19 @@ for migration_variant in export migration-import; do
     jq -e '.services["migration-holder"].mem_limit == "64m"' "$tmp/$migration_variant.json" >/dev/null ||
         fail "$migration_variant holder must allow 64 MiB for container initialization"
 done
-# Exercise the prepared Base directory with public test pins; committed T-1 placeholders
-# deliberately cannot render. Its source app id remains the reviewed staging value.
-jq '.migration_import.export_public_key = ("b" * 64) |
-     .migration_import.object = "s3://migration-tests/unique-cutover"' \
-    "$staging/topup-okms/migration-import.json" >"$tmp/staging-okms-import.json"
-"$root/deploy/render.sh" --migration-import "$tmp/staging-okms-import.json" \
-    --gateway-domain gateway.dstack-pha-prod5.phala.network --images "$tmp/images.json" \
-    "$staging/topup-okms" >"$tmp/staging-okms-import.yml"
-jq '.compose_file' "$staging/topup-okms/provision.json" >"$tmp/staging-okms-baseline.json"
-jq -e -L "$root/deploy" 'include "compose-policy";
-    (base_app_violations(.; .) + port_policy_violations("service"; .)) | length == 0' \
-    "$tmp/staging-okms-baseline.json" >/dev/null || fail "staging Base baseline violates policy"
+for environment in staging production; do
+    env_dir="$root/deploy/environments/phala-network/$environment/topup-okms"
+    jq '.migration_import.export_public_key = ("b" * 64) |
+         .migration_import.object = "s3://migration-tests/unique-cutover"' \
+        "$env_dir/migration-import.json" >"$tmp/$environment-okms-import.json"
+    "$root/deploy/render.sh" --migration-import "$tmp/$environment-okms-import.json" \
+        --gateway-domain gateway.dstack-base-prod5.phala.network --images "$tmp/images.json" \
+        "$env_dir" >"$tmp/$environment-okms-import.yml"
+    jq '.compose_file' "$env_dir/provision.json" >"$tmp/$environment-okms-baseline.json"
+    jq -e -L "$root/deploy" 'include "compose-policy";
+        (base_app_violations(.; .) + port_policy_violations("service"; .)) | length == 0' \
+        "$tmp/$environment-okms-baseline.json" >/dev/null || fail "$environment Base baseline violates policy"
+done
 # Negative tests mutate the final attested document, exercising the same policy as verification.
 refuse_migration() {
     local variant=$1 mutation=$2
@@ -107,15 +110,19 @@ refuse_migration migration-import '.services["import-verify"].command |= map(sel
     fail "staging's sealed names changed: $(sealed service)"
 [[ "$(sealed restore-check)" == "$(sealed service)" ]] ||
     fail "staging's restore-check must use the service app's allowed names: $(sealed restore-check)"
-for variant in staging-okms staging-okms-restore-check staging-okms-import; do
-    [[ "$(sealed "$variant")" == "$(sealed service)" ]] ||
-        fail "staging Base $variant must retain the old service's sealed names"
+for environment in staging production; do
+    old_variant=service
+    [[ "$environment" != production ]] || old_variant=production
+    for variant in "$environment-okms" "$environment-okms-restore-check" "$environment-okms-import"; do
+        [[ "$(sealed "$variant")" == "$(sealed "$old_variant")" ]] ||
+            fail "$environment Base $variant must retain the old service's sealed names"
+    done
+    jq -e --slurpfile names <(
+        "$compose" -f "$tmp/$environment-okms.yml" config --variables |
+            awk 'NR > 1 && NF > 0 { print $1 }' | jq -R . | jq -s .
+    ) '(.allowed_envs | sort) == ($names[0] | sort)' \
+        "$tmp/$environment-okms-baseline.json" >/dev/null || fail "$environment Base allowed_envs differ"
 done
-jq -e --slurpfile names <(
-    "$compose" -f "$tmp/staging-okms.yml" config --variables |
-        awk 'NR > 1 && NF > 0 { print $1 }' | jq -R . | jq -s .
-) '(.allowed_envs | sort) == ($names[0] | sort)' \
-    "$tmp/staging-okms-baseline.json" >/dev/null || fail "staging Base allowed_envs differ"
 [[ "$(sealed production)" == "AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY SENTRY_DSN TOPUP_RPC_ANKR_KEY TOPUP_RPC_BLOCKPI_BASE_KEY TOPUP_RPC_BLOCKPI_ETHEREUM_KEY " ]] ||
     fail "production's sealed names changed: $(sealed production)"
 [[ "$(sealed production-restore-check)" == "$(sealed production)" ]] ||

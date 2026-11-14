@@ -36,8 +36,9 @@ from the public endpoints, the admin API, Sentry, and the chain.
 
 The environment directory's `kms` selects `phala` (the existing default) or `base`. The committed
 active production, staging and reference-product directories still select `phala`. The prepared
-[staging Base directory](environments/phala-network/staging/topup-okms/README.md) is selected only
-for an authorized migration; adding it does not migrate an existing CVM. Existing operator
+[staging Base directory](environments/phala-network/staging/topup-okms/README.md) and
+[production Base directory](environments/phala-network/production/topup-okms/README.md) are selected
+only for an authorized migration; adding them does not migrate an existing CVM. Existing operator
 repositories without that file keep the Phala workflow.
 
 `phala` uses Phala Cloud's KMS, with no DstackApp or onchain compose approval. `base` releases
