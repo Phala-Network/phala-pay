@@ -1,0 +1,188 @@
+# Phala's production instance (deploy/phala.md): the service configuration of `topup`
+# (docs/configuration.md), attested as an inline config of the rendered compose. A change is a pull
+# request and a Deploy `upgrade`.
+environment: production
+max_attached_pending_refunds: 10
+max_attached_pending_refunds_per_account: 3
+max_refund_attachments_per_day: 10
+discovery:
+  quote_window_hours: 24
+  deposit_window_days: 7
+  fresh_quote_rounds_per_day: 240
+  quote_checks_per_day: 100
+hints_per_day: 300
+quote_snapshots_per_day: 600
+twap_sample_interval_s: 300
+public_origin: https://pay-api.phala.com
+admin_key:
+  id: admin/production-v1
+  public_key: zoojlIGtFOK8IsaTbkXIgtm9oBsfWzzqJh1X8IEpp3U=
+# Maintenance-only key for deploy pause/resume (deploy/README.md); its PEM is the production
+# Environment's TOPUP_MAINTENANCE_PRIVATE_KEY_PEM, its id TOPUP_MAINTENANCE_KEY_ID.
+maintenance_keys:
+  - id: maintenance/production-v1
+    public_key: 3Gnbo5Er8uURAOH1OON7mNZWpghmbJTeyelV7HsLjhE=
+# Independent Ankr read and BlockPI verify endpoints (deploy/RPC.md). Ankr is shared with staging;
+# BlockPI uses one mainnet key per chain from one free account. Staging retains Ankr + Infura.
+# Fast discovery uses read; coverage and money decisions require read/verify agreement.
+# Operational pilot caps: D=132 deposits/day, 150 factory verifications/day, 10 Safe proof sets/day.
+# At most 2,000 hot addresses/chain and 50 new issuances/chain/day; see deploy/RPC.md.
+# BlockPI log requests use its measured free-tier range limit; see deploy/RPC.md for the budget.
+# Daily monitoring allocations; shared Ankr allocations total 25,000 calls (deploy/RPC.md).
+quota_alerts:
+  deposits_per_day: 132
+  rpc:
+    - name: ankr
+      providers: [ankr-mainnet, ankr-base-mainnet]
+      unit: calls
+      stop_line: 20266
+    - name: blockpi
+      providers: [blockpi-mainnet, blockpi-base-mainnet]
+      unit: blockpi_ru
+      stop_line: 1250000
+rpc:
+  - chain_id: 1
+    max_issued_addresses: 12000
+    read:
+      id: ankr-mainnet
+      url: "https://rpc.ankr.com/eth/{key}"
+      sealed_key: TOPUP_RPC_ANKR_KEY
+      max_log_blocks: 3000
+    verify:
+      id: blockpi-mainnet
+      url: "https://ethereum.blockpi.network/v1/rpc/{key}"
+      sealed_key: TOPUP_RPC_BLOCKPI_ETHEREUM_KEY
+      max_log_blocks: 1000
+  - chain_id: 8453
+    max_issued_addresses: 12000
+    read:
+      id: ankr-base-mainnet
+      url: "https://rpc.ankr.com/base/{key}"
+      sealed_key: TOPUP_RPC_ANKR_KEY
+      max_log_blocks: 3000
+    verify:
+      id: blockpi-base-mainnet
+      url: "https://base.blockpi.network/v1/rpc/{key}"
+      sealed_key: TOPUP_RPC_BLOCKPI_BASE_KEY
+      max_log_blocks: 1000
+
+routes:
+  # Owner-approved pilot amounts (2026-10-13): each sale is at least $5 (min_amount, in cents) and
+  # each deposit at most 10,100 tokens (max_deposit_atomic, 6 decimals): a $10,000 quote, the
+  # largest one customer's open-quote cap allows, plus its default 1% quote tolerance. Refunds go
+  # down to 1 token, with no quote spread. Each live account's max_unfinalized_credit is $10,000.
+  # Ethereum mainnet USDC. The route uses Circle's canonical 6-decimal token and Chainlink's
+  # same-chain USDC/USD feed; every route value is live because this is a production environment.
+  - route: phala-cloud-ethereum-usdc-usd
+    version: 1
+    livemode: true
+
+    chain:
+      chain_id: 1
+      forwarder_factory: "0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747"
+      confirmations: 2
+      sanctions_oracle: "0x40C57923924B5c5c5455c48D93317139ADDaC8fb"
+
+    asset:
+      symbol: usdc
+      contract: "0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+      decimals: 6
+
+    price:
+      mode: stablecoin
+      sources:
+        - { source: chainlink, feed: USDC_USD, chain_id: 1 }
+      peg_band_bps: 100
+
+    merchant:
+      min_amount: { default: 500 }
+      max_deposit_atomic: { default: "10100000000" }
+      min_refund_atomic: { default: "1000000" }
+      quote_spread_bps: { default: 0 }
+
+  - route: phala-cloud-ethereum-pha-usd
+    version: 1
+    livemode: true
+
+    chain:
+      chain_id: 1
+      forwarder_factory: "0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747"
+      confirmations: 2
+      sanctions_oracle: "0x40C57923924B5c5c5455c48D93317139ADDaC8fb"
+
+    asset:
+      symbol: pha
+      contract: "0x6c5bA91642F10282b576d91922Ae6448C9d52f4E"
+      decimals: 18
+
+    price:
+      mode: volatile
+      allow_unclear_sources: true # Owner Kingsley accepted Kraken's PermissionRequired risk, 2026-11-13.
+      primary: [{ source: uniswap_v2_twap, twap: { min_weth_reserve_usd: 50000, max_sample_age_s: 600 } }]
+      check: [{ source: kraken, symbol: PHAUSD, company: kraken }]
+      fx: [{ source: chainlink, feed: USDT_USD, chain_id: 1 }]
+
+    merchant:
+      min_amount: { default: 500 }
+      max_deposit_atomic: { default: "15000000000000000000000" }
+      min_refund_atomic: { default: "50000000000000000000" }
+
+  # Ethereum mainnet USDT. Tether's canonical token is a no-return ERC-20; the factory's
+  # SafeERC20 path supports it. See deploy/runbooks/usdt-issuer-controls.md for issuer controls.
+  - route: phala-cloud-ethereum-usdt-usd
+    version: 1
+    livemode: true
+
+    chain:
+      chain_id: 1
+      forwarder_factory: "0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747"
+      confirmations: 2
+      sanctions_oracle: "0x40C57923924B5c5c5455c48D93317139ADDaC8fb"
+
+    asset:
+      symbol: usdt
+      contract: "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+      decimals: 6
+
+    price:
+      mode: stablecoin
+      sources:
+        - { source: chainlink, feed: USDT_USD, chain_id: 1 }
+      peg_band_bps: 100
+
+    merchant:
+      min_amount: { default: 500 }
+      max_deposit_atomic: { default: "10100000000" }
+      min_refund_atomic: { default: "1000000" }
+      quote_spread_bps: { default: 0 }
+
+  # Base mainnet USDC. Base requires the Chainlink sequencer uptime grace period in addition to
+  # the same-chain USDC/USD feed.
+  - route: phala-cloud-base-usdc-usd
+    version: 1
+    livemode: true
+
+    chain:
+      chain_id: 8453
+      forwarder_factory: "0x45466D37587E6E46DC35eB96b74ba3D3b1E5b747"
+      confirmations: 3
+      sanctions_oracle: "0x3A91A31cB3dC49b4db9Ce721F50a9D076c8D739B"
+
+    asset:
+      symbol: usdc
+      contract: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+      decimals: 6
+
+    price:
+      mode: stablecoin
+      sequencer_uptime: { feed: BASE_SEQUENCER_UPTIME, grace_s: 3600 }
+      sources:
+        - { source: chainlink, feed: USDC_USD, chain_id: 8453 }
+        - { source: chainlink, feed: USDC_USD, chain_id: 1, observation_chain_id: 8453 }
+      peg_band_bps: 100
+
+    merchant:
+      min_amount: { default: 500 }
+      max_deposit_atomic: { default: "10100000000" }
+      min_refund_atomic: { default: "1000000" }
+      quote_spread_bps: { default: 0 }

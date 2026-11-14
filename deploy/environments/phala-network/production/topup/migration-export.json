@@ -1,0 +1,6 @@
+{
+  "migration_export": {
+    "recipient": "T1_AGE_RECIPIENT",
+    "object": "s3://phala-pay-production/production-okms1-migration"
+  }
+}

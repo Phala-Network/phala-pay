@@ -1,0 +1,7 @@
+{
+  "migration_import": {
+    "source_app_id": "2ed68f31bdcc5a914afaefbfb33e8fbbf7c4dcc1",
+    "export_public_key": "T1_EXPORT_PUBLIC_KEY",
+    "object": "s3://phala-pay-production/production-okms1-migration"
+  }
+}

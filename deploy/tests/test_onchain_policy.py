@@ -59,9 +59,10 @@ class KmsPolicyTests(unittest.TestCase):
             self.assertTrue(check(variant, retained))
 
     def test_environment_defaults_do_not_switch_existing_apps(self):
-        prepared = ROOT / 'deploy/environments/phala-network/staging/topup-okms'
+        prepared = {ROOT / f'deploy/environments/phala-network/{environment}/topup-okms'
+                    for environment in ['staging', 'production']}
         for file in (ROOT / 'deploy/environments').rglob('kms'):
-            if file.parent == prepared:
+            if file.parent in prepared:
                 self.assertEqual(file.read_text().strip(), 'base')
                 continue
             self.assertEqual(file.read_text().strip(), 'phala')
