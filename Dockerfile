@@ -1,4 +1,4 @@
-FROM rust:1.99.0-slim-trixie@sha256:2752b332db73fdbb7dc576f06c82ed1f312005784ef913d7e04a28f5f55dc581 AS builder
+FROM rust:1.100.0-slim-trixie@sha256:6f14b2b4b278ec0d50aa1d69541c304ce0f95e0f6268487aa9924af1c2e9aebe AS builder
 
 ARG SOURCE_DATE_EPOCH=0
 # The commit the image is built from, compiled in as the Sentry release (unset: none).
@@ -23,7 +23,7 @@ RUN SQLX_OFFLINE=true SOURCE_COMMIT="$SOURCE_COMMIT" \
 # compose runs from this image as the `smokescreen` sidecar, so it is pinned and attested with
 # the service's digest (deploy/README.md, "Webhook egress"). Stripe publishes no image: this builds
 # tag v0.1.0's commit with pinned Logrus and x/net security updates and the local toolchain.
-FROM golang:1.27.3-trixie@sha256:fbb7ae40b62ff8afe31662df570d39b4f5052ac32b90dae8e60d7657a20a74f4 AS smokescreen
+FROM golang:1.27.4-trixie@sha256:f18c3d73a184fb0582828510722e723b63a93f7188d11dd223d9be6f6880e65d AS smokescreen
 
 WORKDIR /src
 RUN git init -q . \
