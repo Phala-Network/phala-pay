@@ -139,8 +139,8 @@ deploy/phala api "/cvms/$CVM_ID" -X PATCH -H 'X-Prepare-Only:true' -F image=dsta
 The field flag sends `{"image":"dstack-0.6.5"}`. Treat this PATCH as a live reboot even with
 `X-Prepare-Only: true`. In the staging rehearsal on November 24, 2026 PST, it returned HTTP
 202 and started the reboot immediately. Staging needed no commit token or Safe transaction.
-If a response requires on-chain registration, stop and review the returned requirements
-before any further write.
+An HTTP 465 response means Cloud requires on-chain registration. Stop and review the returned
+requirements before any further write.
 
 Wait for the CVM to settle on `dstack-0.6.5` with `in_progress: false`, compare the compose hash,
 app and instance IDs, and device to the pre-upgrade record, then require `/healthz` HTTP 200.
