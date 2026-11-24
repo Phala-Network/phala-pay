@@ -184,9 +184,9 @@ fi
 
 # Only the approved production image passes.
 passes --env "$tmp/complete.env" --compose "$tmp/service.yml" --environment-dir "$staging" \
-    --os-image dstack-0.6.1
-for image in dstack-0.5.12 dstack-0.5.9 dstack-dev-0.6.1 dstack-nvidia-0.6.1 dstack-0.5.8; do
-    expect_failure "image-$image" "OS image $image is not the approved dstack-0.6.1" \
+    --os-image dstack-0.6.5
+for image in dstack-0.6.1 dstack-0.5.12 dstack-0.5.9 dstack-dev-0.6.5 dstack-nvidia-0.6.5 dstack-0.5.8; do
+    expect_failure "image-$image" "OS image $image is not the approved dstack-0.6.5" \
         --env "$tmp/complete.env" --compose "$tmp/service.yml" --environment-dir "$staging" \
         --os-image "$image"
 done

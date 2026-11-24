@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Prints the path of Docker Compose v2.26.0, retained for stable attested render bytes; the
-# dstack-0.6.1 guest runs v2.26.1 (docs/design/deploy-config.md). Verified by the sha256 of its
+# dstack-0.6.5 guest runs v2.26.1 (docs/design/deploy-config.md). Verified by the sha256 of its
 # official release. render.sh uses it so attested bytes are the same on every machine and load
 # on the CVM.
 #

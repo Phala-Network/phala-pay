@@ -100,7 +100,7 @@ export RELEASE_COMMIT="$(sed -n 's|^    uses: Phala-Network/phala-pay/.github/wo
 [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]
 [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
 grep -Fxq "    uses: Phala-Network/phala-pay/.github/workflows/deploy.yml@$RELEASE_COMMIT # $RELEASE_TAG" deploy-caller.yml
-test "$(cat "$ENV_DIR/os-image-hash")" = ec43cb8c5e04b6bb6c53b33b16076a01d83d01f7f4b703f2f78a0d947d6247e6
+test "$(cat "$ENV_DIR/os-image-hash")" = 4771a29e03e93f0e2d5e37174cd8bb1112942c9689deb36b16c5df9e183d8623
 test "$(bash "$REPO_DIR/deploy/verify-release.sh" "$RELEASE_TAG" release "$RELEASE_COMMIT")" = "$RELEASE_COMMIT"
 mkdir "$KIT_DIR" && tar -xzf "release/phala-pay-deploy-$RELEASE_TAG.tar.gz" -C "$KIT_DIR" --strip-components=1
 npm ci --prefix "$KIT_DIR/deploy/tools" --ignore-scripts
@@ -179,16 +179,16 @@ staging has soaked; retain staging's successful deployment record and soak appro
 its tag, commit and images match these values before §2. Record the previously deployed
 production release's tag, commit, kit, images, configuration commit and deployment record as the
 rollback target (§12), or explicitly record that this is the first production deployment.
-`LAUNCH_WORK_DIR` is outside the repository and has mode 0700; `umask` is 0077. `os-image-hash` is the approved non-dev `dstack-0.6.1`
+`LAUNCH_WORK_DIR` is outside the repository and has mode 0700; `umask` is 0077. `os-image-hash` is the approved non-dev `dstack-0.6.5`
 hash ([OS image](../README.md#os-image)).
 
 ### 1.2 Phala Cloud workspace
 
 Create the production Phala Cloud workspace and an API key scoped to it, separate from staging's.
-The online preflight in §4 proves that the workspace offers `dstack-0.6.1` on a `tdx.medium` node.
-Retain the [OS-image approval evidence](../README.md#approval-evidence-for-dstack-061): the
+The online preflight in §4 proves that the workspace offers `dstack-0.6.5` on a `tdx.medium` node.
+Retain the [OS-image approval evidence](../README.md#approval-evidence-for-dstack-065): the
 production `os-images` listing, release-archive checksum, and verified `sha256sum.txt` hash and
-file checks. Production provisions directly on 0.6.1. Existing CVMs on an older image use
+file checks. Production provisions directly on 0.6.5. Existing CVMs on an older image use
 Deploy's in-place image upgrade before compose deployment, with health recovery and a fresh
 maintenance lease between the two reboots ([timing and interval](../README.md#planned-upgrade-admission-and-downtime)).
 Keep a copy of the key in the owner's secret store for §4 and §9.
@@ -474,7 +474,7 @@ everything else:
 | `mode` | `provision` (here), then `upgrade` (§5) |
 | Fixed by the caller | `version: RELEASE_TAG`, `deploy.yml@RELEASE_COMMIT` from §1.1, `environment_dir: deploy/environments/phala-network/production/topup` |
 | Environment placement | `PHALA_NODE: prod5` (node id 26, US-WEST-1); provision only, upgrade keeps the node |
-| Fixed by Deploy | OS image `dstack-0.6.1` non-dev, `tdx.medium`, Phala KMS, name `phala-pay-production-<run id>` |
+| Fixed by Deploy | OS image `dstack-0.6.5` non-dev, `tdx.medium`, Phala KMS, name `phala-pay-production-<run id>` |
 
 ```sh
 dispatch_deploy provision
@@ -508,7 +508,7 @@ The new CVM shows `error` in Phala Cloud until §4 seals it, by design. Stop if 
 
 **Checks:** the run summary lists the CVM id, the app id, release `RELEASE_TAG` at `RELEASE_COMMIT`, and the `phala-pay` and
 `postgres-walg` digests that match `release/images.json`. The run's `headSha` equals
-`APPROVED_COMMIT` (asserted by `dispatch_deploy`). It also lists OS image `dstack-0.6.1`
+`APPROVED_COMMIT` (asserted by `dispatch_deploy`). It also lists OS image `dstack-0.6.5`
 and the read-back verification. Record the requested node `26` and the actual CVM node's id,
 name and region from the summary and `provision-record/cvm.json` (`.node_info`); require node `26`
 (prod5, US-WEST-1) before continuing. `TOPUP_CVM_ID` is set.
@@ -551,7 +551,7 @@ umask 077
 : > .env.production
 ${EDITOR:-vi} .env.production
 "$KIT_DIR/deploy/preflight.sh" --env .env.production --compose "$COMPOSE_PROVISION" \
-  --environment-dir "$ENV_DIR" --workspace "$PHALA_WORKSPACE" --os-image dstack-0.6.1 \
+  --environment-dir "$ENV_DIR" --workspace "$PHALA_WORKSPACE" --os-image dstack-0.6.5 \
   --require-sentry
 "$KIT_DIR/deploy/phala" envs update "$TOPUP_CVM_ID" -e .env.production
 ```
@@ -564,7 +564,7 @@ Production does not seal an Infura key. Write it with the editor, never with a h
 
 **Checks:** preflight ends with `preflight: all checks passed`. That includes "both RPC endpoints
 passed the typed self-test through compose", `verify-deployment.sh` on chains 1 and 8453, and the
-workspace offering `dstack-0.6.1`. `envs update` succeeds.
+workspace offering `dstack-0.6.5`. `envs update` succeeds.
 
 ## 5. Acceptance upgrade
 
@@ -653,7 +653,7 @@ In Sentry, the `production` environment's Crons monitors connect within about an
 **Checks:**
 
 - The verifier reports `UpToDate` TCB, the app id, the compose hash of the upgrade record's compose,
-  and OS image hash `ec43cb8c…47e6`.
+  and OS image hash `4771a29e…8623`.
 - The certificate evidence verifies for `$APP_ID`, and `/healthz` answers `200` with an empty body.
 - The four endpoints `ankr-mainnet`, `blockpi-mainnet`, `ankr-base-mainnet` and
   `blockpi-base-mainnet` are ready (`1`). `topup_addresses_lagging` is `0`, and the address cap is
@@ -978,7 +978,7 @@ restore_drill() {
   docker pull "$(jq -er '.["phala-pay"]' release/images.json)" || return 1
   "$KIT_DIR/deploy/preflight.sh" --env "$RESTORE_ENV_DIR/restore.env" --compose restore-check.yml \
     --environment-dir "$ENV_DIR" --restore-check --workspace "$PHALA_WORKSPACE" \
-    --os-image dstack-0.6.1 --require-sentry || return 1
+    --os-image dstack-0.6.5 --require-sentry || return 1
 
   # Restore step 1: create a new instance of the original app with its own read-only env.
   live_isolated || { restore_cleanup; return 1; }
@@ -1456,7 +1456,7 @@ recovery store, with non-secret run links in the deployment record.
 - [ ] §4 Online preflight passed with `rpc check` on all four endpoints; secrets sealed.
 - [ ] §5 Acceptance upgrade run `<id>` passed with `headSha == APPROVED_COMMIT`; WAL
       archiving confirmed; unavailability recorded.
-- [ ] §6 Attestation, OS hash `ec43cb8c…`, ingress evidence, `/healthz`, endpoint readiness,
+- [ ] §6 Attestation, OS hash `4771a29e…`, ingress evidence, `/healthz`, endpoint readiness,
       OFAC snapshot, and Crons verified.
 - [ ] §7 Four supplements added and audited; re-screen clean; owner/Compliance signed off the
       known SDN address and its use in a refused refund request; address and SDN uid recorded.

@@ -21,6 +21,12 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - Install Debian's patched Kerberos runtime libraries (`1.21.3-5+deb13u2`) in the
   `postgres-walg` image. [DSA-6650-1](https://security-tracker.debian.org/tracker/DSA-6650-1)
 
+### Changed
+
+- Pin deployment and attestation to the production dstack 0.6.5 image and build the local
+  simulator from its guest source. The Base KMS runbook records the staging OS-only upgrade.
+- Pin Base KmsAuth to its verified implementation at `0x9dfe8c7e…`.
+
 ## [0.13.14] - 2026-11-14
 
 ### Fixed

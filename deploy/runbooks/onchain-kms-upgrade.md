@@ -31,6 +31,27 @@ environment. The reference product and template stay on Phala KMS. The Base KmsA
 both implementation pins are in `deploy/onchain-kms.json`. Review upstream source and chain evidence before changing
 those pins. No private signing key belongs in GitHub or these files.
 
+### Base KmsAuth implementation evidence
+
+On November 19, 2026 at 8:31 a.m. PST, Base block 59,577,696 recorded an
+`Upgraded(address)` event at the KmsAuth proxy for implementation
+`0x9dfe8c7e60196f03d08d9f18704f744f1477b80a`. The EIP-1967 slot reads that address at the
+upgrade block and on current reads. [Upgrade receipt](https://basescan.org/tx/0xf52c220f1233221a31f480a8cd44aaeb1dfaadaa1d80a0003515dc58b98cd1b0#eventlog)
+
+The implementation's Base runtime bytecode Keccak-256 is
+`0x82f3ad007295b0e42e73a42ef5273224c05f61ddda07f1033e2898e5eaa9dd52`.
+Sourcify matches creation and runtime bytecode exactly. Its five dstack contract sources
+match the `mkosi-os-v0.6.5` source commit
+`350a0a73ffdb6041bda69118f13d81591870b565` byte for byte.
+[Verified implementation](https://sourcify.dev/server/v2/contract/8453/0x9dfe8c7e60196f03d08d9f18704f744f1477b80a),
+[dstack contract sources](https://github.com/Dstack-TEE/dstack/tree/350a0a73ffdb6041bda69118f13d81591870b565/dstack/kms/auth-eth/contracts)
+
+The kit's `identity` and `approval` checks pass on Base for the staging CVM. They verify the
+KMS CA identity from `kmsInfo()`, both proxy implementation slots, the DstackApp Safe owner,
+and the running compose hash and device approvals. The existing factory function and receipt
+event also match the verified ABI. The daily monitor watches its existing governance topics.
+Epoch and launch-ticket governance events introduced by the new implementation are outside that list.
+
 ## Initial provisioning
 
 Commit a complete `provision.json` request in the new environment directory. It holds the full
@@ -98,6 +119,41 @@ The shared debugging entry points are:
 deploy/phala-cvm.sh provision-prepare request.json prepare.json "$ENVIRONMENT_DIR"
 deploy/phala-cvm.sh provision-commit "$TRANSACTION_HASH" prepare.json "$ENVIRONMENT_DIR"
 ```
+
+## Base OS image upgrade
+
+**HUMAN-ONLY.** Complete the OS reboot before preparing or committing a compose release. Use the
+same CVM, app, node, and sealed environment. Verify a fresh base backup and WAL archive, then
+capture the running CVM's OS, compose hash, app and instance IDs, and device.
+Check that `GET /cvms/<id>/available-os-images` enables the target production image and that
+Base KmsAuth allows its approved hash. Keep compose deployments idle until OS acceptance.
+
+In the maintenance window, use the target workspace's Cloud CLI profile and the running
+service's maintenance key. Acquire a mutation pause before the OS request.
+
+```sh
+deploy/instance-pause.sh pause "$PUBLIC_URL" "$PAUSE_OWNER"
+deploy/phala api "/cvms/$CVM_ID" -X PATCH -H 'X-Prepare-Only:true' -F image=dstack-0.6.5
+```
+
+The field flag sends `{"image":"dstack-0.6.5"}`. Treat this PATCH as a live reboot even with
+`X-Prepare-Only: true`. In the staging rehearsal on November 24, 2026 PST, it returned HTTP
+202 and started the reboot immediately. Staging needed no commit token or Safe transaction.
+An HTTP 465 response means Cloud requires on-chain registration. Stop and review the returned
+requirements before any further write.
+
+Wait for the CVM to settle on `dstack-0.6.5` with `in_progress: false`, compare the compose hash,
+app and instance IDs, and device to the pre-upgrade record, then require `/healthz` HTTP 200.
+Use the 0.6.5 kit to verify a fresh Cloud quote and public guest Info against the existing
+render and approved OS hash. Confirm startup cleared the pause and WAL archiving resumed
+before opening the compose deployment window. If PATCH fails or times out, read back the
+CVM and maintenance state before retrying or releasing the pause.
+
+On staging, the pause started at 12:45:31 a.m. PST, the CVM reached running at 12:47:05 a.m.
+PST, and health recovered at 12:48:04 a.m. PST. The pause-to-health interval was about
+2.5 minutes. The compose hash (`b3ef3745…`) and instance ID (`7bac9c32…`) stayed the same.
+Startup cleared the pause, and WAL archiving resumed at 12:48:55 a.m. PST.
+Phala Cloud has delisted 0.6.1. Keep the backup and plan recovery on 0.6.5.
 
 ## Upgrades and rollback
 

@@ -108,8 +108,8 @@ test('locked CLI and SDK retain the Base encryption key and deployment response 
       /not supported for serial/.test(error.stdout + error.stderr));
     const raw = JSON.parse((await run('api', `/cvms/${id}`)).stdout);
     assert.equal(raw.kms_info.k256_pubkey, kmsPubkey);
-    assert.equal((await run('api', '/empty', '-X', 'PATCH', '-F', 'os_image_name=dstack-0.6.1')).stdout.trim(), '');
-    assert.deepEqual(calls.at(-1).body, {os_image_name: 'dstack-0.6.1'});
+    assert.equal((await run('api', '/empty', '-X', 'PATCH', '-F', 'os_image_name=dstack-0.6.5')).stdout.trim(), '');
+    assert.deepEqual(calls.at(-1).body, {os_image_name: 'dstack-0.6.5'});
   });
   await context.test('SDK normalizes no_change and preserves prepare-only and token commit wire fields', async () => {
     for (const prepareOnly of [true, false]) {
@@ -139,7 +139,7 @@ test('locked CLI and SDK retain the Base encryption key and deployment response 
     const before = calls.length;
     const result = await run('deploy', '--json', '--node', 'prod5', '--name', cvm.name,
       '--compose', compose, '--pre-launch-script', new URL('../phala-cloud-pre-launch.sh', import.meta.url).pathname,
-      '-e', env, '--instance-type', 'tdx.medium', '--fs', 'ext4', '--kms', 'phala', '--image', 'dstack-0.6.1',
+      '-e', env, '--instance-type', 'tdx.medium', '--fs', 'ext4', '--kms', 'phala', '--image', 'dstack-0.6.5',
       '--no-dev-os', '--no-public-logs', '--no-public-sysinfo', '--public-tcbinfo', '--secure-time');
     assert.equal(JSON.parse(result.stdout.slice(result.stdout.indexOf('{'))).vm_uuid, id);
     const provision = calls.slice(before).find(call => call.path === '/cvms' && call.body?.node);

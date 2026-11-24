@@ -207,8 +207,8 @@ test('every monitored governance topic occurs in the pinned deployed implementat
   assert.equal(fixture.implementations.kms.address, config.kms_implementation);
   for (const [name, events] of [['app', appEvents], ['kms', kmsEvents]]) {
     for (const event of events) assert.ok(fixture.implementations[name].code.includes(toEventSelector(event).slice(2)), `${name}: ${event}`);
-    assert.equal(fixture.implementations[name].code.includes(toEventSelector('PolicyChanged(address,bytes32,bytes32,bool)').slice(2)), false);
   }
+  assert.equal(fixture.implementations.app.code.includes(toEventSelector('PolicyChanged(address,bytes32,bytes32,bool)').slice(2)), false);
   // Other tenants register apps on the shared KmsAuth daily; that must not fail governance review.
   assert.equal(kmsEvents.includes('AppRegistered(address)'), false);
 });

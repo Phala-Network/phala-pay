@@ -1,4 +1,4 @@
-//! Opt-in dstack 0.6.1 simulator coverage.
+//! Opt-in coverage for the pinned dstack simulator.
 
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 use topup_adapters::attestation::{AttestedWebhookKey, DstackAttestor, report_data};

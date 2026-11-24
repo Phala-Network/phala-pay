@@ -1,7 +1,7 @@
 # Prepared production Base KMS environment
 
-This directory prepares a **new production Base app**, selected explicitly with Deploy's
-`environment_dir`. It has not been provisioned or deployed. The original
+This directory holds the reviewed configuration for the **production Base app**, selected
+explicitly with Deploy's `environment_dir`. The original
 [`../topup`](../topup/compose.yaml) directory retains the production Phala KMS configuration
 for the source service and rollback. Follow the [migration runbook](../../../../runbooks/onchain-kms-migration.md)
 for live steps and approval gates. Production and staging use separate DstackApps owned by
@@ -26,8 +26,9 @@ repository's production `TOPUP_CVM_ID` Environment variable. The live metadata w
 | Physical node | `prod5`, catalog id `26`, `US-WEST-1` | Live CVM `node_info` and node catalog |
 | Current device id | `c4691f9c88f44e05cbc45521678e72b99fcd54fa35d302f13e8f9fa9727f33a6` | Live node metadata and verified attestation |
 | Instance/resources | `tdx.medium`, 2 vCPU, 4 GiB RAM, 20 GiB disk | Live CVM `resource`; request pins instance type and disk size |
-| OS | `dstack-0.6.1`, non-dev | Live CVM `os`; request uses `image` and `prefer_dev: false` |
-| OS measurement | `ec43cb8c5e04b6bb6c53b33b16076a01d83d01f7f4b703f2f78a0d947d6247e6` | Live `os.os_image_hash`, cross-checked by full official dstack verification |
+| Source OS at migration | `dstack-0.6.1`, non-dev | Source CVM `os`, verified at the time |
+| Source OS measurement at migration | `ec43cb8c5e04b6bb6c53b33b16076a01d83d01f7f4b703f2f78a0d947d6247e6` | Source quote and guest Info |
+| Approved OS | `dstack-0.6.5`, non-dev | `provision.json` pins `image` and `prefer_dev: false`; `os-image-hash` pins the measurement |
 | Source Phala gateway | `gateway.dstack-pha-prod5.phala.network` | Live CVM `gateway.cname` |
 | New Base gateway | `gateway.dstack-base-prod5.phala.network` | The successful staging Base rehearsal on prod5 |
 | New request name | `phala-pay-production-okms1` | This migration's reserved production attempt name |
@@ -72,8 +73,9 @@ checking the pinned KmsAuth implementation:
 3059301306072a8648ce3d020106082a8648ce3d030107034200048bf84f52911056474c207cb50b4e8010d984f8975ea57b8f0c8b17502181c283e93a68a9864ad19f629508cc699f125be3871ec2e26ab0597e5bca4e29b7425f
 ```
 
-The read-only `/teepods/available` response confirms prod5 supports onchain KMS and
-`kms-base-prod5` supports `dstack-0.6.1`. The new provision response and verified recipient
+The read-only `/teepods/available` response confirms prod5 offers the approved image and
+Base KmsAuth allows its hash. See the [Base OS upgrade procedure](../../../../runbooks/onchain-kms-upgrade.md#base-os-image-upgrade)
+for an existing CVM. For migration, the provision response and verified recipient
 quote must establish the new device; do not substitute the recorded source device. A measured
 standby device remains a separate approval gate. No new CVM, app, instance or standby is
 guessed here; `dstack-app` must be added only from batch #1's verified deployment receipt.
