@@ -40,8 +40,7 @@ settings, pinned webhook keys, and live acceptance. The committed production PHA
 TWAP and an explicitly opted-in PermissionRequired Kraken check; deployment and live acceptance
 remain pending.
 
-The Zod and crypto-bigint security exceptions in [Trivy](../.github/security/trivy-ignore.yaml)
-and [cargo-deny](../deny.toml) expire November 24, 2026 at 4 PM PST (November 25 at 00:00 UTC).
-The SDK generator's minimatch exception expires November 29 at 7 PM PST (November 30 at 03:00 UTC).
-Resolve or re-review each before expiry. Account closure (design PR 13) and the Phala Cloud
+The crypto-bigint security exception in [Trivy](../.github/security/trivy-ignore.yaml)
+and [cargo-deny](../deny.toml) expires December 8, 2026 at 4 p.m. PST (`2026-12-09T00:00Z`).
+Resolve or re-review it before expiry. Account closure (design PR 13) and the Phala Cloud
 self-hosting template remain follow-ups, rather than prerequisites for the existing RedPill pilot.

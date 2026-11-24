@@ -8,8 +8,10 @@ ignore = [
     # use or fixed upstream release. Review by 2026-12-05; tracked in issue #625.
     { id = "RUSTSEC-2026-0374", reason = "Build-time age localization parser only, no fix available. Expires 2026-12-05T00:00:00Z; review enforced in .github/security/trivy-ignore.yaml. Tracking: https://github.com/Phala-Network/phala-pay/issues/625" },
     { id = "RUSTSEC-2024-0436", reason = "paste is a transitive Alloy dependency and the advisory has no safe upgrade" },
-    { id = "RUSTSEC-2026-0387", reason = "No compatible Alloy/k256 upgrade; startup-only secret-scalar validation inside the TEE. Expires 2026-11-25T00:00:00Z; exposure review and expiry enforced via .github/security/trivy-ignore.yaml. Tracking: https://github.com/Phala-Network/phala-pay/issues/536" },
+    { id = "RUSTSEC-2026-0387", reason = "Latest Alloy and dstack-sdk still require k256 0.13. Secret-scalar validation is limited to TEE startup, key provisioning, and operator-run migration import initialization. Expires 2026-12-09T00:00:00Z; exposure review and expiry enforced via .github/security/trivy-ignore.yaml. Tracking: https://github.com/Phala-Network/phala-pay/issues/536" },
     { id = "RUSTSEC-2026-0441", reason = "pin-utils is unmaintained, with no patched version or supported Alloy/wasmtimer upgrade. Alloy uses wasmtimer only on wasm; pin-utils is absent from the native Linux runtime. Remove when a supported parent release drops pin-utils; reassess if wasm runtime is introduced. Expires 2026-12-05T00:00:00Z; review and expiry enforced via .github/security/trivy-ignore.yaml. Tracking: https://github.com/Phala-Network/phala-pay/issues/626" },
+    { id = "RUSTSEC-2026-0542", reason = "humantime 2.4.0 is unmaintained and required by the latest object_store for migration S3 client configuration. Expires 2026-12-09T00:00:00Z; review and expiry enforced via .github/security/trivy-ignore.yaml. Tracking: https://github.com/Phala-Network/phala-pay/issues/699" },
+    { id = "RUSTSEC-2026-0543", reason = "chrono 0.4.45 is unmaintained and required by application timestamps, SQLx codecs, and the latest object_store. Expires 2026-12-09T00:00:00Z; review and expiry enforced via .github/security/trivy-ignore.yaml. Tracking: https://github.com/Phala-Network/phala-pay/issues/699" },
 ]
 
 [licenses]

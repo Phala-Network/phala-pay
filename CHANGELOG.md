@@ -14,6 +14,13 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+### Security
+
+- Update the service image's Debian runtime to fix the zlib vulnerabilities CVE-2026-76844 and
+  CVE-2026-85091, and upgrade Rust's `url` crate to 2.5.9 for RUSTSEC-2026-0592.
+- Install Debian's patched Kerberos runtime libraries (`1.21.3-5+deb13u2`) in the
+  `postgres-walg` image. [DSA-6650-1](https://security-tracker.debian.org/tracker/DSA-6650-1)
+
 ## [0.13.14] - 2026-11-14
 
 ### Fixed
