@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Public archived v0.13.6 production evidence only: a leaf quote, event log and public Info.
+# Public staging Base evidence from dstack-0.6.5: a leaf quote, event log and guest Info.
 # Unused public certificate/compose content and duplicate log were removed, never sealed env.
 # Normalize through the actual SDK/CLI, then exercise the pinned official verifier, not a stub.
 set -euo pipefail
@@ -50,8 +50,8 @@ jq --slurpfile info "$tmp/info.json" '{attestation:null,
 "$root/deploy/dstack-verifier.sh" <"$tmp/request.json" >"$tmp/verified.json"
 jq -e '.is_valid == true and .details.quote_verified == true and .details.event_log_verified == true
     and .details.os_image_hash_verified == true and .details.tcb_status == "UpToDate"
-    and .details.app_info.app_id == "2ed68f31bdcc5a914afaefbfb33e8fbbf7c4dcc1"
-    and .details.app_info.os_image_hash == "ec43cb8c5e04b6bb6c53b33b16076a01d83d01f7f4b703f2f78a0d947d6247e6"' \
+    and .details.app_info.app_id == "69428dad275df0f82ba35af7c84694e3320fb7f3"
+    and .details.app_info.os_image_hash == "4771a29e03e93f0e2d5e37174cd8bb1112942c9689deb36b16c5df9e183d8623"' \
     "$tmp/verified.json" >/dev/null
 jq '.vm_config |= (fromjson | .cpu_count += 1 | tojson)' "$tmp/request.json" >"$tmp/tampered.json"
 if "$root/deploy/dstack-verifier.sh" <"$tmp/tampered.json" >"$tmp/rejected.json"; then

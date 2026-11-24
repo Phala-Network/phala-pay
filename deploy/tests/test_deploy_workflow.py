@@ -73,7 +73,7 @@ case "$1" in
         fi
         hash=${STUB_SOURCE_HASH:-$(printf 'cd%.0s' {1..32})}
         [[ ! -f "$STUB_COMPOSE_COMMITTED" ]] || hash=${STUB_TARGET_HASH:-$(printf 'ab%.0s' {1..32})}
-        jq -nc --arg hash "$hash" --argjson busy "$busy" '{os:{name:"dstack-0.6.1"},status:"running",in_progress:$busy,
+        jq -nc --arg hash "$hash" --argjson busy "$busy" '{os:{name:"dstack-0.6.5"},status:"running",in_progress:$busy,
             compose_hash:$hash,node_info:{id:26,name:"prod5",region:"US-WEST-1"}}' ;;
     *) exit 64 ;;
 esac
@@ -109,7 +109,7 @@ jq -nc '["health"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
         (self.work / "release").mkdir(parents=True)
         (self.work / "release/images.json").write_text('{"phala-pay":"test-image"}')
         (self.tmp / "compose.yml").write_text("services: {}\n")
-        self.set_current_image("dstack-0.6.1")
+        self.set_current_image("dstack-0.6.5")
         (self.tmp / "env-file").write_text("SENTRY_DSN=\n")
         self.env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
                     "KIT": str(self.kit), "WORK": str(self.work), "RUNNER_TEMP": str(self.tmp),
@@ -125,11 +125,11 @@ jq -nc '["health"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
                     "CVM_NAME": "test-cvm", "CVM_ID_VARIABLE": "TOPUP_CVM_ID",
                     "EXISTING_CVM_ID": "cvm-1", "COMPOSE": str(self.tmp / "compose.yml"),
                     "ENV_FILE": str(self.tmp / "env-file"), "INSTANCE_TYPE": "tdx.medium",
-                    "DSTACK_OS_IMAGE": "dstack-0.6.1", "IMAGES": "phala-pay",
+                    "DSTACK_OS_IMAGE": "dstack-0.6.5", "IMAGES": "phala-pay",
                     "PUBLIC_URL": "https://example.invalid", "GITHUB_RUN_ID": "1",
                     "GITHUB_RUN_ATTEMPT": "1", "GITHUB_OUTPUT": str(self.tmp / "output"),
                     "PREFLIGHT": str(preflight), "STUB_AVAILABLE_IMAGES": json.dumps([
-                        {"version": [0, 6, 1], "prod": {"name": "dstack-0.6.1", "enabled": True}}
+                        {"version": [0, 6, 5], "prod": {"name": "dstack-0.6.5", "enabled": True}}
                     ]),
                     "SENTRY_DSN": "",
                     "GITHUB_SHA": "test-sha", "GITHUB_SERVER_URL": "https://github.com",
@@ -277,8 +277,8 @@ jq -nc '["health"] + $ARGS.positional' --args -- "$@" >>"$STUB_LOG"
         result = self.run_step("Preflight (read-only)")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.calls(), [["api", "/cvms/cvm-1/available-os-images"]])
-        for images in ([], [{"version": [0, 6, 1], "prod": None}],
-                       [{"version": [0, 6, 1], "prod": {"name": "dstack-0.6.1", "enabled": False}}],
+        for images in ([], [{"version": [0, 6, 5], "prod": None}],
+                       [{"version": [0, 6, 5], "prod": {"name": "dstack-0.6.5", "enabled": False}}],
                        [{"version": [0, 5, 9], "prod": {"name": "dstack-0.5.9", "enabled": True}}],
                        [{"version": [0, 5, 12], "prod": {"name": "dstack-0.5.12", "enabled": True}}]):
             with self.subTest(images=images):
@@ -360,7 +360,7 @@ cat "$STUB_RESULTS/$quote.json"
         if name == "source":
             self.env["STUB_SOURCE_APP"] = str(self.tmp / "source-app.json")
             (self.work / "cvm-before.json").write_text(json.dumps({
-                "os": {"name": "dstack-0.6.1"}, "app_id": "app-1", "compose_hash": digest,
+                "os": {"name": "dstack-0.6.5"}, "app_id": "app-1", "compose_hash": digest,
                 "gateway": {"base_domain": "example.net"}}))
 
     def assert_no_mutation(self):

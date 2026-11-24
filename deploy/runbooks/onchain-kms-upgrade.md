@@ -99,6 +99,41 @@ deploy/phala-cvm.sh provision-prepare request.json prepare.json "$ENVIRONMENT_DI
 deploy/phala-cvm.sh provision-commit "$TRANSACTION_HASH" prepare.json "$ENVIRONMENT_DIR"
 ```
 
+## Base OS image upgrade
+
+**HUMAN-ONLY.** Complete the OS reboot before preparing or committing a compose release. Use the
+same CVM, app, node, and sealed environment. Verify a fresh base backup and WAL archive, then
+capture the running CVM's OS, compose hash, app and instance IDs, and device.
+Check that `GET /cvms/<id>/available-os-images` enables the target production image and that
+Base KmsAuth allows its approved hash. Keep compose deployments idle until OS acceptance.
+
+In the maintenance window, use the target workspace's Cloud CLI profile and the running
+service's maintenance key. Acquire a mutation pause before the OS request.
+
+```sh
+deploy/instance-pause.sh pause "$PUBLIC_URL" "$PAUSE_OWNER"
+deploy/phala api "/cvms/$CVM_ID" -X PATCH -H 'X-Prepare-Only:true' -F image=dstack-0.6.5
+```
+
+The field flag sends `{"image":"dstack-0.6.5"}`. Treat this PATCH as a live reboot even with
+`X-Prepare-Only: true`. In the staging rehearsal on November 24, 2026 PST, it returned HTTP
+202 and started the reboot immediately. Staging needed no commit token or Safe transaction.
+If a response requires on-chain registration, stop and review the returned requirements
+before any further write.
+
+Wait for the CVM to settle on `dstack-0.6.5` with `in_progress: false`, compare the compose hash,
+app and instance IDs, and device to the pre-upgrade record, then require `/healthz` HTTP 200.
+Use the 0.6.5 kit to verify a fresh Cloud quote and public guest Info against the existing
+render and approved OS hash. Confirm startup cleared the pause and WAL archiving resumed
+before opening the compose deployment window. If PATCH fails or times out, read back the
+CVM and maintenance state before retrying or releasing the pause.
+
+On staging, the pause started at 12:45:31 a.m. PST, the CVM reached running at 12:47:05 a.m.
+PST, and health recovered at 12:48:04 a.m. PST. The pause-to-health interval was about
+2.5 minutes. The compose hash (`b3ef3745…`) and instance ID (`7bac9c32…`) stayed the same.
+Startup cleared the pause, and WAL archiving resumed at 12:48:55 a.m. PST.
+Phala Cloud has delisted 0.6.1. Keep the backup and plan recovery on 0.6.5.
+
 ## Upgrades and rollback
 
 1. Commit the new release/configuration, keeping the existing app and node. Dispatch `prepare`

@@ -4,17 +4,17 @@ set -euo pipefail
 root=$(CDPATH='' cd -- "$(dirname "$0")/../.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
-mkdir "$tmp/bin" "$tmp/fixture" "$tmp/fixture/dstack-0.6.1"
+mkdir "$tmp/bin" "$tmp/fixture" "$tmp/fixture/dstack-0.6.5"
 files=(ovmf.fd bzImage initramfs.cpio.gz metadata.json measurement.tdx.cbor measurement.snp.cbor
     measurement.gcp.cbor measurement.aws.cbor measurement.aws.replay.json)
 for file in "${files[@]}"; do
-    printf '%s fixture\n' "$file" >"$tmp/fixture/dstack-0.6.1/$file"
+    printf '%s fixture\n' "$file" >"$tmp/fixture/dstack-0.6.5/$file"
 done
-(cd "$tmp/fixture/dstack-0.6.1" && sha256sum "${files[@]}" >sha256sum.txt)
-printf 'unlisted\n' >"$tmp/fixture/dstack-0.6.1/rootfs.img.verity"
-tar -C "$tmp/fixture" -czf "$tmp/release.tar.gz" dstack-0.6.1
-tar -C "$tmp/fixture/dstack-0.6.1" -czf "$tmp/primary.tar.gz" .
-os_hash=$(sha256sum "$tmp/fixture/dstack-0.6.1/sha256sum.txt" | cut -d ' ' -f1)
+(cd "$tmp/fixture/dstack-0.6.5" && sha256sum "${files[@]}" >sha256sum.txt)
+printf 'unlisted\n' >"$tmp/fixture/dstack-0.6.5/rootfs.img.verity"
+tar -C "$tmp/fixture" -czf "$tmp/release.tar.gz" dstack-0.6.5
+tar -C "$tmp/fixture/dstack-0.6.5" -czf "$tmp/primary.tar.gz" .
+os_hash=$(sha256sum "$tmp/fixture/dstack-0.6.5/sha256sum.txt" | cut -d ' ' -f1)
 archive_hash=$(sha256sum "$tmp/release.tar.gz" | cut -d ' ' -f1)
 # Replace only the two immutable pins in a private copy with the corresponding fixture pins.
 sed -e "s/^os_hash=.*/os_hash=$os_hash/" -e "s/^release_sha256=.*/release_sha256=$archive_hash/" \
@@ -30,7 +30,7 @@ while (($#)); do
         -o) output=$2; shift ;;
         https://download.dstack.org/*) [[ "$PRIMARY_AVAILABLE" == true ]] || exit 22
             archive=$PRIMARY_ARCHIVE ;;
-        https://github.com/Dstack-TEE/dstack/releases/download/mkosi-os-v0.6.1/dstack-0.6.1.tar.gz)
+        https://github.com/Dstack-TEE/dstack/releases/download/mkosi-os-v0.6.5/dstack-0.6.5.tar.gz)
             archive=$RELEASE_ARCHIVE ;;
     esac
     shift
@@ -56,7 +56,7 @@ STUB
 chmod +x "$tmp/bin/"*
 export PATH="$tmp/bin:$PATH" STUB_LOG=$tmp/downloads DOCKER_LOG=$tmp/docker
 export PRIMARY_ARCHIVE=$tmp/primary.tar.gz RELEASE_ARCHIVE=$tmp/release.tar.gz
-export REQUEST=$tmp/request.json EXPECTED_HASH=$os_hash FIXTURE=$tmp/fixture/dstack-0.6.1
+export REQUEST=$tmp/request.json EXPECTED_HASH=$os_hash FIXTURE=$tmp/fixture/dstack-0.6.5
 export DOCKER_INPUT=$tmp/container VERIFIER_VALID=true PRIMARY_AVAILABLE=false
 printf '{"quote":"fixture","vm_config":"fixture"}\n' >"$REQUEST"
 fail() { echo "dstack verifier cache: $*" >&2; exit 1; }
@@ -72,7 +72,7 @@ refused() {
 verify || fail 'release fallback failed'
 jq -e '.is_valid' "$tmp/result" >/dev/null
 [[ $(wc -l <"$STUB_LOG") == 2 ]] || fail 'fallback did not try both sources'
-grep -Fq 'pinned mkosi-os-v0.6.1 release' "$tmp/err"
+grep -Fq 'pinned mkosi-os-v0.6.5 release' "$tmp/err"
 PRIMARY_AVAILABLE=true
 verify || fail 'primary measurement archive failed'
 [[ $(wc -l <"$STUB_LOG") == 1 ]] || fail 'downloaded the fallback when primary was available'

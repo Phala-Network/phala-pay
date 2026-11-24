@@ -31,15 +31,16 @@ Recorded old-service metadata and the completed rehearsal (all dates PST):
 | New app id / DstackApp | `0x69428Dad275dF0F82BA35Af7c84694E3320Fb7F3` |
 | Verified new instance id | `7bac9c320e2cfbe72e7fe9b63ca8590be2557edb` |
 | Resources | `tdx.medium`, 2 vCPU, 4 GiB RAM, 20 GiB disk |
-| OS | `dstack-0.6.1`; measurement in `os-image-hash` |
+| Approved and running OS | `dstack-0.6.5`, non-dev; measurement in `os-image-hash` |
 
 Re-read node/device/gateway at T-1 with `deploy/phala cvms get "$OLD_CVM_ID" --json`,
 `deploy/phala nodes ls --json` and `deploy/phala-cvm.sh gateway-domain "$EVIDENCE/old-cvm.json"`.
 The provision response and verified quote must establish the new device; do not substitute the
 recorded old device for that check. The read-only `/teepods/available` response advertises
-`support_onchain_kms: true` for node 26 and Base KMS support for `dstack-0.6.1`. Actual new-app
-boot succeeded in the rehearsal; a measured standby device remains a separate gate. No standby
-device is guessed here.
+`support_onchain_kms: true` for node 26 and offers the production 0.6.5 image. The new app booted
+on 0.6.1 in the migration rehearsal and moved to 0.6.5 on November 24, 2026 PST in the
+[OS-only rehearsal](../../../../runbooks/onchain-kms-upgrade.md#base-os-image-upgrade).
+A measured standby device remains a separate gate.
 
 `provision.json` is the full reviewed request, pinned with `node: "prod5"`, the same OS/resources,
 `prefer_dev: false`, `kms: BASE`, and non-public listing. Its `compose_file` is also the sole

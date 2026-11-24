@@ -7,12 +7,12 @@ deployment, and the scripts, workflows, and docs around them. Owner's rules:
 "精简优雅重构compose和各种配置项"; use a standard mechanism wherever one exists; don't abuse env.
 
 Claims about third-party behaviour were checked on 2026-09-30 and the OS-image pin updated on
-2026-10-16 against upstream source. The **dstack-0.6.1 guest runs Docker Compose v2.26.1**
-([upstream upgrade guide](https://github.com/Dstack-TEE/dstack/blob/v0.6.1/docs/upgrading-to-0.6.md#what-stays-the-same)).
+2026-11-24 against upstream source. The **dstack-0.6.5 guest runs Docker Compose v2.26.1**
+from the [Debian trixie snapshot pinned by the mkosi build](https://github.com/Dstack-TEE/dstack/blob/350a0a73ffdb6041bda69118f13d81591870b565/os/mkosi/versions.env).
 Rendering stays pinned to v2.26.0 to preserve attested bytes; the rendered artifacts also load
-with the guest's v2.26.1. The guest runs `docker compose up --remove-orphans -d --build` in
-`/dstack`, with the sealed env as its process environment (dstack v0.6.1
-[`os/common/rootfs/app-compose.sh`](https://github.com/Dstack-TEE/dstack/blob/v0.6.1/os/common/rootfs/app-compose.sh));
+with the guest's v2.26.1. The guest runs `docker compose -f "$COMPOSE_FILE" up --remove-orphans -d --build` in
+`/dstack`, with the sealed env as its process environment
+([`os/common/rootfs/app-compose.sh`](https://github.com/Dstack-TEE/dstack/blob/350a0a73ffdb6041bda69118f13d81591870b565/os/common/rootfs/app-compose.sh));
 `ExecStop` stops the whole stack.
 
 ## 1. Decisions

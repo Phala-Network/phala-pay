@@ -2,7 +2,7 @@
   "name": "phala-pay-production-okms1",
   "instance_type": "tdx.medium",
   "disk_size": 20,
-  "image": "dstack-0.6.1",
+  "image": "dstack-0.6.5",
   "prefer_dev": false,
   "node": "prod5",
   "kms": "BASE",
