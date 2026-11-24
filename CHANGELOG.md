@@ -14,6 +14,8 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+## [0.13.15] - 2026-11-24
+
 ### Security
 
 - Update the service image's Debian runtime to fix the zlib vulnerabilities CVE-2026-76844 and
@@ -26,6 +28,12 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - Pin deployment and attestation to the production dstack 0.6.5 image and build the local
   simulator from its guest source. The Base KMS runbook records the staging OS-only upgrade.
 - Pin Base KmsAuth to its verified implementation at `0x9dfe8c7e…`.
+
+### Breaking (operators)
+
+- **Breaking**: Deploy now pins dstack 0.6.5. Self-hosters still on dstack 0.6.1 must upgrade
+  their CVM OS before deploying v0.13.15. Keep the v0.13.14 kit and a verified backup for
+  rollback because Phala Cloud has delisted dstack 0.6.1.
 
 ## [0.13.14] - 2026-11-14
 
@@ -2807,7 +2815,8 @@ happens only from two-provider finalized data.
   events were held for up to an hour at a time. A notice's outcome now neither cools nor clears
   the endpoint.
 
-[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.13.14...HEAD
+[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.13.15...HEAD
+[0.13.15]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.15
 [0.13.14]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.14
 [0.13.13]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.13
 [0.13.12]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.12

@@ -1,6 +1,6 @@
 {
   "name": "@phala/pay",
-  "version": "0.13.14",
+  "version": "0.13.15",
   "description": "Phala Pay framework-free browser client",
   "keywords": [
     "crypto",
