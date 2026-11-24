@@ -31,6 +31,27 @@ environment. The reference product and template stay on Phala KMS. The Base KmsA
 both implementation pins are in `deploy/onchain-kms.json`. Review upstream source and chain evidence before changing
 those pins. No private signing key belongs in GitHub or these files.
 
+### Base KmsAuth implementation evidence
+
+On November 19, 2026 at 8:31 a.m. PST, Base block 59,577,696 recorded an
+`Upgraded(address)` event at the KmsAuth proxy for implementation
+`0x9dfe8c7e60196f03d08d9f18704f744f1477b80a`. The EIP-1967 slot reads that address at the
+upgrade block and on current reads. [Upgrade receipt](https://basescan.org/tx/0xf52c220f1233221a31f480a8cd44aaeb1dfaadaa1d80a0003515dc58b98cd1b0#eventlog)
+
+The implementation's Base runtime bytecode Keccak-256 is
+`0x82f3ad007295b0e42e73a42ef5273224c05f61ddda07f1033e2898e5eaa9dd52`.
+Sourcify matches creation and runtime bytecode exactly. Its five dstack contract sources
+match the `mkosi-os-v0.6.5` source commit
+`350a0a73ffdb6041bda69118f13d81591870b565` byte for byte.
+[Verified implementation](https://sourcify.dev/server/v2/contract/8453/0x9dfe8c7e60196f03d08d9f18704f744f1477b80a),
+[dstack contract sources](https://github.com/Dstack-TEE/dstack/tree/350a0a73ffdb6041bda69118f13d81591870b565/dstack/kms/auth-eth/contracts)
+
+The kit's `identity` and `approval` checks pass on Base for the staging CVM. They verify the
+KMS CA identity from `kmsInfo()`, both proxy implementation slots, the DstackApp Safe owner,
+and the running compose hash and device approvals. The existing factory function and receipt
+event also match the verified ABI. The daily monitor watches its existing governance topics.
+Epoch and launch-ticket governance events introduced by the new implementation are outside that list.
+
 ## Initial provisioning
 
 Commit a complete `provision.json` request in the new environment directory. It holds the full

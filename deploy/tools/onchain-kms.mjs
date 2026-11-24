@@ -135,7 +135,7 @@ export async function deployment(c, tx, safe) {
   return address(events[0].args.appId);
 }
 // Topics verified against the bytecode of the pinned deployed implementations in
-// deploy/tests/fixtures/base-kms-bytecode.json. Newer upstream PolicyChanged is absent there.
+// deploy/tests/fixtures/base-kms-bytecode.json.
 export const appEvents = ['ComposeHashAdded(bytes32)', 'ComposeHashRemoved(bytes32)',
   'DeviceAdded(bytes32)', 'DeviceRemoved(bytes32)', 'AllowAnyDeviceSet(bool)', 'UpgradesDisabled()',
   'RequireTcbUpToDateSet(bool)', 'OwnershipTransferred(address,address)', 'Upgraded(address)'];
