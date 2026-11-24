@@ -16,6 +16,13 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [0.13.15] - 2026-11-24
 
+### Breaking (operators)
+
+- **Breaking**: The v0.13.14 kit pins dstack 0.6.1 and fails the OS checks on a dstack 0.6.5
+  CVM. After the OS upgrade, Phala Cloud has no kit rollback to v0.13.14 because dstack 0.6.1
+  is delisted. Plan recovery on dstack 0.6.5 with a verified backup, following the
+  [rollback compatibility](deploy/README.md#rollback-compatibility) guidance.
+
 ### Security
 
 - Update the service image's Debian runtime to fix the zlib vulnerabilities CVE-2026-76844 and
@@ -28,12 +35,6 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 - Pin deployment and attestation to the production dstack 0.6.5 image and build the local
   simulator from its guest source. The Base KMS runbook records the staging OS-only upgrade.
 - Pin Base KmsAuth to its verified implementation at `0x9dfe8c7e…`.
-
-### Breaking (operators)
-
-- **Breaking**: Deploy now pins dstack 0.6.5. Self-hosters still on dstack 0.6.1 must upgrade
-  their CVM OS before deploying v0.13.15. Keep the v0.13.14 kit and a verified backup for
-  rollback because Phala Cloud has delisted dstack 0.6.1.
 
 ## [0.13.14] - 2026-11-14
 
