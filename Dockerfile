@@ -35,7 +35,7 @@ RUN git init -q . \
     && CGO_ENABLED=0 GOTOOLCHAIN=local GOFLAGS=-mod=vendor \
         go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o /out/smokescreen .
 
-FROM gcr.io/distroless/cc-debian13:latest@sha256:d74d144baa124dd9defd01d71872bb56c49d4441dba6153ccf790364f97e64b1
+FROM gcr.io/distroless/cc-debian13:latest@sha256:dac90a25ffe03ebaace90cda886b081e61ab6cd77ac47eda51f7bcc15c320765
 
 COPY --from=builder --chown=nonroot:nonroot /workspace/target/release/topup /usr/local/bin/topup
 COPY --from=smokescreen --chown=nonroot:nonroot /out/smokescreen /usr/local/bin/smokescreen

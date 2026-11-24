@@ -1,31 +1,22 @@
 {
   "vulnerabilities": [
     {
-      "id": "CVE-2026-76844",
-      "purls": ["pkg:deb/debian/zlib1g@1.3.dfsg%2Breally1.3.1-1%2Bb1?arch=amd64&epoch=1"],
-      "paths": ["phala-pay:ci (debian *)", "ghcr.io/phala-network/phala-pay@sha256:* (debian *)"],
-      "statement": "Temporary phala-pay amd64 distroless exception: upstream cc-debian13 still ships this zlib1g version. In the locally built image, readelf and the dynamic loader's --list show topup loads only libgcc_s, libm, libc and the loader; smokescreen has no dynamic section (CGO_ENABLED=0). Neither runtime binary loads libz or libcrypto. Cargo.lock has miniz_oxide 0.8.9 and no flate2/libz-sys/zlib crates; HTTP TLS uses rustls. The vulnerable system library is present but unused by these binaries. The apt-based images install the fixed package independently. Remove on an upstream gcr.io/distroless/cc-debian13 digest with zlib1g >=1:1.3.dfsg+really1.3.1-1+deb13u1 via a Dependabot Docker bump; reassess immediately if either runtime binary starts loading system zlib.",
-      "expired_at": "2026-11-22T00:00:00Z"
-    },
-    {
-      "id": "CVE-2026-85091",
-      "purls": ["pkg:deb/debian/zlib1g@1.3.dfsg%2Breally1.3.1-1%2Bb1?arch=amd64&epoch=1"],
-      "paths": ["phala-pay:ci (debian *)", "ghcr.io/phala-network/phala-pay@sha256:* (debian *)"],
-      "statement": "Temporary phala-pay amd64 distroless exception: upstream cc-debian13 still ships this zlib1g version. In the locally built image, readelf and the dynamic loader's --list show topup loads only libgcc_s, libm, libc and the loader; smokescreen has no dynamic section (CGO_ENABLED=0). Neither runtime binary loads libz or libcrypto. Cargo.lock has miniz_oxide 0.8.9 and no flate2/libz-sys/zlib crates; HTTP TLS uses rustls. The vulnerable system library is present but unused by these binaries. The apt-based images install the fixed package independently. Remove on an upstream gcr.io/distroless/cc-debian13 digest with zlib1g >=1:1.3.dfsg+really1.3.1-1+deb13u1 via a Dependabot Docker bump; reassess immediately if either runtime binary starts loading system zlib.",
-      "expired_at": "2026-11-22T00:00:00Z"
-    },
-    {
-      "id": "CVE-2026-118764",
-      "purls": ["pkg:npm/minimatch@5.1.9"],
-      "paths": ["pnpm-lock.yaml", "sdk/js/pnpm-lock.yaml"],
-      "statement": "SDK development/build-time OpenAPI generation only: openapi-typescript 7.13.0 requires Redocly 1, which calls minimatch 5.1.9's CommonJS function for operator-controlled URL/header patterns while generating from our local schema. No fixed 5.x or supported parent upgrade exists; overriding minimatch 11 or Redocly 2 breaks the generator's APIs. The advisory's optimizationLevel / firstPhasePreProcess / secondPhasePreProcess implementation does not exist in 5.1.9. This dependency is absent from SDK runtime bundles and deployed images. The SDK/site 10.x paths are upgraded independently to >=11.0.1. Remove on a supported openapi-typescript release off Redocly 1 (upstream https://github.com/openapi-ts/openapi-typescript/issues/2644); reassess if inputs/patterns become untrusted or this dependency enters runtime. Tracking and required re-review: https://github.com/Phala-Network/phala-pay/issues/597.",
-      "expired_at": "2026-11-30T03:00:00Z"
-    },
-    {
       "id": "RUSTSEC-2026-0387",
       "purls": ["pkg:cargo/crypto-bigint@0.5.5"],
-      "statement": "No patched crypto-bigint 0.5.x or compatible Alloy/k256 upgrade exists. Secret-scalar validation constructs a secp256k1 public key only during TEE startup: keys provisioning (backup/database secrets) and client-secret initialization. These paths are not request-triggered or remotely repeatable; runtime webhook signing uses Ed25519, and secp256k1 signature recovery/verification uses public inputs. This accepts startup exposure rather than claiming the dependency is fixed. Remove when Alloy/k256 and the dstack SDK resolve crypto-bigint >=0.7.6; reassess immediately if secret secp256k1 operations become request-triggered. Tracking and required re-review: https://github.com/Phala-Network/phala-pay/issues/536.",
-      "expired_at": "2026-11-25T00:00:00Z"
+      "statement": "Re-reviewed 2026-11-24. The locked native topup graph still requires crypto-bigint 0.5.5 via elliptic-curve 0.13.8. The latest Alloy signer (2.6.1), Alloy primitives (1.7.3) and dstack-sdk (0.6.0) still require k256 ^0.13, which excludes k256 0.14.0. The crypto-bigint 0.5.x series ends at 0.5.5. Secret-scalar validation constructs a secp256k1 public key inside the TEE for backup and database key provisioning, client-secret initialization at startup, and initialization of the operator-run migration import job. These paths have no request-triggered or remotely repeatable call site in topup. Runtime webhook signing uses Ed25519, and secp256k1 signature recovery/verification uses public inputs. Remove when Alloy/k256 and the dstack SDK resolve crypto-bigint >=0.7.6. Reassess if secret secp256k1 operations become request-triggered or startup control or deployment isolation changes. Tracking and required re-review: https://github.com/Phala-Network/phala-pay/issues/536.",
+      "expired_at": "2026-12-09T00:00:00Z"
+    },
+    {
+      "id": "RUSTSEC-2026-0543",
+      "purls": ["pkg:cargo/chrono@0.4.45"],
+      "statement": "Reviewed 2026-11-24. RustSec reports a maintenance notice covering all chrono versions and lists no patched release. The native graph uses chrono 0.4.45 for topup and adapter timestamps, the SQLx PostgreSQL timestamp codecs, and S3 migration through object_store. The latest object_store (0.14.2) still requires chrono, even if the application and SQLx switch timestamp types. Remove when the supported dependency graph drops chrono or RustSec withdraws the notice. Reassess if the dependency path or advisory changes. Tracking and required re-review: https://github.com/Phala-Network/phala-pay/issues/699.",
+      "expired_at": "2026-12-09T00:00:00Z"
+    },
+    {
+      "id": "RUSTSEC-2026-0542",
+      "purls": ["pkg:cargo/humantime@2.4.0"],
+      "statement": "Reviewed 2026-11-24. RustSec reports a maintenance notice covering all humantime versions and lists no patched release. The native graph uses humantime 2.4.0 only through object_store 0.14.2, the latest release. object_store uses it for duration settings in the S3 client used by operator-run migration jobs. Payment requests do not reach this parser. Remove when a supported object_store release drops humantime (https://github.com/apache/arrow-rs-object-store/issues/292) or RustSec withdraws the notice. Reassess if the dependency path or advisory changes. Tracking and required re-review: https://github.com/Phala-Network/phala-pay/issues/699.",
+      "expired_at": "2026-12-09T00:00:00Z"
     },
     {
       "id": "RUSTSEC-2026-0441",
