@@ -14,6 +14,15 @@ are in [sdk/js/CHANGELOG.md](sdk/js/CHANGELOG.md) and
 
 ## [Unreleased]
 
+## [0.13.15] - 2026-11-24
+
+### Breaking (operators)
+
+- **Breaking**: The v0.13.14 kit pins dstack 0.6.1 and fails the OS checks on a dstack 0.6.5
+  CVM. After the OS upgrade, Phala Cloud has no kit rollback to v0.13.14 because dstack 0.6.1
+  is delisted. Plan recovery on dstack 0.6.5 with a verified backup, following the
+  [rollback compatibility](deploy/README.md#rollback-compatibility) guidance.
+
 ### Security
 
 - Update the service image's Debian runtime to fix the zlib vulnerabilities CVE-2026-76844 and
@@ -2807,7 +2816,8 @@ happens only from two-provider finalized data.
   events were held for up to an hour at a time. A notice's outcome now neither cools nor clears
   the endpoint.
 
-[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.13.14...HEAD
+[unreleased]: https://github.com/Phala-Network/phala-pay/compare/v0.13.15...HEAD
+[0.13.15]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.15
 [0.13.14]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.14
 [0.13.13]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.13
 [0.13.12]: https://github.com/Phala-Network/phala-pay/releases/tag/v0.13.12
